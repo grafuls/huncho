@@ -21,6 +21,7 @@ cache per question, and prefill each branch.
 | `MockBackend` | `huncho-backend` | ✅ built-in | Deterministic, dependency-free. The **offline reference** for the conformance harness and demos. |
 | `NullBackend` | `huncho-backend` | ✅ built-in | Always-empty output, useful for tests / shelling out. |
 | `OnnxBackend` | `huncho-backend` | ⚙️ feature-gated | ONNX Runtime (CPU/CUDA via EPs). Built with the `onnx` feature (off by default). |
+| `CandleBackend` | `huncho-backend` | ⚙️ feature-gated | Loads Hugging Face **safetensors** directly via `candle` (CPU). Built with the `candle` feature (off by default). The primary path for real `convaiinnovations/laya`. |
 
 `MockBackend` emits a `Features` (hidden-state) output so the engine's
 feature-projection heads (F1/F2/F4) and the mean-fallback projection are all
@@ -66,12 +67,57 @@ onnxruntime yourself: set `ORT_LIB_PATH` and disable `download-binaries`, or
 build with a different `ort` provider. The default (`no features`) build is
 unaffected.
 
+## Candle feature
+
+The `candle` backend removes the need for any external runner (ONNX artifact,
+Python, or a separate server process) for real HF checkpoints. `candle`
+(Hugging Face's Rust framework) loads `.safetensors` weights directly and runs
+the ModernBERT encoder on CPU, producing per-token hidden states that the
+engine's feature-projection heads (F1/F2/F4) consume.
+
+Enable it with:
+
+```bash
+cargo build --release -p huncho-cli --features candle
+# for real HF tokenizer + Hub download support, add hf,tokenizers
+```
+
+`CandleBackend` loads a package laid out as:
+
+```
+my-laya/              # package dir
+├── huncho-model.json # manifest (artifact `model.safetensors`, dtype fp32)
+├── config.json       # ModernBERT config (see below)
+├── model.safetensors # the backbone weights (F16 is fine; load converts → F32)
+└── tokenizer.json    # optional, if backbone.tokenizer is set
+```
+
+At load time it:
+
+- remaps weight keys `encoder.*` → `model.*` (matching `convaiinnovations/laya`'s
+  layout) and drops non-encoder tensors (`temperature`, `act_head.*`);
+- converts F16 weights to F32 for CPU inference;
+- normalizes a transformers-5.0 `rope_parameters` config object into the flat
+  `global_rope_theta` / `local_rope_theta` fields candle expects;
+- runs the base `ModernBert` encoder (not `ForMaskedLM`) via
+  `ModernBert::load`, then extracts hidden states at the requested option-marker
+  positions with `index_select`.
+
+`huncho convert --backend candle` writes a manifest whose artifact is
+`model.safetensors`. The weights/config are fetched separately (e.g. `hf
+download convaiinnovations/laya model.safetensors` and copy
+`encoder/config.json` to `config.json`), then `huncho serve --manifest
+huncho-model.json --backend candle` serves it. Because Laya's checkpoint is
+~842 MB, this is intentionally kept out of the automated test suite.
+
 ## Backend selection in the CLI
 
 - `huncho serve --mock` — serves a built-in deterministic mock model (no weights).
 - `huncho serve --manifest <path> --backend mock` — serves a manifest using the mock
   backend (offline demo).
 - `huncho serve --manifest <path> --backend onnx` — serves a manifest using ONNX.
+- `huncho serve --manifest <path> --backend candle` — serves a manifest using the
+  candle CPU backend (real `.safetensors` checkpoints).
 - `huncho conform --backend mock` — runs conformance against the mock reference.
 
 ## Adding a backend

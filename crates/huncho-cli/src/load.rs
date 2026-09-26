@@ -3,6 +3,8 @@
 use std::path::{Path, PathBuf};
 
 use huncho_backend::MockBackend;
+#[cfg(feature = "candle")]
+use huncho_backend::CandleBackend;
 #[cfg(feature = "onnx")]
 use huncho_backend::OnnxBackend;
 use huncho_core::backend::Backend;
@@ -159,10 +161,36 @@ fn load_backend(
 ) -> Result<Box<dyn Backend>> {
     match backend_id {
         BackendId::Onnx => load_onnx(manifest, dtype, dir),
+        BackendId::Candle => load_candle(manifest, dtype, dir),
         other => Err(Error::Unsupported(format!(
             "backend `{other}` is not available in this build"
         ))),
     }
+}
+
+#[cfg(feature = "candle")]
+fn load_candle(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<dyn Backend>> {
+    let artifact = manifest
+        .find_artifact(BackendId::Candle, dtype)
+        .ok_or_else(|| Error::Package(format!("no candle artifact for dtype `{dtype}`")))?;
+    let weights = dir.join(&artifact.path);
+    // The ModernBERT config is stored next to the weights as `config.json`.
+    let config = dir.join("config.json");
+    let backend = CandleBackend::load(
+        &config,
+        &weights,
+        manifest.backbone.max_context,
+        dtype.to_string(),
+    )
+    .map_err(|e| Error::Package(format!("failed to load candle backend: {e}")))?;
+    Ok(Box::new(backend) as Box<dyn Backend>)
+}
+
+#[cfg(not(feature = "candle"))]
+fn load_candle(_manifest: &ModelManifest, _dtype: &str, _dir: &Path) -> Result<Box<dyn Backend>> {
+    Err(Error::Unsupported(
+        "the `candle` feature is not enabled; rebuild with `--features candle`".into(),
+    ))
 }
 
 #[cfg(feature = "onnx")]
@@ -274,4 +302,100 @@ pub fn engine_from_ref(
     Err(Error::Unsupported(
         "Hugging Face Hub resolution requires building huncho with `--features hf`".into(),
     ))
+}
+
+#[cfg(all(test, feature = "candle"))]
+mod candle_tests {
+    use super::*;
+    use crate::convert::{ConvertArgs, build_manifest};
+    use huncho_core::backend::ForwardInput;
+    use std::fs;
+    use tempfile::tempdir;
+
+    // Relative to `crates/huncho-cli` (the unit-test cwd).
+    const FIXTURE: &str = "../huncho-backend/tests/fixtures/tiny_modernbert";
+
+    #[test]
+    fn load_candle_from_manifest_builds_backend() {
+        let dir = tempdir().unwrap();
+        fs::copy(Path::new(FIXTURE).join("config.json"), dir.path().join("config.json")).unwrap();
+        fs::copy(Path::new(FIXTURE).join("model.safetensors"), dir.path().join("model.safetensors")).unwrap();
+
+        let manifest = build_manifest(&ConvertArgs {
+            hf_repo: "example/tiny".into(),
+            revision: "main".into(),
+            family: "F1".into(),
+            backend: "candle".into(),
+            dtype: "fp32".into(),
+            out: dir.path().display().to_string(),
+            hidden_size: Some(8),
+            max_context: Some(16),
+            tokenizer: None,
+            runner: None,
+            name: Some("tiny".into()),
+        })
+        .unwrap();
+
+        let mut backend = load_candle(&manifest, "fp32", dir.path()).unwrap();
+        assert_eq!(backend.id(), BackendId::Candle);
+
+        let out = backend.forward(ForwardInput::new(vec![1, 2, 3, 4], vec![1])).unwrap();
+        assert_eq!(out.values().shape(), &[1, 8]);
+    }
+
+    #[test]
+    fn engine_eval_end_to_end_via_candle() {
+        let dir = tempdir().unwrap();
+        fs::copy(Path::new(FIXTURE).join("config.json"), dir.path().join("config.json")).unwrap();
+        fs::copy(Path::new(FIXTURE).join("model.safetensors"), dir.path().join("model.safetensors")).unwrap();
+
+        let manifest = build_manifest(&ConvertArgs {
+            hf_repo: "example/tiny".into(),
+            revision: "main".into(),
+            family: "F1".into(),
+            backend: "candle".into(),
+            dtype: "fp32".into(),
+            out: dir.path().display().to_string(),
+            hidden_size: Some(8),
+            max_context: Some(128),
+            tokenizer: None,
+            runner: None,
+            name: Some("tiny".into()),
+        })
+        .unwrap();
+
+        let manifest_path = dir.path().join("huncho-model.json");
+        fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
+
+        // Full serving pipeline: manifest -> tokenizer -> candle backend -> F1
+        // head -> calibration -> response.
+        let engine = engine_from_manifest(&manifest_path, BackendId::Candle, Some("fp32")).unwrap();
+        let req: huncho_core::contract::SystemOneRequest = serde_json::from_value(serde_json::json!({
+            "model": "tiny",
+            "state": "short state text",
+            "questions": {
+                "q1": { "type": "choice", "instructions": "pick one", "criteria": { "a": "option A", "b": "option B" } }
+            }
+        }))
+        .unwrap();
+
+        let resp = engine.eval(&req, &huncho_core::engine::EvalOptions::default()).unwrap();
+        assert!(resp.usage.input_tokens > 0);
+
+        match resp.answers.get("q1").expect("answer for q1") {
+            huncho_core::contract::Answer::Choice {
+                probabilities,
+                choice,
+                confidence,
+            } => {
+                assert_eq!(probabilities.len(), 2);
+                let sum: f32 = probabilities.values().sum();
+                assert!(sum.is_finite());
+                assert!((sum - 1.0).abs() < 1e-3, "probabilities must sum to 1, got {sum}");
+                assert!(probabilities.contains_key(choice));
+                assert!(*confidence >= 0.0 && *confidence <= 1.0);
+            }
+            other => panic!("expected a Choice answer, got {other:?}"),
+        }
+    }
 }

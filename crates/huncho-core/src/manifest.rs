@@ -60,6 +60,7 @@ pub enum BackendId {
     LlamaCpp,
     Mlx,
     Vllm,
+    Candle,
 }
 
 impl BackendId {
@@ -69,6 +70,7 @@ impl BackendId {
             "llamacpp" | "llama.cpp" | "llama_cpp" => Ok(BackendId::LlamaCpp),
             "mlx" => Ok(BackendId::Mlx),
             "vllm" => Ok(BackendId::Vllm),
+            "candle" => Ok(BackendId::Candle),
             other => Err(Error::Package(format!("unknown backend `{other}`"))),
         }
     }
@@ -84,6 +86,7 @@ impl fmt::Display for BackendId {
                 BackendId::LlamaCpp => "llamacpp",
                 BackendId::Mlx => "mlx",
                 BackendId::Vllm => "vllm",
+                BackendId::Candle => "candle",
             }
         )
     }

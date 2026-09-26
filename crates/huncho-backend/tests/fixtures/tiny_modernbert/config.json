@@ -1,0 +1,26 @@
+{
+  "architectures": [
+    "ModernBertForMaskedLM"
+  ],
+  "model_type": "modernbert",
+  "hidden_size": 8,
+  "num_hidden_layers": 1,
+  "num_attention_heads": 2,
+  "intermediate_size": 16,
+  "max_position_embeddings": 128,
+  "layer_norm_eps": 1e-05,
+  "pad_token_id": 0,
+  "global_attn_every_n_layers": 1,
+  "local_attention": 8,
+  "vocab_size": 32768,
+  "rope_parameters": {
+    "full_attention": {
+      "rope_theta": 10000.0,
+      "rope_type": "default"
+    },
+    "sliding_attention": {
+      "rope_theta": 10000.0,
+      "rope_type": "default"
+    }
+  }
+}

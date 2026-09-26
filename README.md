@@ -105,6 +105,21 @@ The same commands with `--backend mock` drive the in-process reference and need
 no ONNX build. For real models also pass `hf` (Hub resolution) and `tokenizers`
 (byte-identical reference prompting): `--features onnx,hf,tokenizers`.
 
+Serve a **real Hugging Face checkpoint without any external runner** by loading
+the `.safetensors` directly with `candle` (HF's Rust framework). Build with
+`--features candle` and point at a package that lays out `config.json` +
+`model.safetensors` next to the manifest:
+
+```bash
+cargo run --release -p huncho-cli --features candle -- \
+  serve --manifest my-laya/huncho-model.json --backend candle
+```
+
+`CandleBackend` loads `convaiinnovations/laya`'s ModernBERT encoder (remapping
+its `encoder.*` key prefix and normalizing its `rope_parameters` config) and
+feeds the option-marker hidden states into the F1 head. See
+[docs/backends.md](docs/backends.md#candle-feature).
+
 Run the offline conformance harness against the mock reference:
 
 ```bash
@@ -124,12 +139,14 @@ The default build is offline and testable without weights:
 ```bash
 cargo test                       # core + hub + api + cli
 cargo test -p huncho-backend --features onnx   # ONNX backend integration
+cargo test -p huncho-backend --features candle # candle (safetensors) backend
 cargo test -p huncho-core --features tokenizers --test hf_tokenizer  # CORE-02
 ```
 
 Coverage includes the `/v1/systemone` HTTP contract (choice/noul/score, 422,
 auth, extensions, `/metrics`), `convert`/`calibrate`/`bench`, F1–F4 prompt
-building, and the ONNX conformance suite.
+building, the ONNX conformance suite, and the candle backend (load, position
+extraction, determinism, and manifest-package resolution).
 
 ## Operation / packaging
 

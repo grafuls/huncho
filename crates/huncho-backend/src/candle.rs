@@ -1,0 +1,384 @@
+//! Candle backend — the primary real-model path for F1 (PRD BE-02).
+//!
+//! Loads a Hugging Face `safetensors` ModernBERT (the family behind
+//! `convaiinnovations/laya`) directly with [`candle_core`], so an F1 model can
+//! be served without an ONNX export or a Python/`optimum` toolchain. The
+//! backend runs the encoder and returns hidden states (`ForwardOutput::Features`)
+//! at the requested token positions, which the F1 head scores.
+//!
+//! Enabled with the `candle` cargo feature.
+//!
+//! Checkpoint compatibility:
+//! * Weights may use either an `encoder.` prefix (as `convaiinnovations/laya`
+//!   does) or a `model.` prefix (standard HF ModernBERT); `encoder.` is remapped
+//!   to `model.` at load time so [`candle_transformers::models::modernbert`]
+//!   finds them. Non-encoder tensors (e.g. `act_head.*`, `temperature`) are
+//!   ignored.
+//! * Weights may be `f16`/`bf16`; they are converted to `f32` for CPU inference.
+//! * `config.json` may use the flat `global_rope_theta`/`local_rope_theta`
+//!   fields or the newer transformers-5.0 `rope_parameters` object, which is
+//!   normalized before parsing.
+
+use std::collections::{BTreeMap, HashMap};
+use std::path::Path;
+
+use candle::{Device, DType, Tensor};
+use candle_nn::VarBuilder;
+use candle_transformers::models::modernbert::{Config, ModernBert};
+
+use huncho_core::backend::{Backend, CacheHandle, Capabilities, ForwardInput, ForwardOutput};
+use huncho_core::error::{Error, Result};
+use huncho_core::manifest::{BackendId, Family};
+use huncho_core::tensor::Tensor as CoreTensor;
+
+/// Errors from the candle backend.
+#[derive(Debug, thiserror::Error)]
+pub enum CandleError {
+    #[error("failed to read config `{0}`: {1}")]
+    Config(String, String),
+    #[error("failed to load `{0}`: {1}")]
+    Load(String, String),
+    #[error("candle inference failed: {0}")]
+    Inference(String),
+    #[error("candle requires feature `candle` to be enabled")]
+    FeatureDisabled,
+}
+
+/// A candle-backed ModernBERT encoder.
+pub struct CandleBackend {
+    model: ModernBert,
+    hidden_size: usize,
+    max_context: usize,
+    dtype: String,
+    id: BackendId,
+    families: Vec<Family>,
+    device: Device,
+}
+
+impl CandleBackend {
+    /// Load a ModernBERT encoder from a `config.json` and a `model.safetensors`.
+    pub fn load(
+        config_path: impl AsRef<Path>,
+        weights_path: impl AsRef<Path>,
+        max_context: usize,
+        dtype: impl Into<String>,
+    ) -> Result<CandleBackend> {
+        let device = Device::Cpu;
+        let config = parse_config(config_path.as_ref())?;
+        let hidden_size = config.hidden_size;
+
+        let tensors = load_encoder_tensors(weights_path.as_ref(), &device)
+            .map_err(|e| Error::Backend(CandleError::Load(weights_path.as_ref().display().to_string(), e.to_string()).to_string()))?;
+
+        let vb = VarBuilder::from_tensors(tensors, DType::F32, &device);
+        let model = ModernBert::load(vb, &config)
+            .map_err(|e| Error::Backend(CandleError::Load("weights".into(), e.to_string()).to_string()))?;
+
+        Ok(CandleBackend {
+            model,
+            hidden_size,
+            max_context,
+            dtype: dtype.into(),
+            id: BackendId::Candle,
+            families: vec![Family::F1],
+            device,
+        })
+    }
+
+    /// The hidden size reported by the loaded model.
+    pub fn hidden_size(&self) -> usize {
+        self.hidden_size
+    }
+}
+
+/// Read `config.json` and normalize it into a [`modernbert::Config`].
+///
+/// Handles both the flat rope-theta layout and the transformers-5.0
+/// `rope_parameters` object, and tolerates a null `pad_token_id`.
+fn parse_config(path: &Path) -> Result<Config> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| Error::Backend(CandleError::Config(path.display().to_string(), e.to_string()).to_string()))?;
+    let v: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| Error::Backend(CandleError::Config(path.display().to_string(), e.to_string()).to_string()))?;
+    config_from_value(&v, path)
+}
+
+fn config_from_value(v: &serde_json::Value, path: &Path) -> Result<Config> {
+    fn num(v: &serde_json::Value, key: &str, default: f64) -> f64 {
+        v.get(key).and_then(|x| x.as_f64()).unwrap_or(default)
+    }
+    fn uint(v: &serde_json::Value, key: &str, default: usize) -> usize {
+        v.get(key).and_then(|x| x.as_u64()).map(|x| x as usize).unwrap_or(default)
+    }
+
+    let default_theta = 10_000.0;
+    let global_rope_theta = v
+        .get("global_rope_theta")
+        .and_then(|x| x.as_f64())
+        .or_else(|| v.pointer("/rope_parameters/full_attention/rope_theta").and_then(|x| x.as_f64()))
+        .unwrap_or(default_theta);
+    let local_rope_theta = v
+        .get("local_rope_theta")
+        .and_then(|x| x.as_f64())
+        .or_else(|| v.pointer("/rope_parameters/sliding_attention/rope_theta").and_then(|x| x.as_f64()))
+        .unwrap_or(default_theta);
+
+    let pad_token_id = v.get("pad_token_id").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
+
+    let normalized = serde_json::json!({
+        "vocab_size": uint(v, "vocab_size", 0),
+        "hidden_size": uint(v, "hidden_size", 0),
+        "num_hidden_layers": uint(v, "num_hidden_layers", 12),
+        "num_attention_heads": uint(v, "num_attention_heads", 12),
+        "intermediate_size": uint(v, "intermediate_size", 3072),
+        "max_position_embeddings": uint(v, "max_position_embeddings", 8192),
+        "layer_norm_eps": num(v, "layer_norm_eps", 1e-5),
+        "pad_token_id": pad_token_id,
+        "global_attn_every_n_layers": uint(v, "global_attn_every_n_layers", 3),
+        "global_rope_theta": global_rope_theta,
+        "local_attention": uint(v, "local_attention", 128),
+        "local_rope_theta": local_rope_theta,
+    });
+
+    serde_json::from_value(normalized)
+        .map_err(|e| Error::Backend(CandleError::Config(path.display().to_string(), e.to_string()).to_string()))
+}
+
+/// Map a safetensors key to the name candle's ModernBERT expects.
+///
+/// * `encoder.*` (as `convaiinnovations/laya` uses) is remapped to `model.*`.
+/// * `model.*` (standard HF ModernBERT) is kept as-is.
+/// * Anything else (e.g. `act_head.*`, `temperature`) is dropped — the F1 head
+///   is applied in `huncho-core`, not inside the backend.
+fn remap_key(name: &str) -> Option<String> {
+    if let Some(rest) = name.strip_prefix("encoder.") {
+        Some(format!("model.{rest}"))
+    } else if name.starts_with("model.") {
+        Some(name.to_string())
+    } else {
+        None
+    }
+}
+
+/// Load the encoder tensors from a safetensors file, remapping the `encoder.`
+/// prefix to `model.` and dropping any non-encoder tensors. Tensors are
+/// converted to `f32` for CPU inference.
+fn load_encoder_tensors(path: &Path, device: &Device) -> candle::Result<HashMap<String, Tensor>> {
+    let raw = candle::safetensors::load(path, device)?;
+    let mut out = HashMap::new();
+    for (name, t) in raw {
+        let Some(mapped) = remap_key(&name) else { continue };
+        let t = t.to_dtype(DType::F32)?;
+        out.insert(mapped, t);
+    }
+    Ok(out)
+}
+
+impl Backend for CandleBackend {
+    fn id(&self) -> BackendId {
+        self.id
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            id: self.id,
+            dtype: self.dtype.clone(),
+            max_context: self.max_context,
+            supports_fork: false,
+            supports_lora: false,
+            families: self.families.clone(),
+            extra: BTreeMap::new(),
+        }
+    }
+
+    fn forward(&mut self, input: ForwardInput) -> Result<ForwardOutput> {
+        if input.tokens.len() > self.max_context {
+            return Err(Error::Backend(format!(
+                "sequence length {} exceeds candle max_context {}",
+                input.tokens.len(),
+                self.max_context
+            )));
+        }
+        let seq = input.tokens.len();
+        let hidden = self.hidden_size;
+
+        if input.positions.is_empty() {
+            return Ok(ForwardOutput::Features {
+                positions: Vec::new(),
+                values: CoreTensor::zeros(vec![0, hidden]),
+            });
+        }
+
+        // Token ids -> [1, seq] u32; attention mask -> [1, seq] of ones.
+        let ids = Tensor::new(input.tokens.as_slice(), &self.device)
+            .map_err(|e| Error::Backend(CandleError::Inference(e.to_string()).to_string()))?
+            .unsqueeze(0)
+            .map_err(|e| Error::Backend(CandleError::Inference(e.to_string()).to_string()))?;
+        let mask = Tensor::ones(seq, DType::U32, &self.device)
+            .map_err(|e| Error::Backend(CandleError::Inference(e.to_string()).to_string()))?
+            .unsqueeze(0)
+            .map_err(|e| Error::Backend(CandleError::Inference(e.to_string()).to_string()))?;
+
+        let hidden_tensor = self
+            .model
+            .forward(&ids, &mask)
+            .map_err(|e| Error::Backend(CandleError::Inference(e.to_string()).to_string()))?;
+
+        let hidden = hidden_tensor.shape().dims()[2];
+        let positions: Vec<u32> = input.positions.iter().map(|&p| p as u32).collect();
+        // candle `index_select` requires a 1-D index tensor.
+        let pos_tensor = Tensor::new(positions.as_slice(), &self.device)
+            .map_err(|e| Error::Backend(CandleError::Inference(e.to_string()).to_string()))?;
+        let selected = hidden_tensor
+            .index_select(&pos_tensor, 1)
+            .map_err(|e| Error::Backend(CandleError::Inference(e.to_string()).to_string()))?
+            .squeeze(0)
+            .map_err(|e| Error::Backend(CandleError::Inference(e.to_string()).to_string()))?;
+        let rows = selected
+            .to_vec2::<f32>()
+            .map_err(|e| Error::Backend(CandleError::Inference(e.to_string()).to_string()))?;
+
+        let mut data = vec![0.0f32; input.positions.len() * hidden];
+        for (row, feat) in rows.iter().enumerate() {
+            data[row * hidden..(row + 1) * hidden].copy_from_slice(feat);
+        }
+        let values = CoreTensor::new(vec![input.positions.len(), hidden], data)?;
+        Ok(ForwardOutput::Features {
+            positions: input.positions,
+            values,
+        })
+    }
+
+    fn fork(&mut self, _handle: CacheHandle) -> Result<CacheHandle> {
+        Err(Error::Unsupported(
+            "candle backend v1 does not support KV forking".into(),
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn extraction_matches_manual_slice() {
+        // Verify the backend's position extraction equals a manual slice of the
+        // full model output (i.e. index_select + squeeze is correct).
+        let device = Device::Cpu;
+        let config = parse_config(Path::new("tests/fixtures/tiny_modernbert/config.json")).unwrap();
+        let tensors = load_encoder_tensors(
+            Path::new("tests/fixtures/tiny_modernbert/model.safetensors"),
+            &device,
+        )
+        .unwrap();
+        let vb = VarBuilder::from_tensors(tensors, DType::F32, &device);
+        let model = ModernBert::load(vb, &config).unwrap();
+
+        let tokens = vec![1u32, 2, 3, 4, 5];
+        let positions = vec![1usize, 3];
+
+        // Backend path.
+        let mut backend = CandleBackend::load(
+            "tests/fixtures/tiny_modernbert/config.json",
+            "tests/fixtures/tiny_modernbert/model.safetensors",
+            16,
+            "fp32",
+        )
+        .unwrap();
+        let out = backend
+            .forward(huncho_core::backend::ForwardInput::new(tokens.clone(), positions.clone()))
+            .unwrap();
+
+        // Manual path: full [1, seq, hidden] then slice rows at positions.
+        let ids = Tensor::new(tokens.as_slice(), &device).unwrap().unsqueeze(0).unwrap();
+        let mask = Tensor::ones(tokens.len(), DType::U32, &device).unwrap().unsqueeze(0).unwrap();
+        let full = model.forward(&ids, &mask).unwrap().to_dtype(DType::F32).unwrap();
+        let v3 = full.to_vec3::<f32>().unwrap();
+        let hidden = v3[0][0].len();
+        let mut expected = vec![0.0f32; positions.len() * hidden];
+        for (row, &pos) in positions.iter().enumerate() {
+            expected[row * hidden..(row + 1) * hidden].copy_from_slice(&v3[0][pos]);
+        }
+
+        assert_eq!(out.values().data(), &expected[..]);
+    }
+
+    #[test]
+    fn remap_encoder_to_model() {
+        assert_eq!(
+            remap_key("encoder.layers.0.attn.Wqkv.weight").as_deref(),
+            Some("model.layers.0.attn.Wqkv.weight")
+        );
+        assert_eq!(
+            remap_key("encoder.embeddings.tok_embeddings.weight").as_deref(),
+            Some("model.embeddings.tok_embeddings.weight")
+        );
+    }
+
+    #[test]
+    fn remap_keeps_model_prefix() {
+        assert_eq!(
+            remap_key("model.layers.1.mlp.Wo.weight").as_deref(),
+            Some("model.layers.1.mlp.Wo.weight")
+        );
+    }
+
+    #[test]
+    fn remap_drops_non_encoder() {
+        assert_eq!(remap_key("temperature"), None);
+        assert_eq!(remap_key("act_head.0.weight"), None);
+        assert_eq!(remap_key("score"), None);
+    }
+
+    #[test]
+    fn config_parses_rope_parameters_object() {
+        // transformers-5.0 style (as `convaiinnovations/laya` uses).
+        let v = serde_json::json!({
+            "hidden_size": 1024,
+            "num_hidden_layers": 28,
+            "num_attention_heads": 16,
+            "intermediate_size": 2624,
+            "max_position_embeddings": 8192,
+            "layer_norm_eps": 1e-5,
+            "pad_token_id": 50283,
+            "global_attn_every_n_layers": 3,
+            "local_attention": 128,
+            "vocab_size": 50368,
+            "rope_parameters": {
+                "full_attention": { "rope_theta": 160000.0, "rope_type": "default" },
+                "sliding_attention": { "rope_theta": 10000.0, "rope_type": "default" }
+            }
+        });
+        let cfg = config_from_value(&v, Path::new("config.json")).unwrap();
+        assert_eq!(cfg.hidden_size, 1024);
+        assert_eq!(cfg.num_hidden_layers, 28);
+        assert_eq!(cfg.global_rope_theta, 160000.0);
+        assert_eq!(cfg.local_rope_theta, 10000.0);
+        assert_eq!(cfg.local_attention, 128);
+        assert_eq!(cfg.pad_token_id, 50283);
+    }
+
+    #[test]
+    fn config_parses_flat_rope_theta() {
+        let v = serde_json::json!({
+            "hidden_size": 8,
+            "num_hidden_layers": 1,
+            "num_attention_heads": 2,
+            "intermediate_size": 16,
+            "max_position_embeddings": 16,
+            "layer_norm_eps": 1e-5,
+            "pad_token_id": null,
+            "global_attn_every_n_layers": 1,
+            "local_attention": 8,
+            "vocab_size": 20,
+            "global_rope_theta": 50000.0,
+            "local_rope_theta": 5000.0
+        });
+        let cfg = config_from_value(&v, Path::new("config.json")).unwrap();
+        assert_eq!(cfg.global_rope_theta, 50000.0);
+        assert_eq!(cfg.local_rope_theta, 5000.0);
+        // null pad_token_id tolerates -> 0.
+        assert_eq!(cfg.pad_token_id, 0);
+    }
+}

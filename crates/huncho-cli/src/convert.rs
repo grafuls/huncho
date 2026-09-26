@@ -24,7 +24,7 @@ pub struct ConvertArgs {
     #[arg(long, default_value = "F1")]
     pub family: String,
 
-    /// Target backend (onnx|gguf|mlx).
+    /// Target backend (onnx|gguf|mlx|candle).
     #[arg(long, default_value = "onnx")]
     pub backend: String,
 
@@ -65,6 +65,7 @@ pub fn artifact_name_for(backend: BackendId) -> String {
         BackendId::LlamaCpp => "model.gguf".to_string(),
         BackendId::Mlx => "model.safetensors".to_string(),
         BackendId::Vllm => "model.safetensors".to_string(),
+        BackendId::Candle => "model.safetensors".to_string(),
     }
 }
 

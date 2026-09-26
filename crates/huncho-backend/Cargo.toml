@@ -12,10 +12,17 @@ thiserror.workspace = true
 log.workspace = true
 
 ort = { version = "2.0.0-rc.13", optional = true, default-features = false, features = ["ndarray", "std", "download-binaries", "tls-native"] }
+# candle: Hugging Face's own Rust framework. Loads HF `safetensors` directly, so
+# real HF models (e.g. ModernBERT) can be served without an ONNX export or a
+# Python/optimum toolchain. This is the primary real-model path for F1.
+candle = { package = "candle-core", version = "0.11", optional = true, default-features = false }
+candle-nn = { version = "0.11", optional = true, default-features = false }
+candle-transformers = { version = "0.11", optional = true, default-features = false }
 
 [features]
 default = []
 onnx = ["dep:ort"]
+candle = ["dep:candle", "dep:candle-nn", "dep:candle-transformers"]
 
 [dev-dependencies]
 tempfile = "3"

@@ -20,19 +20,24 @@ Decimal phases appear between their surrounding integers in numeric order.
 ## Phase Details
 
 ### Phase 1: Tracer Bullet (M0)
-**Goal**: A thin end-to-end slice: Laya (F1) served on the ONNX Runtime CPU backend behind `/v1/systemone`, with one conformance test passing.
+**Goal**: A thin end-to-end slice: Laya (F1) served on CPU behind `/v1/systemone`, with one conformance test passing.
 **Mode:** mvp
 **Depends on**: Nothing (first phase)
-**Requirements**: API-01 (choice + noul), API-02, CORE-01, CORE-02, CORE-03 (F1), CORE-05, BE-01 (CPU), CONV-01 (ONNX), CONF-01, CONF-02
+**Requirements**: API-01 (choice + noul), API-02, CORE-01, CORE-02, CORE-03 (F1), CORE-05, BE-01 (CPU), CONV-01 (artifact), CONF-01, CONF-02
 **Success Criteria** (what must be TRUE):
   1. The stock TypeSafe Python SDK returns correct, reference-matching answers from a local CPU server with only a base-URL change.
   2. `POST /v1/systemone` returns calibrated probabilities matching the Laya reference within tolerance on the conformance inputs.
   3. `GET /health` and `GET /v1/models` respond; unknown model names return 422.
-  4. `huncho convert` produces an ONNX artifact + manifest from the Laya HF repo + pinned revision.
+  4. `huncho convert` produces an artifact + manifest from the Laya HF repo + pinned revision (via `--runner`, or directly for the candle path).
 **Plans**: TBD
 
 Plans:
 - [ ] 01-01: [TBD]
+
+> Note: M0 starter used ONNX on CPU. The real-Laya forward path is now **candle**
+> (`--features candle`), which loads Laya's `.safetensors` directly and removes the
+> external ONNX/Python runner. The ONNX backend is retained for models that ship an
+> ONNX artifact.
 
 ### Phase 2: Pointer Family + Fork (M1)
 **Goal**: Kev-8B (F2, Qwen3 dense) served on llama.cpp with KV-fork fan-out; add score-type questions and per-backend calibration.
@@ -86,7 +91,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Tracer Bullet (M0) | 0/1 | In progress | Tracer bullet committed (ONNX `/v1/systemone`, conformance PASS); API/convert/calibrate/bench tests added; tokenizer wiring |
+| 1. Tracer Bullet (M0) | 0/1 | In progress | Tracer bullet committed (CPU `/v1/systemone`, conformance PASS); API/convert/calibrate/bench tests; tokenizer wiring; candle backend (real-Laya path) |
 | 2. Pointer Family + Fork (M1) | 0/1 | Not started | - |
 | 3. Breadth (M2) | 0/1 | Not started | - |
 | 4. Production (M3) | 0/1 | Not started | - |
