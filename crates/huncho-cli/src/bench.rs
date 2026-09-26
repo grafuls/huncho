@@ -179,3 +179,54 @@ fn make_request(questions: usize, long_state: bool) -> SystemOneRequest {
         questions: qs,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn percentile_bounds() {
+        let v = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        assert!((percentile(&v, 0.50) - 3.0).abs() < 1e-6);
+        assert!((percentile(&v, 0.99) - 5.0).abs() < 1e-6);
+        assert_eq!(percentile(&[], 0.5), 0.0);
+    }
+
+    #[test]
+    fn make_request_builds_expected_questions() {
+        let r = make_request(5, false);
+        assert_eq!(r.model, "mock");
+        assert_eq!(r.questions.len(), 5);
+        assert!(r.questions.keys().all(|k| k.starts_with('q')));
+        for q in r.questions.values() {
+            if let Question::Choice { criteria, .. } = q {
+                assert!(criteria.contains_key("returns"));
+                assert!(criteria.contains_key("billing"));
+            } else {
+                panic!("expected a choice question");
+            }
+        }
+        let long = serde_json::to_string(&make_request(1, true).state).unwrap();
+        assert!(long.len() > 500);
+    }
+
+    #[test]
+    fn run_mock_bench_completes() {
+        // Smoke-test the whole bench path on the in-process mock backend.
+        let args = BenchArgs {
+            manifest: None,
+            model: None,
+            revision: None,
+            token: None,
+            cache_dir: None,
+            backend: "mock".into(),
+            dtype: None,
+            questions: 5,
+            iterations: 5,
+            long_state: false,
+            mock_model: "mock".into(),
+        };
+        // Capturing stdout isn't necessary; we just assert it runs cleanly.
+        run(args).unwrap();
+    }
+}
