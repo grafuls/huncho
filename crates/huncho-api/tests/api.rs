@@ -136,6 +136,26 @@ fn router_with_state(state: Arc<AppState>) -> axum::Router {
     huncho_api::router().with_state(state)
 }
 
+async fn send_raw(
+    state: Arc<AppState>,
+    method: Method,
+    uri: &str,
+    auth: Option<&str>,
+) -> (StatusCode, String) {
+    let app = router_with_state(state);
+    let mut builder = Request::builder().method(method).uri(uri);
+    if let Some(tok) = auth {
+        builder = builder.header("authorization", format!("Bearer {tok}"));
+    }
+    let req = builder.body(Body::empty()).unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    let status = resp.status();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (status, String::from_utf8_lossy(&bytes).to_string())
+}
+
 fn choice_request() -> Value {
     json!({
         "state": "The customer wants a refund because the shoes are too small.",
@@ -148,6 +168,26 @@ fn choice_request() -> Value {
             }
         }
     })
+}
+
+#[tokio::test]
+async fn metrics_exposes_prometheus_registry() {
+    // Issue a request first so the metrics counters are non-empty.
+    let s = state(None);
+    let (_, _) = send(
+        s.clone(),
+        Method::POST,
+        "/v1/systemone",
+        Some(choice_request()),
+        None,
+        false,
+    )
+    .await;
+    let (status, text) = send_raw(s, Method::GET, "/metrics", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(text.contains("huncho_requests_total"));
+    assert!(text.contains("huncho_request_latency_seconds"));
+    assert!(text.contains("# TYPE huncho_requests_total counter"));
 }
 
 #[tokio::test]
