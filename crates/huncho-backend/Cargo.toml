@@ -11,7 +11,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 log.workspace = true
 
-ort = { version = "2.0.0-rc.13", optional = true, default-features = false, features = ["ndarray"] }
+ort = { version = "2.0.0-rc.13", optional = true, default-features = false, features = ["ndarray", "std", "download-binaries", "tls-native"] }
 
 [features]
 default = []

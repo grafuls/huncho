@@ -54,6 +54,18 @@ declared in the manifest for the requested dtype. Without the feature, manifest
 loads fall back to the mock backend, which is why `huncho serve --manifest ...`
 demos work without weights.
 
+The ONNX feature also enables `ort`'s `download-binaries` and `tls-native`
+features, so a build with this feature:
+
+- downloads a prebuilt ONNX Runtime at build time (needs network access), and
+- links against the system TLS stack (native-tls / OpenSSL) for the download
+  transport.
+
+For offline/vendored builds or a fully static binary (OPS-01), provide
+onnxruntime yourself: set `ORT_LIB_PATH` and disable `download-binaries`, or
+build with a different `ort` provider. The default (`no features`) build is
+unaffected.
+
 ## Backend selection in the CLI
 
 - `huncho serve --mock` — serves a built-in deterministic mock model (no weights).
