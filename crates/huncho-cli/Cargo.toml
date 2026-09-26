@@ -26,3 +26,4 @@ log.workspace = true
 default = []
 onnx = ["huncho-backend/onnx"]
 hf = ["dep:huncho-hub"]
+tokenizers = ["huncho-core/tokenizers"]

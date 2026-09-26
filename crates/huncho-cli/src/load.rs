@@ -13,7 +13,41 @@ use huncho_core::manifest::{
     Backbone, BackboneSource, BackendId, CalibrationConfig, CalibrationEntry, CalibrationStatus,
     ConfidenceDef, Family, HeadConfig, ModelManifest, PromptContract,
 };
+#[cfg(feature = "tokenizers")]
+use huncho_core::tokenizer::HfTokenizer;
 use huncho_core::tokenizer::{SimpleTokenizer, Tokenizer};
+
+/// Build the tokenizer for a manifest (CORE-02).
+///
+/// When the manifest declares a bundled `backbone.tokenizer` and the
+/// `tokenizers` feature is enabled, the official Hugging Face `tokenizers`
+/// crate is used so prompt tokenization is byte-identical to the reference
+/// implementation. Otherwise the offline `SimpleTokenizer` is used (the
+/// reference for the mock backend and the conformance fixtures).
+#[allow(unused_variables)]
+fn load_tokenizer(manifest: &ModelManifest, dir: &Path) -> Result<Box<dyn Tokenizer>> {
+    match &manifest.backbone.tokenizer {
+        Some(path) => {
+            #[cfg(feature = "tokenizers")]
+            {
+                let p = dir.join(path);
+                log::info!("loading tokenizer from {}", p.display());
+                let tk = HfTokenizer::from_file(&p)
+                    .map_err(|e| Error::Package(format!("failed to load tokenizer: {e}")))?;
+                Ok(Box::new(tk) as Box<dyn Tokenizer>)
+            }
+            #[cfg(not(feature = "tokenizers"))]
+            {
+                log::warn!(
+                    "manifest declares tokenizer `{path}` but the `tokenizers` feature is off; \
+                     using the offline SimpleTokenizer (not reference-accurate)"
+                );
+                Ok(Box::new(SimpleTokenizer::new(32768)) as Box<dyn Tokenizer>)
+            }
+        }
+        None => Ok(Box::new(SimpleTokenizer::new(32768)) as Box<dyn Tokenizer>),
+    }
+}
 
 /// Build an in-memory mock model package and engine for offline/demo serving.
 pub fn mock_engine(
@@ -109,10 +143,10 @@ pub fn engine_from_manifest(
         .map(|s| s.to_string())
         .unwrap_or_else(|| "fp32".to_string());
 
-    let tokenizer: Box<dyn Tokenizer> = Box::new(SimpleTokenizer::new(32768));
-    // Artifacts are declared relative to the manifest's directory, not the
-    // manifest file itself.
+    // Artifacts and the tokenizer are declared relative to the manifest's
+    // directory, not the manifest file itself.
     let dir = path.as_ref().parent().unwrap_or_else(|| Path::new("."));
+    let tokenizer = load_tokenizer(&manifest, dir)?;
     let backend = load_backend(&manifest, backend_id, &dtype, dir)?;
     Engine::new(manifest, backend, tokenizer, HeadParams::default(), backend_id, dtype)
 }

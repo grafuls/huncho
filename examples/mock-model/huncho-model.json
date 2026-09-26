@@ -8,8 +8,7 @@
       "onnx": [{ "path": "mock-model.onnx", "dtype": "fp32" }]
     },
     "hidden_size": 1024,
-    "max_context": 8192,
-    "tokenizer": "tokenizer.json"
+    "max_context": 8192
   },
   "head": { "kind": "option-marker", "weights": "mock-head.safetensors", "width": 1 },
   "prompt_contract": {
