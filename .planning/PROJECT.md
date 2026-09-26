@@ -66,10 +66,13 @@ Available test hardware: 2× T4 (16 GB, Turing SM75), 8× A100-40GB lab node, Th
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
 | Name the app Huncho, with CLI `huncho` and crates `huncho-*` | User selected the name on 2026-09-26 | Confirmed |
-| Backend abstraction as a `Backend` trait (`load`/`forward`/`fork`/`capabilities`) | Core never assumes a backend supports custom attention masks; fork required for F2 | — Pending |
-| Correctness defined as probability fidelity vs. a pinned reference, enforced by conformance in CI | Guarantees calibrated probabilities stay calibrated across backends and quantizations | — Pending |
-| Core language assumed Rust (small static binary, WASM target, HF `tokenizers`) | Portable to edge/browser; C++/Python remain candidates | — Pending (open question) |
-| Prefill-only architecture with per-question KV fork | All families are prefill-only; fan-out needs forking, not decode | — Pending |
+| Backend abstraction as a `Backend` trait (`load`/`forward`/`fork`/`capabilities`) | Core never assumes a backend supports custom attention masks; fork required for F2 | Implemented; `fork`/`prefill` stubbed for mock/ONNX, engine fan-out still serial |
+| Correctness defined as probability fidelity vs. a pinned reference, enforced by conformance in CI | Guarantees calibrated probabilities stay calibrated across backends and quantizations | Implemented; `huncho conform` gates on delta/argmax/ECE (mock golden passes at 0 delta) |
+| Core language assumed Rust (small static binary, WASM target, HF `tokenizers`) | Portable to edge/browser; C++/Python remain candidates | Confirmed; ONNX Runtime statically linked, single glibc binary |
+| Prefill-only architecture with per-question KV fork | All families are prefill-only; fan-out needs forking, not decode | Core wiring present; `BuiltPrompt.prefix_len` = fork boundary, engine fan-out pending |
+| Enable `ort` features `std`,`download-binaries`,`tls-native` | `ndarray` needs `std`; prebuilt runtime avoids a native link; TLS for Hub | Implemented (M0) |
+| Load a manifest-declared tokenizer via HF `tokenizers` when available, else SimpleTokenizer | CORE-02 byte-identical prompting vs. the reference | Implemented behind `--features tokenizers` |
+| Ship `serve` config via clap `env` (HUNCHO_*) so secrets aren't on the command line | systemd `EnvironmentFile` / `.env`-friendly ops | Implemented (OPS-03) |
 
 ## Evolution
 

@@ -88,6 +88,23 @@ cargo run --release -p huncho-cli --features hf -- serve --model my-org/laya --b
 The manifest and every artifact it references are fetched into the HF cache,
 pinned to the resolved commit, so `serve --model` is deterministic across runs.
 
+Serve a real ONNX artifact (`examples/mock-model` ships a 512-dim encoder and
+its conformance golden). Build with `--features onnx` (fetches a prebuilt ONNX
+Runtime at build time):
+
+```bash
+cargo run --release -p huncho-cli --features onnx -- \
+  serve --manifest examples/mock-model/huncho-model.json --backend onnx
+
+cargo run --release -p huncho-cli --features onnx -- conform \
+  --manifest examples/mock-model/huncho-model.json \
+  --backend onnx --golden examples/mock-model/golden.json
+```
+
+The same commands with `--backend mock` drive the in-process reference and need
+no ONNX build. For real models also pass `hf` (Hub resolution) and `tokenizers`
+(byte-identical reference prompting): `--features onnx,hf,tokenizers`.
+
 Run the offline conformance harness against the mock reference:
 
 ```bash
@@ -99,6 +116,27 @@ cargo run --release -p huncho-cli -- conform \
 
 A single `huncho-model.json` manifest pins the family, backbone, head, prompt
 contract, and per-backend calibration. See [docs/model-package.md](docs/model-package.md).
+
+## Testing
+
+The default build is offline and testable without weights:
+
+```bash
+cargo test                       # core + hub + api + cli
+cargo test -p huncho-backend --features onnx   # ONNX backend integration
+cargo test -p huncho-core --features tokenizers --test hf_tokenizer  # CORE-02
+```
+
+Coverage includes the `/v1/systemone` HTTP contract (choice/noul/score, 422,
+auth, extensions, `/metrics`), `convert`/`calibrate`/`bench`, F1–F4 prompt
+building, and the ONNX conformance suite.
+
+## Operation / packaging
+
+A multi-stage `Dockerfile` builds a slim image with `onnx,hf,tokenizers` and a
+non-root user; a hardened `deploy/huncho.service` + `deploy/huncho.env` example
+cover systemd. `serve` reads `HUNCHO_BIND`/`HUNCHO_BACKEND`/`HUNCHO_DTYPE`/
+`HUNCHO_CACHE_DIR`/`HUNCHO_AUTH_TOKEN`. See [docs/operations.md](docs/operations.md).
 
 ## Documentation
 

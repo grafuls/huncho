@@ -86,7 +86,8 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Tracer Bullet (M0) | 0/1 | Not started | - |
+| 1. Tracer Bullet (M0) | 0/1 | In progress | Tracer bullet committed (ONNX `/v1/systemone`, conformance PASS); API/convert/calibrate/bench tests added; tokenizer wiring |
 | 2. Pointer Family + Fork (M1) | 0/1 | Not started | - |
 | 3. Breadth (M2) | 0/1 | Not started | - |
 | 4. Production (M3) | 0/1 | Not started | - |
+| 4.1 Packaging (OPS-01/02/03) | 0/1 | Partial | Dockerfile, systemd unit, env-file added |
