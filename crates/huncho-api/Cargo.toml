@@ -1,0 +1,23 @@
+[package]
+name = "huncho-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+huncho-core = { path = "../huncho-core" }
+huncho-backend = { path = "../huncho-backend" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+log.workspace = true
+subtle.workspace = true
+tokio.workspace = true
+axum.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+http.workspace = true
+prometheus.workspace = true
+tracing.workspace = true
+bytes.workspace = true
+futures.workspace = true

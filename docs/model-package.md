@@ -1,6 +1,6 @@
 # Model package format
 
-A model package is a single `s1-model.json` manifest plus artifacts. Every
+A model package is a single `huncho-model.json` manifest plus artifacts. Every
 backend can load it. The manifest pins everything the engine needs to serve a
 model deterministically: family, backbone, head, prompt contract, calibration,
 and the reference conformance vectors.
@@ -31,7 +31,7 @@ and the reference conformance vectors.
     "entries": { "onnx:fp32": { "temperature": 1.0, "confidence": "peak" } },
     "eval_set_hash": "mock-eval-0001"
   },
-  "reference": { "family_impl": "s1-mock-reference", "revision": "main", "golden": "golden.json" },
+  "reference": { "family_impl": "huncho-mock-reference", "revision": "main", "golden": "golden.json" },
   "capabilities": { "supports_fork": false, "supports_multi_lora": false }
 }
 ```
@@ -63,7 +63,7 @@ rejected at load time.
 
 Per-backend artifacts, keyed by backend id (`onnx`, `llamacpp`, `mlx`,
 `vllm`). Each artifact has a relative `path` and the `dtype` it provides
-(`fp32`, `fp16`, `int8`, `q4`). `s1 convert` produces these.
+(`fp32`, `fp16`, `int8`, `q4`). `huncho convert` produces these.
 
 ### `head`
 
@@ -103,7 +103,7 @@ Each entry has:
 
 Pointer to golden conformance vectors. `family_impl` names the reference
 implementation, `revision` pins it, and `golden` is the relative path to the
-golden suite that `s1 conform` consumes.
+golden suite that `huncho conform` consumes.
 
 ### `capabilities`
 
@@ -112,11 +112,11 @@ Model-level capability flags: `supports_fork` and `supports_multi_lora`.
 ## Example
 
 A runnable, deterministic mock model package lives in
-[`examples/mock-model`](../examples/mock-model) (`s1-model.json` + `golden.json`)
+[`examples/mock-model`](../examples/mock-model) (`huncho-model.json` + `golden.json`)
 and is used by the offline conformance suite and the CLI demos.
 
 ## Conversion
 
-`s1 convert` produces backend artifacts plus the manifest from an HF repo and
-revision (CONV-01). `s1 calibrate` fits temperatures for a given backend × dtype
+`huncho convert` produces backend artifacts plus the manifest from an HF repo and
+revision (CONV-01). `huncho calibrate` fits temperatures for a given backend × dtype
 on a held-out set and writes them back into the manifest (CONV-02).

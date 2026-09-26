@@ -1,8 +1,8 @@
 # API
 
-`s1` exposes the Jev `/v1/systemone` wire contract plus operations endpoints.
+`huncho` exposes the Jev `/v1/systemone` wire contract plus operations endpoints.
 It is byte-compatible with the public TypeSafe / Jev HTTP contract, so an
-unmodified TypeSafe Python SDK works against `s1` with only a base-URL change.
+unmodified TypeSafe Python SDK works against `huncho` with only a base-URL change.
 
 ## Endpoints
 
@@ -86,7 +86,7 @@ The response shape is strictly Jev-shaped by default:
 }
 ```
 
-`s1` is prefill-only, so `output_tokens` is always `0`.
+`huncho` is prefill-only, so `output_tokens` is always `0`.
 
 ### Errors
 
@@ -106,11 +106,11 @@ Errors use a structured body:
 ## Engine extensions (API-05)
 
 Engine-specific extras are **off by default**, so default responses stay strictly
-Jev-shaped. Request them with the `x-s1-extensions` header, or set
+Jev-shaped. Request them with the `x-huncho-extensions` header, or set
 `default_extensions` in the server config:
 
 ```http
-x-s1-extensions: true
+x-huncho-extensions: true
 ```
 
 When enabled, the response gains an `extensions` object:

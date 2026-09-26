@@ -1,0 +1,9 @@
+/target/
+
+# Local environment configuration
+.env
+.env.*
+!.env.example
+!.env.sample
+
+.DS_Store

@@ -23,7 +23,7 @@ See: .planning/PROJECT.md (updated 2026-09-26)
 Phase: 1 of 4 (Tracer Bullet / M0)
 Plan: 0 of 1 in current phase
 Status: Ready to plan
-Last activity: 2026-09-26 — Project initialized from PRD-system-one-engine.md
+Last activity: 2026-09-26 — Completed quick task 260926-sdr: Rename app to Huncho
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -43,6 +43,7 @@ Progress: [░░░░░░░░░░] 0%
 Decisions are logged in PROJECT.md Key Decisions table.
 
 - After init: chose Rust core, `Backend` trait abstraction, conformance-as-correctness-gate. See PROJECT.md.
+- 2026-09-26: User selected Huncho as the app name; executable `huncho`, crates `huncho-*`.
 
 ### Pending Todos
 
@@ -56,6 +57,12 @@ None yet.
 - Apple Silicon hardware for Metal/MLX CI still to be decided (PRD open question #3).
 - Open questions pending: distribution/open-source (⚖), core language confirm (Rust), upstream license verification for Kev.
 
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260926-sdr | Rename app to Huncho | 2026-09-26 | Working tree | [260926-sdr-rename-app-to-huncho](./quick/260926-sdr-rename-app-to-huncho/) |
+
 ## Deferred Items
 
 Items acknowledged and deferred at milestone close, most recent first:
@@ -67,5 +74,5 @@ Items acknowledged and deferred at milestone close, most recent first:
 ## Session Continuity
 
 Last session: 2026-09-26
-Stopped at: Project initialized — next step is `discuss-phase 1`
+Stopped at: Huncho rename complete — next step is `discuss-phase 1`
 Resume file: None

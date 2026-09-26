@@ -1,10 +1,10 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/s1-core",
-    "crates/s1-backend",
-    "crates/s1-api",
-    "crates/s1-cli",
+    "crates/huncho-core",
+    "crates/huncho-backend",
+    "crates/huncho-api",
+    "crates/huncho-cli",
 ]
 
 [workspace.package]
@@ -12,7 +12,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.80"
 license = "Apache-2.0"
-repository = "https://example.invalid/s1"
+repository = "https://github.com/grafuls/huncho"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

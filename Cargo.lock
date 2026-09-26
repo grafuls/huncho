@@ -541,6 +541,71 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
+name = "huncho-api"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "bytes",
+ "futures",
+ "http",
+ "huncho-backend",
+ "huncho-core",
+ "log",
+ "prometheus",
+ "serde",
+ "serde_json",
+ "subtle",
+ "thiserror 2.0.21",
+ "tokio",
+ "tower",
+ "tower-http",
+ "tracing",
+]
+
+[[package]]
+name = "huncho-backend"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "huncho-core",
+ "log",
+ "ort",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "huncho-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "huncho-api",
+ "huncho-backend",
+ "huncho-core",
+ "log",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "huncho-core"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "serde",
+ "serde_json",
+ "subtle",
+ "thiserror 2.0.21",
+ "tokenizers",
+]
+
+[[package]]
 name = "hyper"
 version = "1.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1129,71 +1194,6 @@ name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
-
-[[package]]
-name = "s1-api"
-version = "0.1.0"
-dependencies = [
- "axum",
- "bytes",
- "futures",
- "http",
- "log",
- "prometheus",
- "s1-backend",
- "s1-core",
- "serde",
- "serde_json",
- "subtle",
- "thiserror 2.0.21",
- "tokio",
- "tower",
- "tower-http",
- "tracing",
-]
-
-[[package]]
-name = "s1-backend"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "log",
- "ort",
- "s1-core",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "s1-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "log",
- "s1-api",
- "s1-backend",
- "s1-core",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "s1-core"
-version = "0.1.0"
-dependencies = [
- "log",
- "serde",
- "serde_json",
- "subtle",
- "thiserror 2.0.21",
- "tokenizers",
-]
 
 [[package]]
 name = "scopeguard"

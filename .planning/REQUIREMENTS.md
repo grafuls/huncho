@@ -1,4 +1,4 @@
-# Requirements: System One Engine (`s1`)
+# Requirements: Huncho
 
 **Defined:** 2026-09-26
 **Core Value:** Guarantee that calibrated probabilities stay calibrated across every backend and quantization, served behind one API for all open decision-model families.
@@ -36,16 +36,16 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Conversion
 
-- [ ] **CONV-01**: CLI `s1 convert` produces backend artifacts (ONNX, GGUF, MLX) plus the manifest from an HF repo + revision.
-- [ ] **CONV-02**: CLI `s1 calibrate` fits temperatures for a given backend × dtype on a held-out set and writes them into the manifest.
+- [ ] **CONV-01**: CLI `huncho convert` produces backend artifacts (ONNX, GGUF, MLX) plus the manifest from an HF repo + revision.
+- [ ] **CONV-02**: CLI `huncho calibrate` fits temperatures for a given backend × dtype on a held-out set and writes them into the manifest.
 - [ ] **CONV-03**: Quantization presets (fp16, int8, 4-bit) run a mandatory conformance check after conversion.
 
 ### Conformance & Eval
 
 - [ ] **CONF-01**: Golden-vector generator uses the pinned reference implementation of each family.
-- [ ] **CONF-02**: `s1 conform` runs golden vectors on any backend and reports max probability delta, argmax agreement, and ECE drift against configurable pass/fail thresholds.
+- [ ] **CONF-02**: `huncho conform` runs golden vectors on any backend and reports max probability delta, argmax agreement, and ECE drift against configurable pass/fail thresholds.
 - [ ] **CONF-03**: CI matrix runs conformance for every supported (backend, model, dtype) combination; a failure blocks the release.
-- [ ] **CONF-04**: `s1 bench` measures latency and throughput per backend and hardware with a fixed request mix (1, 5, 20 questions; short and long states).
+- [ ] **CONF-04**: `huncho bench` measures latency and throughput per backend and hardware with a fixed request mix (1, 5, 20 questions; short and long states).
 - [ ] **CONF-05**: Option-order sensitivity test shuffles choice options and reports how often answers flip.
 
 ### Packaging & Ops

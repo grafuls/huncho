@@ -1,18 +1,18 @@
-# s1 — System One Engine
+# Huncho
 
-`System One Engine` (`s1`) is a portable serving engine for Jev-style "System
-One" decision models. It takes a **state** and a set of **typed questions** and
+**Huncho** is a portable serving engine for Jev-style "System One" decision
+models. It takes a **state** and a set of **typed questions** and
 returns **calibrated probabilities** — no text generation. It is to decision
 models what llama.cpp / vLLM are to generative LLMs, with one non-negotiable
 guarantee: *calibrated probabilities stay calibrated* across every backend and
 quantization.
 
 ```
-state + typed questions ──► s1 ──► calibrated probabilities (no decode loop)
+state + typed questions ──► huncho ──► calibrated probabilities (no decode loop)
 ```
 
 The engine implements the **Jev `/v1/systemone` wire contract**, so an unmodified
-TypeSafe Python SDK works against `s1` with only a base-URL change.
+TypeSafe Python SDK works against Huncho with only a base-URL change.
 
 ## Highlights
 
@@ -20,7 +20,7 @@ TypeSafe Python SDK works against `s1` with only a base-URL change.
   (pointer), F3 (candidate-logit), F4 (slot head).
 - **Calibration as a first-class guarantee**: per-backend × dtype temperatures,
   softmax, and confidence (Jev peak-based, or per-model definitions).
-- **Conformance gating**: an offline harness (`s1 conform`) compares any backend
+- **Conformance gating**: an offline harness (`huncho conform`) compares any backend
   against golden vectors and gates releases on probability fidelity, argmax
   agreement, and ECE drift.
 - **Offline-first**: a dependency-free deterministic `MockBackend` lets the whole
@@ -31,17 +31,17 @@ TypeSafe Python SDK works against `s1` with only a base-URL change.
 
 | Crate | Purpose |
 |---|---|
-| `s1-core` | Wire contract, model packaging, prompt building, heads, calibration, conformance, engine. |
-| `s1-backend` | Backend implementations: `MockBackend` (offline reference), `NullBackend`, optional `OnnxBackend`. |
-| `s1-api` | HTTP API: `/v1/systemone`, `/health`, `/v1/models`, `/metrics`, auth. |
-| `s1-cli` | `s1 serve`, `convert`, `calibrate`, `conform`, `bench`. |
+| `huncho-core` | Wire contract, model packaging, prompt building, heads, calibration, conformance, engine. |
+| `huncho-backend` | Backend implementations: `MockBackend` (offline reference), `NullBackend`, optional `OnnxBackend`. |
+| `huncho-api` | HTTP API: `/v1/systemone`, `/health`, `/v1/models`, `/metrics`, auth. |
+| `huncho-cli` | `huncho serve`, `convert`, `calibrate`, `conform`, `bench`. |
 
 ## Quick start
 
 Serve a built-in deterministic mock model (no weights required):
 
 ```bash
-cargo run --release -p s1-cli -- serve --mock --bind 127.0.0.1:8080
+cargo run --release -p huncho-cli -- serve --mock --bind 127.0.0.1:8080
 ```
 
 Query it:
@@ -71,19 +71,19 @@ curl -s -X POST http://127.0.0.1:8080/v1/systemone \
 Registering a model package from a manifest:
 
 ```bash
-cargo run --release -p s1-cli -- serve --manifest examples/mock-model/s1-model.json
+cargo run --release -p huncho-cli -- serve --manifest examples/mock-model/huncho-model.json
 ```
 
 Run the offline conformance harness against the mock reference:
 
 ```bash
-cargo run --release -p s1-cli -- conform \
+cargo run --release -p huncho-cli -- conform \
   --golden examples/mock-model/golden.json
 ```
 
 ## Model package
 
-A single `s1-model.json` manifest pins the family, backbone, head, prompt
+A single `huncho-model.json` manifest pins the family, backbone, head, prompt
 contract, and per-backend calibration. See [docs/model-package.md](docs/model-package.md).
 
 ## Documentation

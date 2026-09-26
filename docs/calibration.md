@@ -1,6 +1,6 @@
 # Calibration & confidence
 
-`calibrated probabilities stay calibrated` is the core differentiator of `s1`.
+`calibrated probabilities stay calibrated` is the core differentiator of `huncho`.
 The engine applies a per-(backend, dtype) temperature to the head logits before
 softmax, so that probabilities are calibrated across backends and
 quantizations. Confidence is computed using the documented definition.
@@ -28,7 +28,7 @@ pub fn softmax_temperature(logits: &[f32], temperature: f32) -> Vec<f32>
 ```
 
 A higher temperature flattens the distribution; a lower temperature sharpens it.
-`s1 calibrate` fits a scalar temperature that minimizes the negative log
+`huncho calibrate` fits a scalar temperature that minimizes the negative log
 likelihood on a held-out `(logits, target)` set and writes it back into the
 manifest.
 
@@ -60,7 +60,7 @@ know which formula was applied.
 
 ## Conformance (probability fidelity)
 
-`s1 conform` runs golden vectors against any backend and reports:
+`huncho conform` runs golden vectors against any backend and reports:
 
 - **Max probability delta** — the largest absolute difference between the
   backend's probabilities and the reference's. Default tolerance `1e-3`.
@@ -76,7 +76,7 @@ rejected.
 ## Reference values
 
 The seed values from the Jev docs are used as unit-test anchors in
-[`calibration.rs`](../crates/s1-core/src/calibration.rs):
+[`calibration.rs`](../crates/huncho-core/src/calibration.rs):
 
 - `[0.61, 0.35, 0.04]` → peak confidence `0.42`
 - `[0.00, 0.57, 0.43]` → peak confidence `0.35`
@@ -85,7 +85,7 @@ The seed values from the Jev docs are used as unit-test anchors in
 ## CLI
 
 ```bash
-s1 calibrate --manifest s1-model.json --backend onnx --dtype fp32 \
+huncho calibrate --manifest huncho-model.json --backend onnx --dtype fp32 \
   --data fit-data.json
 ```
 

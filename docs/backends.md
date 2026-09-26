@@ -1,6 +1,6 @@
 # Backends
 
-Every backend implements the same [`Backend`](../crates/s1-core/src/backend.rs)
+Every backend implements the same [`Backend`](../crates/huncho-core/src/backend.rs)
 trait:
 
 - `forward(tokens, output_positions, kv_handle?) -> hidden_states | logits` —
@@ -18,9 +18,9 @@ cache per question, and prefill each branch.
 
 | Backend | Crate | Status | Notes |
 |---|---|---|---|
-| `MockBackend` | `s1-backend` | ✅ built-in | Deterministic, dependency-free. The **offline reference** for the conformance harness and demos. |
-| `NullBackend` | `s1-backend` | ✅ built-in | Always-empty output, useful for tests / shelling out. |
-| `OnnxBackend` | `s1-backend` | ⚙️ feature-gated | ONNX Runtime (CPU/CUDA via EPs). Built with the `onnx` feature (off by default). |
+| `MockBackend` | `huncho-backend` | ✅ built-in | Deterministic, dependency-free. The **offline reference** for the conformance harness and demos. |
+| `NullBackend` | `huncho-backend` | ✅ built-in | Always-empty output, useful for tests / shelling out. |
+| `OnnxBackend` | `huncho-backend` | ⚙️ feature-gated | ONNX Runtime (CPU/CUDA via EPs). Built with the `onnx` feature (off by default). |
 
 `MockBackend` emits a `Features` (hidden-state) output so the engine's
 feature-projection heads (F1/F2/F4) and the mean-fallback projection are all
@@ -46,25 +46,25 @@ The ONNX backend is off by default to keep the default build dependency-free.
 Enable it with:
 
 ```bash
-cargo build --release -p s1-cli --features onnx
+cargo build --release -p huncho-cli --features onnx
 ```
 
-With the feature enabled, `s1 serve --manifest ...` will load the ONNX artifact
+With the feature enabled, `huncho serve --manifest ...` will load the ONNX artifact
 declared in the manifest for the requested dtype. Without the feature, manifest
-loads fall back to the mock backend, which is why `s1 serve --manifest ...`
+loads fall back to the mock backend, which is why `huncho serve --manifest ...`
 demos work without weights.
 
 ## Backend selection in the CLI
 
-- `s1 serve --mock` — serves a built-in deterministic mock model (no weights).
-- `s1 serve --manifest <path> --backend mock` — serves a manifest using the mock
+- `huncho serve --mock` — serves a built-in deterministic mock model (no weights).
+- `huncho serve --manifest <path> --backend mock` — serves a manifest using the mock
   backend (offline demo).
-- `s1 serve --manifest <path> --backend onnx` — serves a manifest using ONNX.
-- `s1 conform --backend mock` — runs conformance against the mock reference.
+- `huncho serve --manifest <path> --backend onnx` — serves a manifest using ONNX.
+- `huncho conform --backend mock` — runs conformance against the mock reference.
 
 ## Adding a backend
 
-Implement [`Backend`](../crates/s1-core/src/backend.rs) and register it in the
+Implement [`Backend`](../crates/huncho-core/src/backend.rs) and register it in the
 cli's `load` helper. A new family requires a manifest, a head implementation,
 and golden vectors — nothing else.
 

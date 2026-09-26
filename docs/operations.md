@@ -6,13 +6,13 @@ The default build is dependency-free and works offline (the mock backend is
 always available):
 
 ```bash
-cargo build --release -p s1-cli
+cargo build --release -p huncho-cli
 ```
 
 Enable the ONNX Runtime backend for real weights:
 
 ```bash
-cargo build --release -p s1-cli --features onnx
+cargo build --release -p huncho-cli --features onnx
 ```
 
 ## Run
@@ -20,20 +20,20 @@ cargo build --release -p s1-cli --features onnx
 Serve a built-in deterministic mock model:
 
 ```bash
-s1 serve --mock --bind 127.0.0.1:8080
+huncho serve --mock --bind 127.0.0.1:8080
 ```
 
 Serve one or more model manifests:
 
 ```bash
-s1 serve --manifest ./models/laya/s1-model.json --backend onnx \
-  --manifest ./models/kev/s1-model.json --backend onnx
+huncho serve --manifest ./models/laya/huncho-model.json --backend onnx \
+  --manifest ./models/kev/huncho-model.json --backend onnx
 ```
 
 Serve a manifest using the mock backend (offline demo, no weights):
 
 ```bash
-s1 serve --manifest ./examples/mock-model/s1-model.json --backend mock
+huncho serve --manifest ./examples/mock-model/huncho-model.json --backend mock
 ```
 
 ### serve flags
@@ -62,7 +62,7 @@ curl -s http://127.0.0.1:8080/v1/models
 Run with a bearer token:
 
 ```bash
-s1 serve --mock --auth-token "secret"
+huncho serve --mock --auth-token "secret"
 ```
 
 Then request:
@@ -79,16 +79,17 @@ Requests without a valid token return `401`. The comparison is constant-time.
 curl -s http://127.0.0.1:8080/metrics
 ```
 
-Prometheus metrics include request latency, per-model request counts and token
-usage, prefilled tokens, queue depth, and fork counts.
+Prometheus metrics use the `huncho_` prefix and include request latency,
+per-model request counts and token usage, prefilled tokens, queue depth, and
+fork counts.
 
 ## Calibration
 
 Fit a temperature for a backend × dtype on a held-out set:
 
 ```bash
-s1 calibrate \
-  --manifest ./models/laya/s1-model.json \
+huncho calibrate \
+  --manifest ./models/laya/huncho-model.json \
   --backend onnx --dtype fp32 \
   --data ./calibration/fit.json
 ```
@@ -106,14 +107,14 @@ s1 calibrate \
 Run the offline conformance harness against the golden vectors:
 
 ```bash
-s1 conform --golden ./examples/mock-model/golden.json
+huncho conform --golden ./examples/mock-model/golden.json
 ```
 
 To compare a real manifest-backed backend:
 
 ```bash
-s1 conform \
-  --manifest ./models/laya/s1-model.json \
+huncho conform \
+  --manifest ./models/laya/huncho-model.json \
   --backend onnx --dtype fp32 \
   --golden ./models/laya/golden.json --json
 ```
@@ -124,7 +125,7 @@ agreement, or ECE drift threshold).
 ## Benchmark
 
 ```bash
-s1 bench --questions 5 --iterations 200 --long-state
+huncho bench --questions 5 --iterations 200 --long-state
 ```
 
 - `--questions` — number of questions per request (`1`, `5`, or `20`).
@@ -147,5 +148,5 @@ rootless-friendly; for SELinux hosts use the `:Z` volume label.
 ## Release gates
 
 Releases are gated on the conformance matrix: every supported
-(backend, model, dtype) must pass `s1 conform`. A failure blocks the release.
+(backend, model, dtype) must pass `huncho conform`. A failure blocks the release.
 Quantized variants that fail ship with refit temperatures or are rejected.

@@ -1,4 +1,4 @@
-# Roadmap: System One Engine (`s1`)
+# Roadmap: Huncho
 
 ## Overview
 
@@ -28,7 +28,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   1. The stock TypeSafe Python SDK returns correct, reference-matching answers from a local CPU server with only a base-URL change.
   2. `POST /v1/systemone` returns calibrated probabilities matching the Laya reference within tolerance on the conformance inputs.
   3. `GET /health` and `GET /v1/models` respond; unknown model names return 422.
-  4. `s1 convert` produces an ONNX artifact + manifest from the Laya HF repo + pinned revision.
+  4. `huncho convert` produces an ONNX artifact + manifest from the Laya HF repo + pinned revision.
 **Plans**: TBD
 
 Plans:
@@ -42,7 +42,7 @@ Plans:
 **Success Criteria** (what must be TRUE):
   1. Packed multi-question results equal the single-question results within 1e-4 (CORE-06).
   2. Conformance passes in fp16 on CUDA and Metal.
-  3. `s1 calibrate` fits per-backend temperatures into the manifest.
+  3. `huncho calibrate` fits per-backend temperatures into the manifest.
   4. KV-fork forking prefills each question's isolated branch from a shared state prefix.
 **Plans**: TBD
 

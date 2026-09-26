@@ -1,4 +1,4 @@
-# System One Engine (`s1`)
+# Huncho
 
 ## What This Is
 
@@ -65,6 +65,7 @@ Available test hardware: 2× T4 (16 GB, Turing SM75), 8× A100-40GB lab node, Th
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
+| Name the app Huncho, with CLI `huncho` and crates `huncho-*` | User selected the name on 2026-09-26 | Confirmed |
 | Backend abstraction as a `Backend` trait (`load`/`forward`/`fork`/`capabilities`) | Core never assumes a backend supports custom attention masks; fork required for F2 | — Pending |
 | Correctness defined as probability fidelity vs. a pinned reference, enforced by conformance in CI | Guarantees calibrated probabilities stay calibrated across backends and quantizations | — Pending |
 | Core language assumed Rust (small static binary, WASM target, HF `tokenizers`) | Portable to edge/browser; C++/Python remain candidates | — Pending (open question) |
