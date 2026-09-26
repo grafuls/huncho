@@ -1,0 +1,26 @@
+[package]
+name = "s1-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "s1"
+path = "src/main.rs"
+
+[dependencies]
+s1-core = { path = "../s1-core" }
+s1-backend = { path = "../s1-backend" }
+s1-api = { path = "../s1-api" }
+serde.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+log.workspace = true
+
+[features]
+default = []
+onnx = ["s1-backend/onnx"]

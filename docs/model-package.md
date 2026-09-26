@@ -1,0 +1,122 @@
+# Model package format
+
+A model package is a single `s1-model.json` manifest plus artifacts. Every
+backend can load it. The manifest pins everything the engine needs to serve a
+model deterministically: family, backbone, head, prompt contract, calibration,
+and the reference conformance vectors.
+
+```json
+{
+  "schema_version": "1.0",
+  "name": "mock-laya",
+  "family": "F1",
+  "backbone": {
+    "source": { "kind": "hf", "repo": "convaiinnovations/laya", "revision": "mock-reference" },
+    "artifacts": { "onnx": [{ "path": "mock-model.onnx", "dtype": "fp32" }] },
+    "hidden_size": 1024,
+    "max_context": 8192,
+    "tokenizer": "tokenizer.json"
+  },
+  "head": { "kind": "option-marker", "weights": "mock-head.safetensors", "width": 1 },
+  "prompt_contract": {
+    "template": "laya-v1",
+    "option_marker_tokens": ["<option:0>"],
+    "state_budget": 3072,
+    "head_budget": 1024,
+    "max_options": 255,
+    "contract_hash": "f1-mock-contract-hash"
+  },
+  "calibration": {
+    "default": { "temperature": 1.0, "confidence": "peak", "status": "fit" },
+    "entries": { "onnx:fp32": { "temperature": 1.0, "confidence": "peak" } },
+    "eval_set_hash": "mock-eval-0001"
+  },
+  "reference": { "family_impl": "s1-mock-reference", "revision": "main", "golden": "golden.json" },
+  "capabilities": { "supports_fork": false, "supports_multi_lora": false }
+}
+```
+
+## Fields
+
+### `family`
+
+`F1 | F2 | F3 | F4` — selects the prompt builder and the expected head kind.
+
+- **F1** (Encoder) — scores candidates at option-marker positions. Head kind:
+  `option-marker`.
+- **F2** (Pointer) — pointer head over option-boundary tokens; block-causal
+  fan-out. Head kind: `pointer`.
+- **F3** (Candidate-logit) — softmax over one-token answer codes using the LM
+  head. Head kind: `candidate-logit`.
+- **F4** (Slot head) — fixed-width decision head. Head kind: `slot`.
+
+The manifest is validated so `head.kind` matches `family`; a mismatch is
+rejected at load time.
+
+### `backbone.source`
+
+- `{ "kind": "hf", "repo": "...", "revision": "..." }` — a pinned Hugging Face
+  repo and revision. Pinning a revision is how upstream drift is contained.
+- `{ "kind": "local", "path": "..." }` — a local pre-converted backbone.
+
+### `backbone.artifacts`
+
+Per-backend artifacts, keyed by backend id (`onnx`, `llamacpp`, `mlx`,
+`vllm`). Each artifact has a relative `path` and the `dtype` it provides
+(`fp32`, `fp16`, `int8`, `q4`). `s1 convert` produces these.
+
+### `head`
+
+- `kind`: matches the family.
+- `weights`: relative path to the head weights (always fp32).
+- `width`: output width of the head logits (default `1`).
+- `pointer_offset` (optional): used by pointer heads.
+
+### `prompt_contract`
+
+- `template`: the template id (e.g. `laya-v1`, `kev-block-causal`).
+- `option_marker_tokens`: marker tokens that anchor F1 candidate positions.
+- `state_budget` / `head_budget`: token budgets for the shared state and the
+  per-question head. These and `max_context` are enforced (CORE-08); oversized
+  input is rejected, never silently truncated.
+- `max_options`: maximum options the contract allows.
+- `contract_hash`: a hash of the prompt contract bytes, used to detect upstream
+  drift.
+
+### `calibration`
+
+- `default`: the backend-agnostic entry used when no `{backend}:{dtype}` key
+  matches.
+- `entries`: per-`{backend}:{dtype}` overrides.
+- `eval_set_hash`: the hash of the eval set the temperatures were fitted on.
+
+Each entry has:
+
+- `temperature`: the softmax temperature.
+- `per_type_temperatures` (optional): per question-type temperatures (used by
+  F4 / per-type calibration).
+- `confidence`: `peak` (Jev) or `entropy` (Laya), or `custom:<name>`.
+- `status`: `fit`, `refit`, or `pending`. Quantized variants that fail
+  conformance ship with `refit` temperatures or are rejected.
+
+### `reference`
+
+Pointer to golden conformance vectors. `family_impl` names the reference
+implementation, `revision` pins it, and `golden` is the relative path to the
+golden suite that `s1 conform` consumes.
+
+### `capabilities`
+
+Model-level capability flags: `supports_fork` and `supports_multi_lora`.
+
+## Example
+
+A runnable, deterministic mock model package lives in
+[`examples/mock-model`](../examples/mock-model) (`s1-model.json` + `golden.json`)
+and is used by the offline conformance suite and the CLI demos.
+
+## Conversion
+
+`s1 convert` produces backend artifacts plus the manifest from an HF repo and
+revision (CONV-01). `s1 calibrate` fits temperatures for a given backend × dtype
+on a held-out set and writes them back into the manifest (CONV-02).

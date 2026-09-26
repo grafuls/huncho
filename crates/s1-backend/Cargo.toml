@@ -1,0 +1,22 @@
+[package]
+name = "s1-backend"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+s1-core = { path = "../s1-core" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+log.workspace = true
+
+ort = { version = "2.0.0-rc.13", optional = true, default-features = false, features = ["ndarray"] }
+
+[features]
+default = []
+onnx = ["dep:ort"]
+
+[dev-dependencies]
+tempfile = "3"
+anyhow.workspace = true

@@ -1,0 +1,157 @@
+{
+  "schema_version": "1.0",
+  "family": "F1",
+  "hash": "mock-reference-hash-v1",
+  "cases": [
+    {
+      "id": "choice-short-state",
+      "request": {
+        "state": "The customer wants a refund because the shoes are too small.",
+        "model": "mock-laya",
+        "questions": {
+          "department": {
+            "type": "choice",
+            "instructions": "Which team handles this?",
+            "criteria": {
+              "billing": "Charge problem",
+              "returns": "The customer wants money back"
+            }
+          }
+        }
+      },
+      "expected": {
+        "department": {
+          "billing": 0.4965772,
+          "returns": 0.5034228
+        }
+      }
+    },
+    {
+      "id": "choice-structured-state",
+      "request": {
+        "state": {
+          "priority": "high",
+          "ticket": "A seller is disputing a shipment delay"
+        },
+        "model": "mock-laya",
+        "questions": {
+          "resolution": {
+            "type": "choice",
+            "instructions": "What should the agent do first?",
+            "criteria": {
+              "escalate": "Escalate to a supervisor",
+              "inspect": "Inspect the package first",
+              "refund": "Issue a refund immediately"
+            }
+          }
+        }
+      },
+      "expected": {
+        "resolution": {
+          "escalate": 0.33033016,
+          "inspect": 0.33488396,
+          "refund": 0.33478588
+        }
+      }
+    },
+    {
+      "id": "noul-single",
+      "request": {
+        "state": "A user asks whether their account was charged twice.",
+        "model": "mock-laya",
+        "questions": {
+          "is_refund": {
+            "type": "noul",
+            "instructions": "Is the customer requesting a refund?",
+            "criteria": {
+              "yes": null,
+              "no": null
+            }
+          }
+        }
+      },
+      "expected": {
+        "is_refund": {
+          "no": 0.5034228,
+          "yes": 0.4965772
+        }
+      }
+    },
+    {
+      "id": "score-many-levels",
+      "request": {
+        "state": "The server has been down for three hours with no ETA.",
+        "model": "mock-laya",
+        "questions": {
+          "severity": {
+            "type": "score",
+            "instructions": "Rate the severity of the incident",
+            "criteria": [
+              "Low",
+              "Moderate",
+              "High",
+              "Critical"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "severity": {
+          "0": 0.24709313,
+          "1": 0.25049943,
+          "2": 0.25042605,
+          "3": 0.25198138
+        }
+      }
+    },
+    {
+      "id": "packed-multi-question",
+      "request": {
+        "state": "A support ticket about a billing error on the premium plan.",
+        "model": "mock-laya",
+        "questions": {
+          "department": {
+            "type": "choice",
+            "instructions": "Which team handles this?",
+            "criteria": {
+              "billing": "Charging issue",
+              "returns": "Refund request"
+            }
+          },
+          "is_refund": {
+            "type": "noul",
+            "instructions": "Is the customer requesting a refund?",
+            "criteria": {
+              "yes": null,
+              "no": null
+            }
+          },
+          "severity": {
+            "type": "score",
+            "instructions": "Rate severity",
+            "criteria": [
+              "Low",
+              "Moderate",
+              "High"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "department": {
+          "billing": 0.4965772,
+          "returns": 0.5034228
+        },
+        "is_refund": {
+          "no": 0.5034228,
+          "yes": 0.4965772
+        },
+        "severity": {
+          "0": 0.33033016,
+          "1": 0.33488396,
+          "2": 0.33478588
+        }
+      }
+    }
+  ]
+}
