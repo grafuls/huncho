@@ -8,17 +8,41 @@ use huncho_core::contract::{Instructions, Question, StateValue, SystemOneRequest
 use huncho_core::engine::{Engine, EvalOptions};
 use huncho_core::manifest::{BackendId, Family};
 
-use crate::load::{engine_from_manifest, mock_engine, mock_engine_from_manifest};
+use crate::load::{
+    engine_from_manifest, engine_from_resolved_manifest, mock_engine, mock_engine_from_manifest,
+    resolve_model,
+};
 
 #[derive(Args)]
 pub struct BenchArgs {
-    /// Model manifest path; mock is used when omitted.
-    #[arg(long)]
+    /// A local model manifest path (huncho-model.json). Mutually exclusive with `--model`.
+    #[arg(long, conflicts_with = "model")]
     pub manifest: Option<String>,
+
+    /// A model reference to resolve: a local package dir/path or an HF repo id.
+    /// Mutually exclusive with `--manifest`.
+    #[arg(long, conflicts_with = "manifest")]
+    pub model: Option<String>,
+
+    /// Git revision to resolve an HF `--model` at.
+    #[arg(long)]
+    pub revision: Option<String>,
+
+    /// Hugging Face access token (defaults to HF_TOKEN / login cache).
+    #[arg(long)]
+    pub token: Option<String>,
+
+    /// Model cache directory (also used by HF resolution).
+    #[arg(long)]
+    pub cache_dir: Option<String>,
 
     /// Backend to use (onnx|mock).
     #[arg(long, default_value = "mock")]
     pub backend: String,
+
+    /// Override dtype for manifest/model-loaded runs.
+    #[arg(long)]
+    pub dtype: Option<String>,
 
     /// Number of questions per request (1, 5, or 20).
     #[arg(long, default_value = "1")]
@@ -32,28 +56,44 @@ pub struct BenchArgs {
     #[arg(long, default_value_t = false)]
     pub long_state: bool,
 
-    /// Name for the mock model when no manifest is given.
+    /// Name for the built-in mock model when no manifest/model is given.
     #[arg(long, default_value = "mock")]
-    pub model: String,
+    pub mock_model: String,
 }
 
 pub fn run(args: BenchArgs) -> anyhow::Result<()> {
-    let engine: Engine = match &args.manifest {
-        Some(path) => {
-            if args.backend.eq_ignore_ascii_case("mock") {
-                mock_engine_from_manifest(path)?
-            } else {
-                let backend = BackendId::parse(&args.backend)?;
-                engine_from_manifest(path, backend, None)?
-            }
+    let is_mock = args.backend.eq_ignore_ascii_case("mock");
+    let backend_id = if is_mock {
+        None
+    } else {
+        Some(BackendId::parse(&args.backend)?)
+    };
+    let dtype = args.dtype.as_deref();
+    let engine: Engine = if let Some(model) = &args.model {
+        let manifest_path = resolve_model(
+            model,
+            backend_id,
+            dtype,
+            args.revision.clone(),
+            args.token.clone(),
+            args.cache_dir.clone(),
+            false,
+        )?;
+        engine_from_resolved_manifest(&manifest_path, backend_id, dtype)?
+    } else if let Some(path) = &args.manifest {
+        if is_mock {
+            mock_engine_from_manifest(path)?
+        } else {
+            engine_from_manifest(path, backend_id.expect("non-mock backend"), None)?
         }
-        None => mock_engine(&args.model, Family::F1, BackendId::Onnx, "fp32", 1.0)?,
+    } else {
+        mock_engine(&args.mock_model, Family::F1, BackendId::Onnx, "fp32", 1.0)?
     };
 
     let request = make_request(args.questions, args.long_state);
 
     // Warm-up.
-    let _ = engine.eval(&request, &EvalOptions::default());
+    let _ = engine.eval(&request, &EvalOptions::default())?;
 
     let mut latencies = Vec::with_capacity(args.iterations);
     let n = args.iterations.max(1);
@@ -74,7 +114,12 @@ pub fn run(args: BenchArgs) -> anyhow::Result<()> {
     let mean = latencies.iter().sum::<f64>() / n as f64;
     let qps = n as f64 / wall;
 
-    println!("Bench: model={} questions={} backend={}", engine.manifest().name, args.questions, engine.backend_id());
+    println!(
+        "Bench: model={} questions={} backend={}",
+        engine.manifest().name,
+        args.questions,
+        engine.backend_id()
+    );
     println!("  mean   : {mean:.3} ms");
     println!("  p50    : {p50:.3} ms");
     println!("  p95    : {p95:.3} ms");
@@ -105,11 +150,22 @@ fn make_request(questions: usize, long_state: bool) -> SystemOneRequest {
     let mut qs = BTreeMap::new();
     for i in 0..questions {
         let q = Question::Choice {
-            instructions: Instructions::from(serde_json::Value::String("Which team handles this?".into())),
+            instructions: Instructions::from(serde_json::Value::String(
+                "Which team handles this?".into(),
+            )),
             criteria: [
-                ("returns".to_string(), Some(serde_json::Value::String("money back".into()))),
-                ("billing".to_string(), Some(serde_json::Value::String("charge issue".into()))),
-                ("shipping".to_string(), Some(serde_json::Value::String("delivery problem".into()))),
+                (
+                    "returns".to_string(),
+                    Some(serde_json::Value::String("money back".into())),
+                ),
+                (
+                    "billing".to_string(),
+                    Some(serde_json::Value::String("charge issue".into())),
+                ),
+                (
+                    "shipping".to_string(),
+                    Some(serde_json::Value::String("delivery problem".into())),
+                ),
             ]
             .into_iter()
             .collect(),

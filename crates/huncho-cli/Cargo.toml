@@ -12,6 +12,7 @@ path = "src/main.rs"
 huncho-core = { path = "../huncho-core" }
 huncho-backend = { path = "../huncho-backend" }
 huncho-api = { path = "../huncho-api" }
+huncho-hub = { path = "../huncho-hub", optional = true }
 serde.workspace = true
 serde_json.workspace = true
 clap.workspace = true
@@ -24,3 +25,4 @@ log.workspace = true
 [features]
 default = []
 onnx = ["huncho-backend/onnx"]
+hf = ["dep:huncho-hub"]

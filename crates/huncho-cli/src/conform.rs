@@ -1,29 +1,50 @@
 //! `huncho conform` — run golden vectors against a backend (CONF-02/03).
 
-use clap::Args;
-use huncho_core::conformance::{
-    self, ConformanceReport, ConformanceThresholds,
-};
-use huncho_core::engine::Engine;
-use huncho_core::manifest::{BackendId, Family};
+use std::path::Path;
 
-use crate::load::{engine_from_manifest, mock_engine, mock_engine_from_manifest};
+use clap::Args;
+use huncho_core::conformance::{self, ConformanceReport, ConformanceThresholds};
+use huncho_core::engine::Engine;
+use huncho_core::manifest::{BackendId, Family, ModelManifest};
+
+use crate::load::{
+    engine_from_manifest, engine_from_resolved_manifest, mock_engine, mock_engine_from_manifest,
+    resolve_model,
+};
 
 #[derive(Args)]
 pub struct ConformArgs {
-    /// Model manifest path. If omitted, a built-in mock model is used.
-    #[arg(long)]
+    /// A local model manifest path (huncho-model.json). Mutually exclusive with `--model`.
+    #[arg(long, conflicts_with = "model")]
     pub manifest: Option<String>,
 
-    /// Path to the golden-vector JSON suite.
+    /// A model reference to resolve: a local package dir/path or an HF repo id.
+    /// Mutually exclusive with `--manifest`.
+    #[arg(long, conflicts_with = "manifest")]
+    pub model: Option<String>,
+
+    /// Git revision to resolve an HF `--model` at.
     #[arg(long)]
-    pub golden: String,
+    pub revision: Option<String>,
+
+    /// Hugging Face access token (defaults to HF_TOKEN / login cache).
+    #[arg(long)]
+    pub token: Option<String>,
+
+    /// Model cache directory (also used by HF resolution).
+    #[arg(long)]
+    pub cache_dir: Option<String>,
+
+    /// Path to the golden-vector JSON suite. When omitted with `--model`, it is
+    /// derived from the resolved manifest's `reference.golden`.
+    #[arg(long)]
+    pub golden: Option<String>,
 
     /// Backend to use (onnx|mock).
     #[arg(long, default_value = "mock")]
     pub backend: String,
 
-    /// Override dtype for manifest-loaded models.
+    /// Override dtype for manifest/model-loaded runs.
     #[arg(long)]
     pub dtype: Option<String>,
 
@@ -35,25 +56,69 @@ pub struct ConformArgs {
     #[arg(long, default_value_t = false)]
     pub json: bool,
 
-    /// Name for the mock model when no manifest is given.
+    /// Name for the built-in mock model when no manifest/model is given.
     #[arg(long, default_value = "mock")]
-    pub model: String,
+    pub mock_model: String,
 }
 
 pub fn run(args: ConformArgs) -> anyhow::Result<()> {
-    let engine: Engine = match &args.manifest {
-        Some(path) => {
-            if args.backend.eq_ignore_ascii_case("mock") {
-                mock_engine_from_manifest(path)?
-            } else {
-                let backend = BackendId::parse(&args.backend)?;
-                engine_from_manifest(path, backend, args.dtype.as_deref())?
-            }
-        }
-        None => mock_engine(&args.model, Family::F1, BackendId::Onnx, "fp32", 1.0)?,
+    let is_mock = args.backend.eq_ignore_ascii_case("mock");
+    let backend_id = if is_mock {
+        None
+    } else {
+        Some(BackendId::parse(&args.backend)?)
     };
+    let dtype = args.dtype.as_deref();
 
-    let suite = conformance::load_suite(&args.golden)?;
+    let engine: Engine;
+    let golden_path: String;
+
+    if let Some(model) = &args.model {
+        let manifest_path = resolve_model(
+            model,
+            backend_id,
+            dtype,
+            args.revision.clone(),
+            args.token.clone(),
+            args.cache_dir.clone(),
+            true,
+        )?;
+        golden_path = match &args.golden {
+            Some(g) => g.clone(),
+            None => {
+                let m = ModelManifest::load(&manifest_path)?;
+                m.reference
+                    .map(|r| {
+                        let parent = manifest_path.parent().unwrap_or_else(|| Path::new("."));
+                        parent.join(&r.golden).to_string_lossy().to_string()
+                    })
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "`--model` resolved a manifest with no `reference.golden`; pass `--golden`"
+                        )
+                    })?
+            }
+        };
+        engine = engine_from_resolved_manifest(&manifest_path, backend_id, dtype)?;
+    } else if let Some(path) = &args.manifest {
+        golden_path = args
+            .golden
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("`--golden` is required when using `--manifest`"))?;
+        engine = if is_mock {
+            mock_engine_from_manifest(path)?
+        } else {
+            engine_from_manifest(path, backend_id.expect("non-mock backend"), dtype)?
+        };
+    } else {
+        golden_path = args
+            .golden
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("`--golden` is required when no manifest/model is given"))?;
+        engine = mock_engine(&args.mock_model, Family::F1, BackendId::Onnx, "fp32", 1.0)?;
+    }
+
+    let suite = conformance::load_suite(&golden_path)?;
     let thresholds = ConformanceThresholds {
         max_prob_delta: args.max_delta.unwrap_or(1e-3),
         ..Default::default()
@@ -74,16 +139,25 @@ pub fn run(args: ConformArgs) -> anyhow::Result<()> {
 }
 
 fn print_report(report: &ConformanceReport) {
-    println!("Conformance: model={} backend={} dtype={}", report.model, report.backend, report.dtype);
+    println!(
+        "Conformance: model={} backend={} dtype={}",
+        report.model, report.backend, report.dtype
+    );
     println!("  cases: {}", report.cases.len());
     println!("  max probability delta: {:.6}", report.max_prob_delta);
     println!("  argmax agreement:      {:.3}", report.argmax_agreement);
     println!("  ECE drift:             {:.6}", report.ece);
-    println!("  status: {}", if report.passed { "PASS" } else { "FAIL" });
+    println!(
+        "  status: {}",
+        if report.passed { "PASS" } else { "FAIL" }
+    );
     if !report.passed {
         for c in &report.cases {
             if !c.argmax_match {
-                println!("    - case `{}` argmax mismatch (max delta {:.6})", c.id, c.max_prob_delta);
+                println!(
+                    "    - case `{}` argmax mismatch (max delta {:.6})",
+                    c.id, c.max_prob_delta
+                );
             }
         }
     }

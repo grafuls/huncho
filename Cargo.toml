@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/huncho-core",
     "crates/huncho-backend",
+    "crates/huncho-hub",
     "crates/huncho-api",
     "crates/huncho-cli",
 ]

@@ -22,10 +22,10 @@ See: .planning/PROJECT.md (updated 2026-09-26)
 
 Phase: 1 of 4 (Tracer Bullet / M0)
 Plan: 0 of 1 in current phase
-Status: Ready to plan
-Last activity: 2026-09-26 — Completed quick task 260926-sdr: Rename app to Huncho
+Status: In progress
+Last activity: 2026-09-26 — Added Hugging Face Hub resolution (`huncho-hub` + CLI `--model`/`--features hf`)
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [░▒░░░░░░░░] ~8%
 
 ## Performance Metrics
 
@@ -62,6 +62,7 @@ None yet.
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 260926-sdr | Rename app to Huncho | 2026-09-26 | Working tree | [260926-sdr-rename-app-to-huncho](./quick/260926-sdr-rename-app-to-huncho/) |
+| 260926-hf | Hugging Face Hub resolution (serve/calibrate/conform/bench by repo id) | 2026-09-26 | Working tree | — |
 
 ## Deferred Items
 

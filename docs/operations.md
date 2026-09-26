@@ -15,6 +15,16 @@ Enable the ONNX Runtime backend for real weights:
 cargo build --release -p huncho-cli --features onnx
 ```
 
+Enable Hugging Face Hub resolution (download a model package by repo id):
+
+```bash
+cargo build --release -p huncho-cli --features hf
+```
+
+The `hf` feature pulls in `huncho-hub` (and `hf-hub`) so a model package can be
+resolved by `owner/repo`. Pass both features when you need ONNX weights *and*
+Hub resolution: `--features onnx,hf`.
+
 ## Run
 
 Serve a built-in deterministic mock model:
@@ -36,6 +46,24 @@ Serve a manifest using the mock backend (offline demo, no weights):
 huncho serve --manifest ./examples/mock-model/huncho-model.json --backend mock
 ```
 
+Serve a model package by Hugging Face repo id. The manifest
+(`huncho-model.json`) and every artifact it references are pulled into the HF
+cache, and all artifacts are pinned to the exact resolved commit:
+
+```bash
+huncho serve --model my-org/laya --backend onnx --dtype fp32 --bind 127.0.0.1:8080
+```
+
+You can also reference a local package path or a manifest file through
+`--model`; it is resolved without any network access:
+
+```bash
+huncho serve --model ./models/laya --backend onnx
+```
+
+> Requires building with `--features hf`. A local package is resolved whether or
+> not the feature is enabled; only `owner/repo` ids need `hf`.
+
 ### serve flags
 
 | Flag | Meaning |
@@ -45,10 +73,13 @@ huncho serve --manifest ./examples/mock-model/huncho-model.json --backend mock
 | `--mock` | Serve a built-in mock model (no weights). |
 | `--mock-model` | Register the mock under extra names (repeatable). |
 | `--manifest` | Load a model manifest (repeatable). |
-| `--backend` | Backend for manifest models: `mock` (default) or `onnx`. |
-| `--dtype` | Override dtype for manifest models (default `fp32`). |
+| `--model` | Resolve a model reference: a local package dir/path or an HF repo id (`owner/repo`); repeatable. Requires `hf`. |
+| `--revision` | Git revision to resolve HF `--model` refs at (default: repo default branch). |
+| `--token` | HF access token (defaults to `HF_TOKEN` / login cache). |
+| `--backend` | Backend for models: `mock` (default) or `onnx`. |
+| `--dtype` | Override dtype for models (default `fp32`). |
 | `--extensions` | Enable engine extensions by default (API-05). |
-| `--cache-dir` | Model cache directory (placeholder for OPS-04). |
+| `--cache-dir` | Model cache directory; also seeds HF resolution (OPS-04). |
 
 ### Health and discovery
 
@@ -94,6 +125,15 @@ huncho calibrate \
   --data ./calibration/fit.json
 ```
 
+Calibrate a package resolved from the Hub (the resolved, cached manifest is
+updated in place):
+
+```bash
+huncho calibrate \
+  --model my-org/laya --backend onnx --dtype fp32 \
+  --data ./calibration/fit.json
+```
+
 `fit.json`:
 
 ```json
@@ -119,6 +159,13 @@ huncho conform \
   --golden ./models/laya/golden.json --json
 ```
 
+Conform against a package resolved from the Hub; the golden suite is taken from
+the manifest's `reference.golden` automatically:
+
+```bash
+huncho conform --model my-org/laya --backend onnx --dtype fp32 --json
+```
+
 Exit code is non-zero when the suite fails (probability delta, argmax
 agreement, or ECE drift threshold).
 
@@ -131,14 +178,16 @@ huncho bench --questions 5 --iterations 200 --long-state
 - `--questions` — number of questions per request (`1`, `5`, or `20`).
 - `--iterations` — number of timed iterations (default `50`).
 - `--long-state` — use a ~1500-char state instead of a short one.
-- `--manifest` / `--backend` — run against a manifest; defaults to `mock`.
+- `--manifest` / `--backend` — run against a local manifest; defaults to `mock`.
+- `--model` / `--backend` — resolve and run against an HF repo id or local package.
 
 (CONF-04) reports mean/p50/p95/p99 latency and requests/sec per backend.
 
 ## Model cache (OPS-04)
 
-`--cache-dir` is accepted as a placeholder. Models are loaded lazily; a preload
-flag and idle eviction are planned.
+`--cache-dir` seeds the Hugging Face cache directory when resolving `--model`
+refs (defaults to `HF_HUB_CACHE`). Models are loaded lazily; a preload flag and
+idle eviction are planned.
 
 ## Container / systemd
 

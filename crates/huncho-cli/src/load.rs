@@ -1,6 +1,6 @@
 //! Helpers to build a serving [`Engine`] from a manifest or an in-memory mock.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use huncho_backend::MockBackend;
 #[cfg(feature = "onnx")]
@@ -110,7 +110,10 @@ pub fn engine_from_manifest(
         .unwrap_or_else(|| "fp32".to_string());
 
     let tokenizer: Box<dyn Tokenizer> = Box::new(SimpleTokenizer::new(32768));
-    let backend = load_backend(&manifest, backend_id, &dtype, path.as_ref())?;
+    // Artifacts are declared relative to the manifest's directory, not the
+    // manifest file itself.
+    let dir = path.as_ref().parent().unwrap_or_else(|| Path::new("."));
+    let backend = load_backend(&manifest, backend_id, &dtype, dir)?;
     Engine::new(manifest, backend, tokenizer, HeadParams::default(), backend_id, dtype)
 }
 
@@ -150,5 +153,91 @@ fn load_onnx(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<dy
 fn load_onnx(_manifest: &ModelManifest, _dtype: &str, _dir: &Path) -> Result<Box<dyn Backend>> {
     Err(Error::Unsupported(
         "the `onnx` feature is not enabled; rebuild with `--features onnx`".into(),
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// Hugging Face Hub resolution (feature-gated)
+// ---------------------------------------------------------------------------
+
+/// Build an [`Engine`] from a resolved manifest path, honoring the mock
+/// selection implied by `backend = None`.
+pub fn engine_from_resolved_manifest(
+    manifest_path: &Path,
+    backend: Option<BackendId>,
+    dtype: Option<&str>,
+) -> Result<Engine> {
+    match backend {
+        None => mock_engine_from_manifest(manifest_path),
+        Some(backend_id) => engine_from_manifest(manifest_path, backend_id, dtype),
+    }
+}
+
+/// Resolve a model reference (local path or `owner/repo`) to a local package
+/// manifest path, fetching missing artifacts from the Hub.
+#[cfg(feature = "hf")]
+pub fn resolve_model(
+    model: &str,
+    backend: Option<BackendId>,
+    dtype: Option<&str>,
+    revision: Option<String>,
+    token: Option<String>,
+    cache_dir: Option<String>,
+    fetch_golden: bool,
+) -> Result<PathBuf> {
+    use huncho_hub::{ResolveOptions, resolve_manifest_path};
+
+    let opts = ResolveOptions {
+        revision,
+        token,
+        cache_dir: cache_dir.map(PathBuf::from),
+        local_files_only: false,
+        fetch_golden,
+    };
+    resolve_manifest_path(model, backend, dtype.unwrap_or("fp32"), &opts)
+        .map_err(|e| Error::Package(e.to_string()))
+}
+
+#[cfg(not(feature = "hf"))]
+pub fn resolve_model(
+    _model: &str,
+    _backend: Option<BackendId>,
+    _dtype: Option<&str>,
+    _revision: Option<String>,
+    _token: Option<String>,
+    _cache_dir: Option<String>,
+    _fetch_golden: bool,
+) -> Result<PathBuf> {
+    Err(Error::Unsupported(
+        "Hugging Face Hub resolution requires building huncho with `--features hf`".into(),
+    ))
+}
+
+/// Build a serving [`Engine`] from a model reference that resolves against the
+/// Hub (or a local package). `backend = None` selects the offline mock backend.
+#[cfg(feature = "hf")]
+pub fn engine_from_ref(
+    model: &str,
+    backend: Option<BackendId>,
+    dtype: Option<&str>,
+    revision: Option<String>,
+    token: Option<String>,
+    cache_dir: Option<String>,
+) -> Result<Engine> {
+    let manifest_path = resolve_model(model, backend, dtype, revision, token, cache_dir, false)?;
+    engine_from_resolved_manifest(&manifest_path, backend, dtype)
+}
+
+#[cfg(not(feature = "hf"))]
+pub fn engine_from_ref(
+    _model: &str,
+    _backend: Option<BackendId>,
+    _dtype: Option<&str>,
+    _revision: Option<String>,
+    _token: Option<String>,
+    _cache_dir: Option<String>,
+) -> Result<Engine> {
+    Err(Error::Unsupported(
+        "Hugging Face Hub resolution requires building huncho with `--features hf`".into(),
     ))
 }

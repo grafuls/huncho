@@ -26,6 +26,9 @@ TypeSafe Python SDK works against Huncho with only a base-URL change.
 - **Offline-first**: a dependency-free deterministic `MockBackend` lets the whole
   pipeline (prompt → head → calibration → conformance) run with no weights.
 - **Static, portable**: pure-Rust core with optional ONNX Runtime.
+- **Hugging Face-native**: a model package can be resolved by repo id
+  (`--model owner/repo`) so manifests, weights, head, and golden vectors are
+  pulled straight from the Hub — the same run-time resolution model vLLM uses.
 
 ## Crates
 
@@ -34,6 +37,7 @@ TypeSafe Python SDK works against Huncho with only a base-URL change.
 | `huncho-core` | Wire contract, model packaging, prompt building, heads, calibration, conformance, engine. |
 | `huncho-backend` | Backend implementations: `MockBackend` (offline reference), `NullBackend`, optional `OnnxBackend`. |
 | `huncho-api` | HTTP API: `/v1/systemone`, `/health`, `/v1/models`, `/metrics`, auth. |
+| `huncho-hub` | Hugging Face Hub resolution of model packages by repo id (feature `hf`). |
 | `huncho-cli` | `huncho serve`, `convert`, `calibrate`, `conform`, `bench`. |
 
 ## Quick start
@@ -73,6 +77,16 @@ Registering a model package from a manifest:
 ```bash
 cargo run --release -p huncho-cli -- serve --manifest examples/mock-model/huncho-model.json
 ```
+
+Registering a model package from the Hugging Face Hub by repo id (build with
+`--features hf`):
+
+```bash
+cargo run --release -p huncho-cli --features hf -- serve --model my-org/laya --backend onnx
+```
+
+The manifest and every artifact it references are fetched into the HF cache,
+pinned to the resolved commit, so `serve --model` is deterministic across runs.
 
 Run the offline conformance harness against the mock reference:
 
