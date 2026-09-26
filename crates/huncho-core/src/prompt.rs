@@ -643,4 +643,94 @@ mod tests {
         assert_eq!(built.candidates[0].label, "0");
         assert!(built.candidates[0].description.is_some());
     }
+
+    #[test]
+    fn f1_prefix_len_is_option_marker_boundary() {
+        let tk = SimpleTokenizer::new(32768);
+        let f = default_formatter(Family::F1);
+        let built = f.build(&test_state(), &q_choice(), &tk).unwrap();
+        let first_marker = built
+            .tokens
+            .iter()
+            .position(|&t| t == built.candidates[0].code_id)
+            .unwrap();
+        assert_eq!(built.prefix_len, first_marker);
+        assert!(built.prefix_len <= built.tokens.len());
+        // All candidates live at/after the fork boundary.
+        for c in &built.candidates {
+            assert!(c.position >= built.prefix_len);
+        }
+    }
+
+    #[test]
+    fn f2_builds_choice_at_distinct_positions() {
+        // F2 (pointer family, Qwen3 block-causal) uses option-boundary markers;
+        // the pointer head reads the hidden state at each marker position.
+        let tk = SimpleTokenizer::new(32768);
+        let f = default_formatter(Family::F2);
+        let built = f.build(&test_state(), &q_choice(), &tk).unwrap();
+        assert_eq!(built.candidates.len(), 2);
+        assert_eq!(built.candidates[0].label, "billing");
+        assert_eq!(built.candidates[1].label, "returns");
+        // Each option has its own marker position (pointer head), unlike F3.
+        assert_ne!(built.candidates[0].position, built.candidates[1].position);
+        // `prefix_len` is the block-causal fork boundary: the first option marker.
+        let first_marker = built
+            .tokens
+            .iter()
+            .position(|&t| t == built.candidates[0].code_id)
+            .unwrap();
+        assert_eq!(built.prefix_len, first_marker);
+        assert!(built.prefix_len < built.tokens.len());
+        assert!(built.prefix_len > 0); // state is non-empty
+    }
+
+    #[test]
+    fn f2_builds_noul_yes_no() {
+        let tk = SimpleTokenizer::new(32768);
+        let f = default_formatter(Family::F2);
+        let built = f.build(&test_state(), &q_noul(), &tk).unwrap();
+        assert_eq!(built.candidates.len(), 2);
+        assert_eq!(built.candidates[0].label, "yes");
+        assert_eq!(built.candidates[1].label, "no");
+        assert_ne!(built.candidates[0].position, built.candidates[1].position);
+    }
+
+    #[test]
+    fn f2_builds_score_levels() {
+        let tk = SimpleTokenizer::new(32768);
+        let f = default_formatter(Family::F2);
+        let built = f.build(&test_state(), &q_score(), &tk).unwrap();
+        assert_eq!(built.candidates.len(), 3);
+        assert_eq!(built.candidates[0].label, "0");
+        assert_eq!(built.candidates[2].label, "2");
+        for c in &built.candidates {
+            assert!(c.description.is_some());
+        }
+    }
+
+    #[test]
+    fn f4_builds_slot_choice() {
+        // F4 (OpenThai) uses `<slot:n>` markers; candidates are emitted in
+        // sorted key order (criteria is a BTreeMap) and each has its own slot.
+        let tk = SimpleTokenizer::new(32768);
+        let f = default_formatter(Family::F4);
+        let built = f.build(&test_state(), &q_choice(), &tk).unwrap();
+        assert_eq!(built.candidates.len(), 2);
+        assert_eq!(built.candidates[0].label, "billing");
+        assert_eq!(built.candidates[1].label, "returns");
+        assert_ne!(built.candidates[0].position, built.candidates[1].position);
+        // F4 is a single forward pass, so the whole prompt is the "prefix".
+        assert_eq!(built.prefix_len, built.tokens.len());
+    }
+
+    #[test]
+    fn f4_builds_slot_noul() {
+        let tk = SimpleTokenizer::new(32768);
+        let f = default_formatter(Family::F4);
+        let built = f.build(&test_state(), &q_noul(), &tk).unwrap();
+        assert_eq!(built.candidates.len(), 2);
+        assert_eq!(built.candidates[0].label, "yes");
+        assert_eq!(built.candidates[1].label, "no");
+    }
 }
