@@ -1,0 +1,41 @@
+# huncho serving engine — systemd unit (OPS-03)
+#
+# Install:
+#   sudo install -m 0644 deploy/huncho.service /etc/systemd/system/huncho.service
+#   sudo install -m 0600 deploy/huncho.env /etc/huncho/huncho.env   # edit secrets
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now huncho
+#
+# The auth token is read from HUNCHO_AUTH_TOKEN via the env file (never placed
+# on the command line or in this unit).
+
+[Unit]
+Description=Huncho System One decision-model serving engine
+Documentation=https://github.com/grafuls/huncho
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=huncho
+Group=huncho
+
+# Config comes from the env file (HUNCHO_BIND / HUNCHO_BACKEND / HUNCHO_DTYPE /
+# HUNCHO_AUTH_TOKEN). Point HUNCHO_MANIFEST at your package dir in the env file.
+EnvironmentFile=-/etc/huncho/huncho.env
+ExecStart=/usr/local/bin/huncho serve --manifest /var/lib/huncho/models
+Restart=on-failure
+RestartSec=5
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/huncho
+CapabilityBoundingSet=
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

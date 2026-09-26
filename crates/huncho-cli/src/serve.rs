@@ -10,12 +10,15 @@ use crate::load::{engine_from_manifest, engine_from_ref, mock_engine, mock_engin
 
 #[derive(Args)]
 pub struct ServeArgs {
-    /// Address to bind (host:port).
-    #[arg(long, default_value = "127.0.0.1:8080")]
+    /// Address to bind (host:port). Also read from `HUNCHO_BIND`.
+    #[arg(long, default_value = "127.0.0.1:8080", env = "HUNCHO_BIND")]
     pub bind: String,
 
-    /// Require this bearer token on requests (API-03).
-    #[arg(long)]
+    /// Require this bearer token on requests (API-03). Also read from the
+    /// `HUNCHO_AUTH_TOKEN` env var, so secrets can be supplied via an
+    /// `EnvironmentFile=` (systemd) or a `.env` without appearing in the
+    /// command line.
+    #[arg(long, env = "HUNCHO_AUTH_TOKEN")]
     pub auth_token: Option<String>,
 
     /// Serve a built-in mock model (no weights required).
@@ -45,20 +48,20 @@ pub struct ServeArgs {
     #[arg(long)]
     pub token: Option<String>,
 
-    /// Backend to use for manifest/models (onnx|mock).
-    #[arg(long, default_value = "mock")]
+    /// Backend to use for manifest/models (onnx|mock). Also read from `HUNCHO_BACKEND`.
+    #[arg(long, default_value = "mock", env = "HUNCHO_BACKEND")]
     pub backend: String,
 
-    /// Override the dtype for manifest/manually-loaded models.
-    #[arg(long)]
+    /// Override the dtype for manifest/manually-loaded models. Also read from `HUNCHO_DTYPE`.
+    #[arg(long, env = "HUNCHO_DTYPE")]
     pub dtype: Option<String>,
 
     /// Serve engine extensions by default (API-05).
     #[arg(long, default_value_t = false)]
     pub extensions: bool,
 
-    /// Model cache directory (also used by HF resolution; OPS-04).
-    #[arg(long)]
+    /// Model cache directory (also used by HF resolution; OPS-04). Also read from `HUNCHO_CACHE_DIR`.
+    #[arg(long, env = "HUNCHO_CACHE_DIR")]
     pub cache_dir: Option<String>,
 }
 

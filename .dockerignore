@@ -1,0 +1,7 @@
+# Build context is the repo root; keep the image build lean and reproducible.
+.git
+.planning
+.claude
+target
+deploy
+*.log

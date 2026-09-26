@@ -22,8 +22,18 @@ cargo build --release -p huncho-cli --features hf
 ```
 
 The `hf` feature pulls in `huncho-hub` (and `hf-hub`) so a model package can be
-resolved by `owner/repo`. Pass both features when you need ONNX weights *and*
-Hub resolution: `--features onnx,hf`.
+resolved by `owner/repo`. The `tokenizers` feature loads a manifest-declared
+`backbone.tokenizer` with the official Hugging Face `tokenizers` crate, so
+prompt encoding is byte-identical to the reference implementation (CORE-02).
+
+Enable everything for real models:
+
+```bash
+cargo build --release -p huncho-cli --features onnx,hf,tokenizers
+```
+
+> `onnx` fetches a prebuilt ONNX Runtime at build time (needs network), and
+> `hf`'s TLS provider needs system OpenSSL (`libssl-dev`/`pkg-config`).
 
 ## Run
 
@@ -189,9 +199,38 @@ huncho bench --questions 5 --iterations 200 --long-state
 refs (defaults to `HF_HUB_CACHE`). Models are loaded lazily; a preload flag and
 idle eviction are planned.
 
-## Container / systemd
+## Container (OPS-02)
 
-OCI images and systemd units are P1. The binary is single-file and
+A multi-stage `Dockerfile` at the repo root builds a slim, single-binary image
+with `onnx,hf,tokenizers` and a non-root `huncho` user:
+
+```bash
+docker build -t huncho .
+docker run --rm -p 8080:8080 huncho serve --mock --bind 0.0.0.0:8080
+```
+
+The ONNX Runtime is linked statically, so the runtime image only needs glibc
+deps (`libssl3`, `ca-certificates`). Mount a model package and override the
+`CMD` for real weights; the HF model cache lives under `HUNCHO_CACHE_DIR`
+(`/var/lib/huncho`), which is writable by the service user.
+
+## systemd (OPS-03)
+
+`deploy/huncho.service` runs the server under a hardened, unprivileged
+`huncho` user with a `EnvironmentFile=` for secrets and config, and
+`deploy/huncho.env` is the template (copy to `/etc/huncho/huncho.env`, chmod
+600, set `HUNCHO_AUTH_TOKEN`):
+
+```bash
+sudo install -m 0644 deploy/huncho.service /etc/systemd/system/huncho.service
+sudo install -m 0600 deploy/huncho.env /etc/huncho/huncho.env
+sudo systemctl daemon-reload && sudo systemctl enable --now huncho
+```
+
+The serve flags (`--bind`, `--backend`, `--dtype`, `--cache-dir`, and
+`--auth-token`) are also read from `HUNCHO_BIND`, `HUNCHO_BACKEND`,
+`HUNCHO_DTYPE`, `HUNCHO_CACHE_DIR`, and `HUNCHO_AUTH_TOKEN`, so secrets never
+have to appear on the command line. The binary is single-file and
 rootless-friendly; for SELinux hosts use the `:Z` volume label.
 
 ## Release gates
