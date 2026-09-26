@@ -36,7 +36,7 @@ pub struct BenchArgs {
     #[arg(long)]
     pub cache_dir: Option<String>,
 
-    /// Backend to use (onnx|mock).
+    /// Backend to use (onnx|mock|candle).
     #[arg(long, default_value = "mock")]
     pub backend: String,
 

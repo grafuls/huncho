@@ -33,7 +33,7 @@ pub struct CalibrateArgs {
     #[arg(long)]
     pub cache_dir: Option<String>,
 
-    /// Backend id (onnx|llamacpp|mlx|vllm).
+    /// Backend id (onnx|llamacpp|mlx|vllm|candle).
     #[arg(long)]
     pub backend: String,
 
