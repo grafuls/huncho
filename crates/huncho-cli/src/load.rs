@@ -332,6 +332,7 @@ mod candle_tests {
             max_context: Some(16),
             tokenizer: None,
             runner: None,
+            source: None,
             name: Some("tiny".into()),
         })
         .unwrap();
@@ -360,6 +361,7 @@ mod candle_tests {
             max_context: Some(128),
             tokenizer: None,
             runner: None,
+            source: None,
             name: Some("tiny".into()),
         })
         .unwrap();

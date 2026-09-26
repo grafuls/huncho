@@ -117,8 +117,10 @@ cargo run --release -p huncho-cli --features candle -- \
 
 `CandleBackend` loads `convaiinnovations/laya`'s ModernBERT encoder (remapping
 its `encoder.*` key prefix and normalizing its `rope_parameters` config) and
-feeds the option-marker hidden states into the F1 head. See
-[docs/backends.md](docs/backends.md#candle-feature).
+feeds the option-marker hidden states into the F1 head. If you've downloaded
+Laya's checkpoint, `huncho convert --backend candle --source <checkout>` builds
+the package for you (handling `encoder/config.json` and sharded safetensors).
+See [docs/backends.md](docs/backends.md#candle-feature).
 
 Run the offline conformance harness against the mock reference:
 

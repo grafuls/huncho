@@ -28,7 +28,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   1. The stock TypeSafe Python SDK returns correct, reference-matching answers from a local CPU server with only a base-URL change.
   2. `POST /v1/systemone` returns calibrated probabilities matching the Laya reference within tolerance on the conformance inputs.
   3. `GET /health` and `GET /v1/models` respond; unknown model names return 422.
-  4. `huncho convert` produces an artifact + manifest from the Laya HF repo + pinned revision (via `--runner`, or directly for the candle path).
+  4. `huncho convert` produces an artifact + manifest from the Laya HF repo + pinned revision (via `--runner`, or directly for the candle path, including `--source <checkout>` to assemble a local HF download).
 **Plans**: TBD
 
 Plans:

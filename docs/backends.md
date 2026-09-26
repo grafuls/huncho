@@ -110,6 +110,34 @@ download convaiinnovations/laya model.safetensors` and copy
 huncho-model.json --backend candle` serves it. Because Laya's checkpoint is
 ~842 MB, this is intentionally kept out of the automated test suite.
 
+### Assembling a package from a local checkpoint
+
+If you have already downloaded a raw HF checkpoint (a directory containing
+the chain's `config.json` (or `encoder/config.json` for Laya), the safetensors
+weights (or shards), and optionally a `tokenizer.json`), `huncho convert` can
+lay it out into a servable package in one step — no external converter needed:
+
+```bash
+huncho convert --backend candle \
+  --hf-repo convaiinnovations/laya \
+  --source ./laya-checkout \
+  --out ./my-laya
+
+huncho serve --manifest ./my-laya/huncho-model.json --backend candle
+```
+
+`--source` copies `config.json` (or `encoder/config.json`) to `config.json`, the
+`model.safetensors` weights (honoring a `model.safetensors.index.json` shard
+map), and the manifest-declared tokenizer (`tokenizer.json`, from the checkpoint
+root or a `tokenizer/` subdir) into the package. For Laya, first download the
+checkpoint, e.g.:
+
+```bash
+hf download convaiinnovations/laya --local-dir ./laya-checkout
+```
+
+`--source` is only valid for the `candle` backend.
+
 ## Backend selection in the CLI
 
 - `huncho serve --mock` — serves a built-in deterministic mock model (no weights).

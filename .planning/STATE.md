@@ -45,7 +45,7 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - After init: chose Rust core, `Backend` trait abstraction, conformance-as-correctness-gate. See PROJECT.md.
 - 2026-09-26: User selected Huncho as the app name; executable `huncho`, crates `huncho-*`.
 - 2026-09-26: M0 built with `ort` `std`/`download-binaries`/`tls-native`; manifest-declared tokenizer loaded via HF `tokenizers` when enabled (CORE-02); `serve` config via clap `env` (HUNCHO_*).
-- 2026-09-26: Real-Laya path is **candle** (not ONNX/external runner). `candle` loads Laya safetensors directly on CPU, remapping `encoder.*`→`model.*`, F16→F32, and normalizing `rope_parameters`. `huncho convert --backend candle` writes a `model.safetensors` artifact manifest.
+- 2026-09-26: Real-Laya path is **candle** (not ONNX/external runner). `candle` loads Laya safetensors directly on CPU, remapping `encoder.*`→`model.*`, F16→F32, and normalizing `rope_parameters`. `huncho convert --backend candle` writes a `model.safetensors` artifact manifest. `huncho convert --backend candle --source <checkout>` assembles a servable package from a local HF checkpoint (handles `encoder/config.json`, sharded safetensors, and the tokenizer), so a downloaded Laya checkout becomes servable in one command with no external converter.
 
 ### Pending Todos
 
@@ -71,7 +71,7 @@ None yet.
 | 260926-tests | API integration tests, convert/calibrate/bench tests, F2/F4 prompt tests | 2026-09-26 | 2756c4a, 4b4be24, 3dcccbc, cf002f0, 04a8405 | — |
 | 260926-core02 | Load manifest-declared HF tokenizer for byte-identical prompts | 2026-09-26 | 3d8e64a | — |
 | 260926-ops | Dockerfile, systemd unit, env-file packaging | 2026-09-26 | f22a70a | — |
-| 260926-candle | CandleBackend (safetensors→hidden states, Laya layout) + CLI wiring + tests | 2026-09-26 | Working tree | — |
+| 260926-candle | CandleBackend (safetensors→hidden states, Laya layout) + CLI wiring + `convert --source` assembly + tests | 2026-09-26 | Working tree | — |
 
 ## Deferred Items
 
@@ -87,5 +87,5 @@ Items acknowledged and deferred at milestone close, most recent first:
 ## Session Continuity
 
 Last session: 2026-09-26
-Stopped at: candle backend implemented + wired (no external runner for real Laya).
-Next step: fetch Laya's checkpoint into a package dir, `huncho serve --backend candle`, and generate a real-Laya conformance golden (CONF-01).
+Stopped at: candle backend implemented + wired (no external runner for real Laya), plus `convert --source` local-checkpoint package assembly.
+Next step: fetch Laya's checkpoint into a package dir (`hf download` + `huncho convert --backend candle --source <checkout>`), `huncho serve --backend candle`, and generate a real-Laya conformance golden (CONF-01).

@@ -53,6 +53,12 @@ pub struct ConvertArgs {
     #[arg(long)]
     pub runner: Option<String>,
 
+    /// (candle) A local directory containing a raw HF checkpoint to assemble
+    /// into a servable package. Copies `config.json` (or `encoder/config.json`),
+    /// the safetensors weights (or shards), and the tokenizer into `--out`.
+    #[arg(long)]
+    pub source: Option<String>,
+
     /// Package name; defaults to the repo basename.
     #[arg(long)]
     pub name: Option<String>,
@@ -165,6 +171,97 @@ pub fn run_runner(runner: &str, backend: BackendId, hf_repo: &str, revision: &st
     Ok(())
 }
 
+/// Assemble a servable candle package from a local raw-HF checkpoint directory.
+///
+/// Handles `convaiinnovations/laya`'s layout: the config may live at
+/// `<source>/config.json` or `<source>/encoder/config.json` (copied to
+/// `<out>/config.json`), the weights at `<source>/model.safetensors` (or sharded
+/// via a `<artifact>.index.json`), and a tokenizer either at `<source>/<tokenizer>`
+/// or `<source>/tokenizer/<tokenizer>`.
+pub fn assemble_candle_package(
+    source: &Path,
+    out: &Path,
+    tokenizer: Option<&str>,
+) -> anyhow::Result<()> {
+    let artifact = artifact_name_for(BackendId::Candle); // "model.safetensors"
+    std::fs::create_dir_all(out)?;
+
+    // Config: standard root or Laya's `encoder/` subdir.
+    let config_src = first_existing(&[
+        source.join("config.json"),
+        source.join("encoder/config.json"),
+    ])
+    .ok_or_else(|| {
+        anyhow::anyhow!(
+            "no config.json (or encoder/config.json) found in {}: run a `hf download` of the models repo first",
+            source.display()
+        )
+    })?;
+    std::fs::copy(&config_src, out.join("config.json"))?;
+
+    // Weights: single file or sharded.
+    let weights = source.join(&artifact);
+    if weights.is_file() {
+        std::fs::copy(&weights, out.join(&artifact))?;
+    } else {
+        let index_name = format!("{artifact}.index.json");
+        let index_path = source.join(&index_name);
+        if !index_path.is_file() {
+            anyhow::bail!(
+                "no {artifact} (or {index_name} shards) found in {}",
+                source.display()
+            );
+        }
+        let index: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&index_path)?)?;
+        let shards = index
+            .get("weight_map")
+            .and_then(|v| v.as_object())
+            .map(|m| {
+                let mut s: Vec<String> =
+                    m.values().filter_map(|v| v.as_str()).map(String::from).collect();
+                s.sort();
+                s.dedup();
+                s
+            })
+            .unwrap_or_default();
+        if shards.is_empty() {
+            anyhow::bail!("{} has no `weight_map` shards", index_path.display());
+        }
+        for shard in &shards {
+            let src = source.join(shard);
+            if !src.is_file() {
+                anyhow::bail!("missing shard `{shard}` in {}", source.display());
+            }
+            std::fs::copy(&src, out.join(shard))?;
+        }
+        std::fs::copy(&index_path, out.join(&index_name))?;
+    }
+
+    // Tokenizer (declared by the manifest), if any.
+    if let Some(tok) = tokenizer {
+        bundle_tokenizer(source, out, tok)?;
+    }
+    Ok(())
+}
+
+/// Copy a tokenizer (declared by the manifest) into the package.
+pub fn bundle_tokenizer(source: &Path, out: &Path, tokenizer: &str) -> anyhow::Result<()> {
+    let src = first_existing(&[
+        source.join(tokenizer),
+        source.join("tokenizer").join(tokenizer),
+    ])
+    .ok_or_else(|| {
+        anyhow::anyhow!("tokenizer `{tokenizer}` not found in {}", source.display())
+    })?;
+    std::fs::copy(&src, out.join(tokenizer))?;
+    Ok(())
+}
+
+fn first_existing(paths: &[std::path::PathBuf]) -> Option<std::path::PathBuf> {
+    paths.iter().find(|p| p.is_file()).cloned()
+}
+
 pub fn run(args: ConvertArgs) -> anyhow::Result<()> {
     let family = Family::parse(&args.family)?;
     let backend = BackendId::parse(&args.backend)?;
@@ -185,6 +282,20 @@ pub fn run(args: ConvertArgs) -> anyhow::Result<()> {
             out_dir.display(),
             artifact_name_for(backend)
         );
+    }
+
+    // For candle, a local raw-HF checkpoint can be assembled into the package
+    // directly (no external converter needed).
+    if let Some(source) = &args.source {
+        if backend == BackendId::Candle {
+            assemble_candle_package(
+                Path::new(source),
+                out_dir,
+                manifest.backbone.tokenizer.as_deref(),
+            )?;
+        } else {
+            anyhow::bail!("--source is only supported for the `candle` backend");
+        }
     }
 
     // Write a small README describing next steps (calibration, conformance).
@@ -227,6 +338,7 @@ mod tests {
             max_context: None,
             tokenizer: None,
             runner: None,
+            source: None,
             name: None,
         }
     }
@@ -301,5 +413,89 @@ mod tests {
         assert!(out.join("huncho-model.json").exists());
         assert!(out.join("README.md").exists());
         assert!(!out.join("model.onnx").exists());
+    }
+
+    #[test]
+    fn assemble_standard_layout_copies_config_and_weights() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        let out = tmp.path().join("out");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("config.json"), b"{\"hidden_size\": 8}").unwrap();
+        fs::write(src.join("model.safetensors"), b"weights").unwrap();
+
+        assemble_candle_package(&src, &out, None).unwrap();
+        assert_eq!(fs::read(out.join("config.json")).unwrap(), b"{\"hidden_size\": 8}");
+        assert_eq!(fs::read(out.join("model.safetensors")).unwrap(), b"weights");
+    }
+
+    #[test]
+    fn assemble_laya_layout_remaps_encoder_config_and_tokenizer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        let out = tmp.path().join("out");
+        fs::create_dir_all(src.join("encoder")).unwrap();
+        fs::create_dir_all(src.join("tokenizer")).unwrap();
+        fs::write(src.join("encoder/config.json"), b"{\"model_type\":\"modernbert\"}").unwrap();
+        fs::write(src.join("model.safetensors"), b"weights").unwrap();
+        fs::write(src.join("tokenizer/tokenizer.json"), b"{} ").unwrap();
+
+        assemble_candle_package(&src, &out, Some("tokenizer.json")).unwrap();
+        assert_eq!(
+            fs::read(out.join("config.json")).unwrap(),
+            b"{\"model_type\":\"modernbert\"}"
+        );
+        assert_eq!(fs::read(out.join("model.safetensors")).unwrap(), b"weights");
+        assert_eq!(fs::read(out.join("tokenizer.json")).unwrap(), b"{} ");
+    }
+
+    #[test]
+    fn assemble_sharded_weights_via_index() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        let out = tmp.path().join("out");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("config.json"), b"{}").unwrap();
+        fs::write(src.join("model.safetensors.index.json"),
+            br#"{"weight_map": {"layer.0": "model-00001-of-00002.safetensors", "layer.1": "model-00002-of-00002.safetensors"}}"#).unwrap();
+        fs::write(src.join("model-00001-of-00002.safetensors"), b"shard1").unwrap();
+        fs::write(src.join("model-00002-of-00002.safetensors"), b"shard2").unwrap();
+
+        assemble_candle_package(&src, &out, None).unwrap();
+        assert_eq!(fs::read(out.join("model-00001-of-00002.safetensors")).unwrap(), b"shard1");
+        assert_eq!(fs::read(out.join("model-00002-of-00002.safetensors")).unwrap(), b"shard2");
+        assert!(out.join("model.safetensors.index.json").exists());
+    }
+
+    #[test]
+    fn assemble_missing_config_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        let out = tmp.path().join("out");
+        fs::create_dir_all(&src).unwrap();
+        assert!(assemble_candle_package(&src, &out, None).is_err());
+    }
+
+    #[test]
+    fn run_with_source_assembles_candle_package() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        let out = tmp.path().join("pkg");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("config.json"), b"{\"hidden_size\": 8}").unwrap();
+        fs::write(src.join("model.safetensors"), b"weights").unwrap();
+
+        let mut a = args();
+        a.backend = "candle".into();
+        a.out = out.to_string_lossy().to_string();
+        a.source = Some(src.to_string_lossy().to_string());
+        run(a).unwrap();
+
+        assert!(out.join("huncho-model.json").exists());
+        assert_eq!(fs::read(out.join("model.safetensors")).unwrap(), b"weights");
+        assert_eq!(fs::read(out.join("config.json")).unwrap(), b"{\"hidden_size\": 8}");
+        let mf = ModelManifest::load(&out.join("huncho-model.json")).unwrap();
+        let candle = mf.backbone.artifacts.get(&BackendId::Candle).unwrap();
+        assert_eq!(candle[0].path, "model.safetensors");
     }
 }
