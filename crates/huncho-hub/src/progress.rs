@@ -53,8 +53,10 @@ impl FileDownloadProgress {
         };
 
         if self.tty {
+            // The terminal bar is written to stderr (not stdout) so an
+            // interactive `\r` bar is not trapped in line-buffered stdout.
             let rate = rate_bps.map(|r| format!(" @ {}", human_rate(r))).unwrap_or_default();
-            print!(
+            eprint!(
                 "\r  {}/{}  {:>5.1}%{rate}",
                 self.filename,
                 self.repo,
@@ -72,7 +74,7 @@ impl FileDownloadProgress {
             return;
         }
         if self.tty {
-            println!();
+            eprintln!();
         } else {
             eprintln!("  downloaded {}:{}", self.repo, self.filename);
         }
@@ -84,7 +86,7 @@ impl Drop for FileDownloadProgress {
         // If a download fails, `done` is never called; leave a terminating
         // newline so the error message is not appended to the progress line.
         if !self.done.load(Ordering::Relaxed) && self.tty {
-            println!();
+            eprintln!();
         }
     }
 }
@@ -104,7 +106,7 @@ impl ProgressHandler for FileDownloadProgress {
                         human_bytes(*total_bytes)
                     );
                 } else {
-                    print!("\r  {}/{}  ({} bytes)", self.filename, self.repo, human_bytes(*total_bytes));
+                    eprint!("\r  {}/{}  ({} bytes)", self.filename, self.repo, human_bytes(*total_bytes));
                     let _ = io::stderr().flush();
                 }
             }
