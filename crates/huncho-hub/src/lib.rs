@@ -11,7 +11,9 @@
 //! when the `hf` feature is enabled so the default build stays lightweight.
 
 pub mod error;
+pub mod progress;
 pub mod resolver;
 
 pub use error::{HubError, Result};
+pub use progress::FileDownloadProgress;
 pub use resolver::{ModelRef, ResolveOptions, ResolvedPackage, resolve, resolve_manifest_path};

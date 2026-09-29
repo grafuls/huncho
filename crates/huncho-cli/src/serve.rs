@@ -100,6 +100,15 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
         tracing::info!("registered model `{name}`");
     }
 
+    if !args.model.is_empty() {
+        // The serve listener binds only after every model is loaded, so make it
+        // clear that a first-time Hub resolution may be downloading weights.
+        tracing::info!(
+            "resolving {} model reference(s) from the Hugging Face Hub; the serve listener comes up only after they are ready",
+            args.model.len()
+        );
+    }
+
     for model in &args.model {
         tracing::info!("resolving model reference `{model}`");
         let engine = engine_from_ref(

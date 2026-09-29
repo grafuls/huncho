@@ -258,6 +258,7 @@ pub fn resolve_model(
         cache_dir: cache_dir.map(PathBuf::from),
         local_files_only: false,
         fetch_golden,
+        show_progress: true,
     };
     resolve_manifest_path(model, backend, dtype.unwrap_or("fp32"), &opts)
         .map_err(|e| Error::Package(e.to_string()))

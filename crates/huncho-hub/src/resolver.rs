@@ -9,6 +9,7 @@
 
 use std::path::{Path, PathBuf};
 
+use hf_hub::progress::Progress;
 use huncho_core::manifest::{
     self, ArtifactRef, Backbone, BackboneSource, BackendId, CalibrationConfig, CalibrationEntry,
     CalibrationStatus, ConfidenceDef, Family, HeadConfig, ModelCapabilities, ModelManifest,
@@ -16,6 +17,7 @@ use huncho_core::manifest::{
 };
 
 use crate::error::{HubError, Result};
+use crate::progress::FileDownloadProgress;
 
 /// Where a model package lives.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,7 +49,7 @@ impl ModelRef {
 }
 
 /// Options controlling Hub resolution.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ResolveOptions {
     /// A git revision (branch, tag, or commit SHA). Defaults to the repo's
     /// default branch when `None`.
@@ -60,6 +62,21 @@ pub struct ResolveOptions {
     pub local_files_only: bool,
     /// Also fetch the golden conformance vectors referenced by the manifest.
     pub fetch_golden: bool,
+    /// Render per-file download progress to stderr while fetching from the Hub.
+    pub show_progress: bool,
+}
+
+impl Default for ResolveOptions {
+    fn default() -> Self {
+        Self {
+            revision: None,
+            token: None,
+            cache_dir: None,
+            local_files_only: false,
+            fetch_golden: false,
+            show_progress: true,
+        }
+    }
 }
 
 /// A resolved package: the local path to its `huncho-model.json`.
@@ -149,14 +166,13 @@ fn resolve_hf(
     // Fetch the manifest first so we know which artifacts it references. If the
     // repo has no `huncho-model.json`, fall back to synthesizing a servable
     // package from a raw decision-model checkpoint (e.g. Laya's ModernBERT).
-    let manifest_path = match model_repo
-        .download_file()
-        .filename("huncho-model.json".to_string())
-        .maybe_revision(rev.clone())
-        .local_files_only(opts.local_files_only)
-        .force_download(false)
-        .send()
-    {
+    let manifest_path = match download_repo_file(
+        &model_repo,
+        "huncho-model.json",
+        rev.clone(),
+        opts,
+        repo,
+    ) {
         Ok(p) => p,
         Err(_) => {
             return synthesize_checkpoint(
@@ -188,14 +204,7 @@ fn resolve_hf(
     let pinned: Option<String> = if commit.is_empty() { rev.clone() } else { Some(commit) };
 
     for file in required_files(&manifest, backend, dtype, opts.fetch_golden)? {
-        model_repo
-            .download_file()
-            .filename(file.clone())
-            .maybe_revision(pinned.clone())
-            .local_files_only(opts.local_files_only)
-            .force_download(false)
-            .send()
-            .map_err(|e| HubError::hf(format!("fetching `{file}` from `{repo}`"), e))?;
+        download_repo_file(&model_repo, &file, pinned.clone(), opts, repo)?;
     }
 
     Ok(ResolvedPackage { manifest_path })
@@ -212,6 +221,29 @@ fn build_client(opts: &ResolveOptions) -> Result<hf_hub::HFClient> {
     builder
         .build()
         .map_err(|e| HubError::hf("configuring the Hugging Face client", e))
+}
+
+/// Download a single file from a repo, rendering progress when enabled.
+fn download_repo_file(
+    model_repo: &hf_hub::HFRepositorySync<hf_hub::RepoTypeModel>,
+    filename: &str,
+    revision: Option<String>,
+    opts: &ResolveOptions,
+    repo: &str,
+) -> Result<PathBuf> {
+    let progress = opts.show_progress.then(|| {
+        // Attach a fresh handler per file so the rendered label is accurate.
+        Progress::new(FileDownloadProgress::new(repo.to_string(), filename.to_string()))
+    });
+    model_repo
+        .download_file()
+        .filename(filename.to_string())
+        .maybe_revision(revision)
+        .local_files_only(opts.local_files_only)
+        .force_download(false)
+        .maybe_progress(progress)
+        .send()
+        .map_err(|e| HubError::hf(format!("fetching `{filename}` from `{repo}`"), e))
 }
 
 /// The set of files that must be fetched from the Hub for the requested
@@ -355,14 +387,7 @@ fn synthesize_checkpoint(
     };
 
     for file in required_files(&manifest, Some(BackendId::Candle), dtype, false)? {
-        model_repo
-            .download_file()
-            .filename(file.clone())
-            .maybe_revision(pinned.clone())
-            .local_files_only(opts.local_files_only)
-            .force_download(false)
-            .send()
-            .map_err(|e| HubError::hf(format!("fetching `{file}` from `{repo}`"), e))?;
+        download_repo_file(model_repo, &file, pinned.clone(), opts, repo)?;
     }
 
     Ok(ResolvedPackage { manifest_path })
@@ -608,7 +633,7 @@ fn laya_calibration(rl_config: Option<&serde_json::Value>) -> CalibrationConfig 
 
 /// Clamp a temperature to Laya's usable `[0.5, 5.0]` range.
 fn clamp_temp(t: f64) -> f32 {
-    (t.max(0.5).min(5.0)) as f32
+    (t.clamp(0.5, 5.0)) as f32
 }
 
 /// Stable FNV-1a hash (matches the converter's `contract_hash` scheme).

@@ -64,6 +64,11 @@ cache, and all artifacts are pinned to the exact resolved commit:
 huncho serve --model my-org/laya --backend onnx --dtype fp32 --bind 127.0.0.1:8080
 ```
 
+While the repo is being resolved, a per-file progress bar is drawn to stderr
+for every artifact fetched (manifest, weights, head, tokenizer, and golden
+suite). The serve listener binds only after all models are loaded, so a
+first-time run may spend a while downloading before the endpoint is live.
+
 You can also reference a local package path or a manifest file through
 `--model`; it is resolved without any network access:
 
