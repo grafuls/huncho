@@ -40,11 +40,14 @@ fn load_tokenizer(manifest: &ModelManifest, dir: &Path) -> Result<Box<dyn Tokeni
             }
             #[cfg(not(feature = "tokenizers"))]
             {
-                log::warn!(
+                // A real model that declares a tokenizer path needs byte-identical
+                // Hugging Face tokenization. Falling back to the offline
+                // `SimpleTokenizer` silently feeds the model garbage token ids.
+                return Err(Error::Package(format!(
                     "manifest declares tokenizer `{path}` but the `tokenizers` feature is off; \
-                     using the offline SimpleTokenizer (not reference-accurate)"
-                );
-                Ok(Box::new(SimpleTokenizer::new(32768)) as Box<dyn Tokenizer>)
+                     rebuild with `--features tokenizers` (or `--features hf,candle,tokenizers` \
+                     for Hub models) so real models get byte-identical HF tokenization"
+                )));
             }
         }
         None => Ok(Box::new(SimpleTokenizer::new(32768)) as Box<dyn Tokenizer>),

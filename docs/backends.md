@@ -82,6 +82,17 @@ cargo build --release -p huncho-cli --features candle
 # for real HF tokenizer + Hub download support, add hf,tokenizers
 ```
 
+> ⚠️ **Real models need the `tokenizers` feature.** A manifest-declared
+> `backbone.tokenizer` is loaded with the official Hugging Face `tokenizers`
+> crate only when that feature is enabled. Without it `load_tokenizer` now
+> **errors** (it used to silently fall back to a crude `SimpleTokenizer`, which
+> fed real models garbage token ids and produced near-uniform answers). For a
+> real `convaiinnovations/laya` model from the Hub, build with:
+>
+> ```bash
+> cargo build --release -p huncho-cli --features hf,candle,tokenizers
+> ```
+
 `CandleBackend` loads a package laid out as:
 
 ```

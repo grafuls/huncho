@@ -16,14 +16,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-26)
 
 **Core value:** Guarantee that calibrated probabilities stay calibrated across every backend and quantization, served behind one API for all open decision-model families.
-**Current focus:** Phase 1 (Tracer Bullet / M0) — tracer bullet complete; API/CLI test coverage + tokenizer wiring + candle backend done.
+**Current focus:** Phase 1 (Tracer Bullet / M0) — tracer bullet complete; API/CLI test coverage + tokenizer wiring + candle backend done. Serving real `convaiinnovations/laya` from the Hub works end-to-end (`serve --model convaiinnovations/laya --backend candle`), verified to pick `blue` at ~0.98 confidence.
 
 ## Current Position
 
 Phase: 1 of 4 (Tracer Bullet / M0)
 Plan: 0 of 1 in current phase
 Status: In progress
-Last activity: 2026-09-26 — Candle backend (no external runner for real Laya) implemented and wired into `serve`/`convert`; ONNX path retained for other models.
+Last activity: 2026-09-26 — Verified serving real `convaiinnovations/laya` from the Hub end-to-end; the earlier near-uniform answers were caused by a missing `tokenizers` feature (silent `SimpleTokenizer` fallback feeding the model garbage ids), not corrupt weights. `load_tokenizer` now errors (instead of silently degrading) when a manifest declares a tokenizer path while the `tokenizers` feature is off.
 
 Progress: [██░░░░░░░░] ~25%
 
@@ -71,6 +71,7 @@ None yet.
 | 260926-xet | Plain-HTTP download fallback for xet-backed Hub artifacts (fixes silent stall on large weights) | 2026-09-26 | Working tree | — |
 | 260926-redirect | Follow relative 307 resolve-cache redirects in HTTP downloader (fixes fresh-cache config resolution) | 2026-09-26 | Working tree | — |
 | 260926-progress | Single-line in-place progress bar (compact, block bar + % + rate + ETA) for both TTY/non-TTY | 2026-09-26 | Working tree | — |
+| 260926-tokenizers | Diagnose & fix uniform answers on real Laya: root cause was a silent `SimpleTokenizer` fallback (missing `tokenizers` feature), not corrupt weights; `load_tokenizer` now errors without the feature | 2026-09-26 | Working tree | — |
 | 260926-m0 | Phase 1 tracer bullet: F1 on ONNX Runtime behind `/v1/systemone`, conformance PASS | 2026-09-26 | 2ae8189 | — |
 | 260926-tests | API integration tests, convert/calibrate/bench tests, F2/F4 prompt tests | 2026-09-26 | 2756c4a, 4b4be24, 3dcccbc, cf002f0, 04a8405 | — |
 | 260926-core02 | Load manifest-declared HF tokenizer for byte-identical prompts | 2026-09-26 | 3d8e64a | — |
