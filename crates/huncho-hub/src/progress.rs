@@ -4,6 +4,11 @@
 //! that pulls a fresh model package shows the user *something* is happening
 //! rather than silently blocking. Without this, a first-time resolution can
 //! hang with no output and the user may mistake it for a ready-to-serve model.
+//!
+//! Progress is always drawn as a **single, self-updating line** on stderr,
+//! whether or not stderr is a TTY. The line is prefixed with `\r` and cleared
+//! to end-of-line (`\x1b[K`) before each redraw, and the label is truncated,
+//! so a long transfer never scrolls or wraps and "clogs" the terminal.
 
 use std::io::{self, IsTerminal, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -11,14 +16,15 @@ use std::time::Instant;
 
 use hf_hub::progress::{DownloadEvent, FileStatus, ProgressEvent, ProgressHandler};
 
+/// Maximum characters shown for the file label before it is truncated.
+const LABEL_MAX: usize = 18;
+/// Width of the block-bar indicator (in cells).
+const BAR_WIDTH: usize = 10;
+const BLOCK: char = '\u{2588}'; // █
+const EMPTY: char = '\u{2591}'; // ░
+
 /// Renders progress for a single `download_file` call (one repo path).
-///
-/// When stderr is a TTY it draws an in-place percentage bar; otherwise it
-/// prints one `downloading ...` line and one `done` line so piped logs stay
-/// clean. Events are throttled to ~5Hz so a fast transfer does not flood the
-/// terminal.
 pub struct FileDownloadProgress {
-    repo: String,
     filename: String,
     start: Instant,
     tty: bool,
@@ -37,12 +43,11 @@ impl FileDownloadProgress {
         if std::env::var_os("HUNCHO_PROGRESS_DEBUG").is_some() {
             eprintln!(
                 "[huncho-hub] progress {repo}:{filename} mode={} (stderr {})",
-                if tty { "live-bar" } else { "one-line" },
+                if tty { "bar" } else { "line" },
                 if tty { "is a TTY" } else { "is not a TTY" }
             );
         }
         Self {
-            repo,
             filename,
             start: Instant::now(),
             tty,
@@ -51,74 +56,32 @@ impl FileDownloadProgress {
         }
     }
 
+    /// Redraw the single progress line on stderr.
     fn render(&self, bytes: u64, total: u64, rate_bps: Option<f64>) {
         let now_ms = self.start.elapsed().as_millis() as u64;
         let last_ms = self.last_print_ms.load(Ordering::Relaxed);
-        // TTY: fast in-place bar (~6 Hz). Non-TTY: a one-line log line ~1 Hz
-        // so a long transfer is never silent even when stderr is not a TTY
-        // (piped logs, capture, or an awkward terminal configuration).
-        let interval_ms = if self.tty { 150 } else { 1000 };
+        // Both modes draw a single in-place line; the interval only controls
+        // how often it is refreshed (TTY is snappier, non-TTY is calmer).
+        let interval_ms = if self.tty { 150 } else { 500 };
         if now_ms.saturating_sub(last_ms) < interval_ms {
             return;
         }
         self.last_print_ms.store(now_ms, Ordering::Relaxed);
 
-        let pct = if total > 0 {
-            (bytes as f64 / total as f64 * 100.0).min(100.0)
-        } else {
-            0.0
-        };
-        let rate = rate_bps.map(|r| format!(" @ {}", human_rate(r))).unwrap_or_default();
-
-        if self.tty {
-            // The terminal bar is written to stderr (not stdout) so an
-            // interactive `\r` bar is not trapped in line-buffered stdout.
-            eprint!(
-                "\r  {}/{}  {:>5.1}%  {} / {} {rate}",
-                self.filename,
-                self.repo,
-                pct,
-                human_bytes(bytes),
-                human_bytes(total)
-            );
-            let _ = io::stderr().flush();
-        } else {
-            eprintln!(
-                "  downloading {}:{}  {:>5.1}%  {} / {} {rate}",
-                self.repo,
-                self.filename,
-                pct,
-                human_bytes(bytes),
-                human_bytes(total)
-            );
-        }
+        let line = progress_line(&self.filename, bytes, total, rate_bps);
+        // `\r` returns to the start of the line, `\x1b[K` clears anything the
+        // previous, longer render left behind. Written to stderr (not stdout)
+        // so the in-place bar is not trapped in line-buffered stdout.
+        eprint!("\r\x1b[K{line}");
+        let _ = io::stderr().flush();
     }
 
-    /// Render a non-TTY download headline (or start the TTY bar).
-    ///
-    /// Mirrors the `Start` branch of [`ProgressHandler::on_progress`] so the
-    /// HTTP fallback shows the same "downloading … (SIZE)" line that the
-    /// hf-hub path emits.
+    /// Render the initial line (0% / known size).
     pub fn begin(&self, total: u64) {
-        if self.tty {
-            eprint!(
-                "\r  {}/{}  ({} bytes)",
-                self.filename,
-                self.repo,
-                human_bytes(total)
-            );
-            let _ = io::stderr().flush();
-        } else {
-            eprintln!(
-                "downloading {}:{} ({})",
-                self.repo,
-                self.filename,
-                human_bytes(total)
-            );
-        }
+        self.render(0, total, None);
     }
 
-    /// Report bytes transferred so far (throttled by the configured interval).
+    /// Report bytes transferred so far (throttled to the configured interval).
     pub fn report(&self, bytes: u64, total: u64, rate_bps: Option<f64>) {
         self.render(bytes, total, rate_bps);
     }
@@ -135,19 +98,17 @@ impl FileDownloadProgress {
         if self.done.swap(true, Ordering::Relaxed) {
             return;
         }
-        if self.tty {
-            eprintln!();
-        } else {
-            eprintln!("  downloaded {}:{}", self.repo, self.filename);
-        }
+        let label = truncate_label(&self.filename, LABEL_MAX);
+        eprintln!("\r\x1b[K  \u{2713} {label}");
     }
 }
 
 impl Drop for FileDownloadProgress {
     fn drop(&mut self) {
         // If a download fails, `done` is never called; leave a terminating
-        // newline so the error message is not appended to the progress line.
-        if !self.done.load(Ordering::Relaxed) && self.tty {
+        // newline so the error message (or next download) starts on a fresh
+        // line rather than being appended to the progress line.
+        if !self.done.load(Ordering::Relaxed) {
             eprintln!();
         }
     }
@@ -156,21 +117,8 @@ impl Drop for FileDownloadProgress {
 impl ProgressHandler for FileDownloadProgress {
     fn on_progress(&self, event: &ProgressEvent) {
         match event {
-            ProgressEvent::Download(DownloadEvent::Start {
-                total_bytes, ..
-            }) => {
-                // Only print the headline for non-TTY; TTY draws the bar below.
-                if !self.tty {
-                    eprintln!(
-                        "downloading {}:{} ({})",
-                        self.repo,
-                        self.filename,
-                        human_bytes(*total_bytes)
-                    );
-                } else {
-                    eprint!("\r  {}/{}  ({} bytes)", self.filename, self.repo, human_bytes(*total_bytes));
-                    let _ = io::stderr().flush();
-                }
+            ProgressEvent::Download(DownloadEvent::Start { total_bytes, .. }) => {
+                self.begin(*total_bytes);
             }
             ProgressEvent::Download(DownloadEvent::Progress { files }) => {
                 if let Some(f) = files.last() {
@@ -190,6 +138,97 @@ impl ProgressHandler for FileDownloadProgress {
             ProgressEvent::Download(DownloadEvent::Complete) => self.done(),
             _ => {}
         }
+    }
+}
+
+/// Build the single progress line:
+/// `  model.safetensors [██████░░░░] 55.0% 421.5/766.4 MB @5.8 MB/s ETA 1m12s`
+/// Kept under ~75 chars so it never wraps on an 80-column terminal.
+fn progress_line(filename: &str, bytes: u64, total: u64, rate_bps: Option<f64>) -> String {
+    let label = truncate_label(filename, LABEL_MAX);
+    let pct = if total > 0 {
+        (bytes as f64 / total as f64).min(1.0)
+    } else {
+        0.0
+    };
+
+    let mut line = format!("  {label}");
+
+    if total > 0 {
+        let filled = (pct * BAR_WIDTH as f64).round() as usize;
+        let bar = format!(
+            "[{}{}]",
+            BLOCK.to_string().repeat(filled),
+            EMPTY.to_string().repeat(BAR_WIDTH - filled),
+        );
+        line.push_str(&format!(" {bar} {:>5.1}% {}", pct * 100.0, human_pair(bytes, total)));
+    } else {
+        line.push_str(&format!(" {}", human_bytes(bytes)));
+    }
+
+    if let Some(r) = rate_bps {
+        line.push_str(&format!(" @{}", human_rate(r)));
+    }
+    if let Some(eta) = eta_secs(bytes, total, rate_bps) {
+        line.push_str(&format!(" ETA {}", fmt_eta(eta)));
+    }
+
+    line
+}
+
+/// Format a transferred/total byte pair with a single shared unit, e.g.
+/// `421.5/766.4 MB`. Uses the larger magnitude to pick the unit.
+fn human_pair(bytes: u64, total: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let max = bytes.max(total);
+    let mut unit = 0usize;
+    let mut vmax = max as f64;
+    while vmax >= 1024.0 && unit < UNITS.len() - 1 {
+        vmax /= 1024.0;
+        unit += 1;
+    }
+    let scale = 1024f64.powi(unit as i32);
+    let fa = bytes as f64 / scale;
+    let fb = total as f64 / scale;
+    let one = |v: f64| {
+        if unit == 0 {
+            format!("{v:.0}")
+        } else {
+            format!("{v:.1}")
+        }
+    };
+    format!("{}/{} {}", one(fa), one(fb), UNITS[unit])
+}
+
+/// Truncate to `max` characters, replacing the tail with a single ellipsis.
+fn truncate_label(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+    out.push('\u{2026}'); // …
+    out
+}
+
+/// Seconds to completion, if the size and instant rate are known.
+fn eta_secs(bytes: u64, total: u64, rate_bps: Option<f64>) -> Option<u64> {
+    if total > bytes && total > 0 {
+        rate_bps
+            .filter(|r| *r > 0.0)
+            .map(|r| ((total - bytes) as f64 / r).round() as u64)
+    } else {
+        None
+    }
+}
+
+/// Format a whole number of seconds as `1m12s` / `42s`.
+fn fmt_eta(secs: u64) -> String {
+    let m = secs / 60;
+    let s = secs % 60;
+    if m > 0 {
+        format!("{m}m{s:02}s")
+    } else {
+        format!("{s}s")
     }
 }
 
@@ -231,8 +270,57 @@ mod tests {
     }
 
     #[test]
+    fn truncate_short_label_unchanged() {
+        assert_eq!(truncate_label("config.json", 18), "config.json");
+    }
+
+    #[test]
+    fn truncate_long_label_adds_ellipsis() {
+        let s = truncate_label("tokenizer/tokenizer.json", 18);
+        assert_eq!(s.chars().count(), 18);
+        assert!(s.ends_with('\u{2026}'));
+        assert_eq!(s, "tokenizer/tokeniz\u{2026}");
+    }
+
+    #[test]
+    fn eta_formats_minutes_and_seconds() {
+        assert_eq!(fmt_eta(42), "42s");
+        assert_eq!(fmt_eta(72), "1m12s");
+    }
+
+    #[test]
+    fn eta_requires_progress_and_rate() {
+        assert_eq!(eta_secs(0, 100, Some(10.0)), Some(10));
+        assert_eq!(eta_secs(0, 100, None), None);
+        assert_eq!(eta_secs(100, 100, Some(10.0)), None); // already complete
+        assert_eq!(eta_secs(0, 0, Some(10.0)), None); // unknown size
+    }
+
+    #[test]
+    fn human_pair_shares_a_unit() {
+        assert_eq!(human_pair(363_434_000, 803_600_000), "346.6/766.4 MB");
+        assert_eq!(human_pair(0, 2048), "0.0/2.0 KB");
+    }
+
+    #[test]
+    fn progress_line_includes_bar_rate_and_eta() {
+        let line = progress_line("model.safetensors", 363_434_000, 803_600_000, Some(6_100_000.0));
+        assert!(line.starts_with("  model.safetensors ["));
+        assert!(line.contains('%'));
+        assert!(line.contains("346.6/766.4 MB"));
+        assert!(line.contains("@5.8 MB/s"));
+        assert!(line.contains("ETA "));
+    }
+
+    #[test]
+    fn progress_line_handles_unknown_size() {
+        let line = progress_line("x.bin", 1234, 0, None);
+        assert!(!line.contains('['));
+        assert!(line.contains("1.2 KB"));
+    }
+
+    #[test]
     fn handler_survives_a_download_lifecycle() {
-        use super::*;
         use hf_hub::progress::FileProgress;
         let h = FileDownloadProgress::new("org/repo", "model.onnx");
         h.on_progress(&ProgressEvent::Download(DownloadEvent::Start {
