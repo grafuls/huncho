@@ -124,7 +124,11 @@ fn blocking_download(
             .ok_or_else(|| {
                 HubError::Hf(format!("redirect without a Location for `{filename}` in `{repo}`"))
             })?;
-        let r = send_get(&client, loc, token.as_deref())?;
+        // The Hub returns an absolute CDN URL for xet-backed files (302) but a
+        // *relative* `/api/resolve-cache/...` path for ordinary files (307).
+        // Resolve it against the original URL so both forms work.
+        let target = resolve_redirect(&url, loc)?;
+        let r = send_get(&client, target.as_str(), token.as_deref())?;
         if !r.status().is_success() {
             return Err(HubError::Hf(format!(
                 "fetching `{filename}` from `{repo}`: HTTP {}",
@@ -227,6 +231,18 @@ fn send_get(client: &Client, url: &str, token: Option<&str>) -> Result<Response>
         .map_err(|e| HubError::Hf(format!("requesting `{url}`: {e}")))
 }
 
+/// Resolve a redirect `Location` against the original resolve URL.
+///
+/// The Hub uses an *absolute* CDN URL for xet-backed files (302) but a
+/// *relative* `/api/resolve-cache/...` path for ordinary files (307). Joining
+/// against the base handles both forms.
+fn resolve_redirect(base: &str, loc: &str) -> Result<String> {
+    reqwest::Url::parse(base)
+        .and_then(|u| u.join(loc))
+        .map(|u| u.to_string())
+        .map_err(|e| HubError::Hf(format!("invalid redirect `{loc}` (from `{base}`): {e}")))
+}
+
 fn resolve_url(repo: &str, filename: &str, revision: &str) -> String {
     let endpoint = std::env::var("HF_ENDPOINT").unwrap_or_else(|_| DEFAULT_ENDPOINT.to_string());
     format!("{endpoint}/{repo}/resolve/{revision}/{filename}")
@@ -319,6 +335,23 @@ mod tests {
             temp_path(dest),
             Path::new("/cache/models--o--r/snapshots/abc/model.safetensors.incomplete")
         );
+    }
+
+    #[test]
+    fn resolve_redirect_joins_relative_location() {
+        let base = "https://huggingface.co/org/repo/resolve/main/encoder/config.json";
+        let loc = "/api/resolve-cache/models/org/repo/55cf4c4/encoder%2Fconfig.json?etag=%22x%22";
+        assert_eq!(
+            resolve_redirect(base, loc).unwrap(),
+            "https://huggingface.co/api/resolve-cache/models/org/repo/55cf4c4/encoder%2Fconfig.json?etag=%22x%22"
+        );
+    }
+
+    #[test]
+    fn resolve_redirect_keeps_absolute_location() {
+        let base = "https://huggingface.co/org/repo/resolve/main/model.safetensors";
+        let loc = "https://us.aws.cdn.hf.co/xet-bridge-us/abc/sig";
+        assert_eq!(resolve_redirect(base, loc).unwrap(), loc);
     }
 
     #[test]
