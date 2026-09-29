@@ -36,8 +36,9 @@ impl FileDownloadProgress {
         // non-TTY stderr or to a download not being attempted at all.
         if std::env::var_os("HUNCHO_PROGRESS_DEBUG").is_some() {
             eprintln!(
-                "[huncho-hub] progress {repo}:{filename} mode={} (stderr tty)",
-                if tty { "live-bar" } else { "one-line" }
+                "[huncho-hub] progress {repo}:{filename} mode={} (stderr {})",
+                if tty { "live-bar" } else { "one-line" },
+                if tty { "is a TTY" } else { "is not a TTY" }
             );
         }
         Self {
@@ -91,6 +92,43 @@ impl FileDownloadProgress {
                 human_bytes(total)
             );
         }
+    }
+
+    /// Render a non-TTY download headline (or start the TTY bar).
+    ///
+    /// Mirrors the `Start` branch of [`ProgressHandler::on_progress`] so the
+    /// HTTP fallback shows the same "downloading … (SIZE)" line that the
+    /// hf-hub path emits.
+    pub fn begin(&self, total: u64) {
+        if self.tty {
+            eprint!(
+                "\r  {}/{}  ({} bytes)",
+                self.filename,
+                self.repo,
+                human_bytes(total)
+            );
+            let _ = io::stderr().flush();
+        } else {
+            eprintln!(
+                "downloading {}:{} ({})",
+                self.repo,
+                self.filename,
+                human_bytes(total)
+            );
+        }
+    }
+
+    /// Report bytes transferred so far (throttled by the configured interval).
+    pub fn report(&self, bytes: u64, total: u64, rate_bps: Option<f64>) {
+        self.render(bytes, total, rate_bps);
+    }
+
+    /// Force a final 100% render and terminate the progress line.
+    pub fn finish(&self, bytes: u64, total: u64) {
+        // Reset the throttle so the final 100% is always drawn, then terminate.
+        self.last_print_ms.store(0, Ordering::Relaxed);
+        self.render(bytes, total, None);
+        self.done();
     }
 
     fn done(&self) {

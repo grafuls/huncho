@@ -22,6 +22,10 @@ pub enum HubError {
         dtype: String,
     },
 
+    /// A repo file was not found on the Hub (`404`).
+    #[error("`{filename}` was not found in the Hub repo `{repo}`")]
+    NotFound { repo: String, filename: String },
+
     /// A failure while talking to the Hugging Face Hub.
     #[error("huggingface hub error: {0}")]
     Hf(String),

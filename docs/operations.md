@@ -69,6 +69,15 @@ for every artifact fetched (manifest, weights, head, tokenizer, and golden
 suite). The serve listener binds only after all models are loaded, so a
 first-time run may spend a while downloading before the endpoint is live.
 
+Artifacts that the Hub serves through the Xet CDN (large weight files such as
+`model.safetensors`) can otherwise stall at 0 bytes. `huncho-hub` therefore
+falls back to a plain-HTTP transfer of the `/resolve/<revision>/<filename>`
+endpoint, following the CDN redirect manually and streaming the body into the
+HF snapshot directory as a regular file. Every file is pinned to the exact
+resolved commit, and an already-present snapshot file is reused (so a
+second run does not re-download). Progress is reported on stderr in both
+TTY (live bar) and non-TTY (throttled one-line) environments.
+
 You can also reference a local package path or a manifest file through
 `--model`; it is resolved without any network access:
 

@@ -68,6 +68,7 @@ None yet.
 | 260926-sdr | Rename app to Huncho | 2026-09-26 | Working tree | [260926-sdr-rename-app-to-huncho](./quick/260926-sdr-rename-app-to-huncho/) |
 | 260926-hf | Hugging Face Hub resolution (serve/calibrate/conform/bench by repo id) | 2026-09-26 | Working tree | — |
 | 260926-progress | Download progress feedback when resolving HF model packages by repo id | 2026-09-26 | 8d93c40 | — |
+| 260926-xet | Plain-HTTP download fallback for xet-backed Hub artifacts (fixes silent stall on large weights) | 2026-09-26 | Working tree | — |
 | 260926-m0 | Phase 1 tracer bullet: F1 on ONNX Runtime behind `/v1/systemone`, conformance PASS | 2026-09-26 | 2ae8189 | — |
 | 260926-tests | API integration tests, convert/calibrate/bench tests, F2/F4 prompt tests | 2026-09-26 | 2756c4a, 4b4be24, 3dcccbc, cf002f0, 04a8405 | — |
 | 260926-core02 | Load manifest-declared HF tokenizer for byte-identical prompts | 2026-09-26 | 3d8e64a | — |
@@ -82,7 +83,7 @@ Items acknowledged and deferred at milestone close, most recent first:
 |----------|------|--------|-------------|-----------|
 | Model from source | Laya / Nimble / OpenThai licenses to verify for redistributing converted weights | Open | 2026-09-26 | Init |
 | Real model | ONNX export of real `convaiinnovations/laya` (superseded by candle; ONNX only if a future model needs an ONNX artifact) | Deferred | 2026-09-26 | M0 |
-| Real model | Fetch & lay out Laya's ~842 MB checkpoint (`config.json`+`model.safetensors`) and verify `serve --backend candle` end-to-end | Open | 2026-09-26 | M0 |
+| Real model | Fetch & lay out Laya's ~842 MB checkpoint (`config.json`+`model.safetensors`) and verify `serve --backend candle` end-to-end | **Resolved** — `serve --model convaiinnovations/laya --backend candle` now auto-downloads via plain HTTP fallback | 2026-09-26 | M0 |
 | Phase 2 | F2 pointer head + KV-fork fan-out on llama.cpp (needs Kev model + BE-02) | Open | 2026-09-26 | M1 |
 
 ## Session Continuity

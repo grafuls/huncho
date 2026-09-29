@@ -9,7 +9,6 @@
 
 use std::path::{Path, PathBuf};
 
-use hf_hub::progress::Progress;
 use huncho_core::manifest::{
     self, ArtifactRef, Backbone, BackboneSource, BackendId, CalibrationConfig, CalibrationEntry,
     CalibrationStatus, ConfidenceDef, Family, HeadConfig, ModelCapabilities, ModelManifest,
@@ -17,7 +16,7 @@ use huncho_core::manifest::{
 };
 
 use crate::error::{HubError, Result};
-use crate::progress::FileDownloadProgress;
+use crate::http;
 
 /// Where a model package lives.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -155,30 +154,19 @@ fn resolve_hf(
     dtype: &str,
     opts: &ResolveOptions,
 ) -> Result<ResolvedPackage> {
-    let (owner, name) = hf_hub::split_id(repo);
-    let client = build_client(opts)?;
-    let sync = hf_hub::HFClientSync::from_inner(client)
-        .map_err(|e| HubError::hf("creating the Hugging Face client", e))?;
-    let model_repo = sync.model(owner, name);
-
     let rev: Option<String> = revision.map(|s| s.to_string());
 
     // Fetch the manifest first so we know which artifacts it references. If the
     // repo has no `huncho-model.json`, fall back to synthesizing a servable
     // package from a raw decision-model checkpoint (e.g. Laya's ModernBERT).
-    let manifest_path = match download_repo_file(
-        &model_repo,
-        "huncho-model.json",
-        rev.clone(),
-        opts,
-        repo,
-    ) {
+    // Only a genuine 404 triggers synthesis; transient network errors are
+    // surfaced to the user.
+    let manifest_path = match http::download_file(repo, "huncho-model.json", rev.clone(), opts) {
         Ok(p) => p,
-        Err(_) => {
-            return synthesize_checkpoint(
-                repo, &model_repo, rev.as_deref(), backend, dtype, opts,
-            );
+        Err(HubError::NotFound { .. }) => {
+            return synthesize_checkpoint(repo, rev.as_deref(), backend, dtype, opts);
         }
+        Err(e) => return Err(e),
     };
 
     let manifest = ModelManifest::load(&manifest_path).map_err(|e| {
@@ -204,46 +192,10 @@ fn resolve_hf(
     let pinned: Option<String> = if commit.is_empty() { rev.clone() } else { Some(commit) };
 
     for file in required_files(&manifest, backend, dtype, opts.fetch_golden)? {
-        download_repo_file(&model_repo, &file, pinned.clone(), opts, repo)?;
+        http::download_file(repo, &file, pinned.clone(), opts)?;
     }
 
     Ok(ResolvedPackage { manifest_path })
-}
-
-fn build_client(opts: &ResolveOptions) -> Result<hf_hub::HFClient> {
-    let mut builder = hf_hub::HFClient::builder();
-    if let Some(token) = &opts.token {
-        builder = builder.token(token.clone());
-    }
-    if let Some(cache) = &opts.cache_dir {
-        builder = builder.cache_dir(cache.clone());
-    }
-    builder
-        .build()
-        .map_err(|e| HubError::hf("configuring the Hugging Face client", e))
-}
-
-/// Download a single file from a repo, rendering progress when enabled.
-fn download_repo_file(
-    model_repo: &hf_hub::HFRepositorySync<hf_hub::RepoTypeModel>,
-    filename: &str,
-    revision: Option<String>,
-    opts: &ResolveOptions,
-    repo: &str,
-) -> Result<PathBuf> {
-    let progress = opts.show_progress.then(|| {
-        // Attach a fresh handler per file so the rendered label is accurate.
-        Progress::new(FileDownloadProgress::new(repo.to_string(), filename.to_string()))
-    });
-    model_repo
-        .download_file()
-        .filename(filename.to_string())
-        .maybe_revision(revision)
-        .local_files_only(opts.local_files_only)
-        .force_download(false)
-        .maybe_progress(progress)
-        .send()
-        .map_err(|e| HubError::hf(format!("fetching `{filename}` from `{repo}`"), e))
 }
 
 /// The set of files that must be fetched from the Hub for the requested
@@ -299,7 +251,6 @@ fn required_files(
 /// projection, because the trained head is not extracted from the checkpoint.
 fn synthesize_checkpoint(
     repo: &str,
-    model_repo: &hf_hub::HFRepositorySync<hf_hub::RepoTypeModel>,
     revision: Option<&str>,
     backend: Option<BackendId>,
     dtype: &str,
@@ -323,7 +274,7 @@ fn synthesize_checkpoint(
 
     // Fetch the encoder config (Laya keeps it under `encoder/`, HF models keep
     // it at the root).
-    let config_path = download_config(model_repo, revision, opts)?;
+    let config_path = download_config(repo, revision, opts)?;
     let config_bytes = std::fs::read(&config_path)?;
     let config: serde_json::Value = serde_json::from_slice(&config_bytes)?;
 
@@ -333,7 +284,7 @@ fn synthesize_checkpoint(
 
     // Laya ships a `rl_agent_config.json` (calibration + prompt budgets). When
     // present, synthesize as `laya-v1`; otherwise fall back to a generic F1.
-    let rl_config = download_first(model_repo, revision, opts, &["rl_agent_config.json"])
+    let rl_config = download_first(repo, revision, opts, &["rl_agent_config.json"])
         .ok()
         .and_then(|path| std::fs::read(&path).ok())
         .and_then(|bytes| serde_json::from_slice(&bytes).ok());
@@ -341,7 +292,7 @@ fn synthesize_checkpoint(
     // The real ModernBERT tokenizer lives under `tokenizer/` in Laya. Record
     // the repo-relative path so the loader can read it back from the snapshot.
     let tokenizer_path = download_first(
-        model_repo,
+        repo,
         revision,
         opts,
         &["tokenizer/tokenizer.json", "tokenizer.json"],
@@ -387,7 +338,7 @@ fn synthesize_checkpoint(
     };
 
     for file in required_files(&manifest, Some(BackendId::Candle), dtype, false)? {
-        download_repo_file(model_repo, &file, pinned.clone(), opts, repo)?;
+        http::download_file(repo, &file, pinned.clone(), opts)?;
     }
 
     Ok(ResolvedPackage { manifest_path })
@@ -409,29 +360,19 @@ fn snapshot_root(path: &Path) -> Option<PathBuf> {
 
 /// Download the first of the candidate config filenames that exists in the repo.
 fn download_config(
-    model_repo: &hf_hub::HFRepositorySync<hf_hub::RepoTypeModel>,
+    repo: &str,
     revision: Option<&str>,
     opts: &ResolveOptions,
 ) -> Result<PathBuf> {
-    let mut last_err: Option<hf_hub::HFError> = None;
+    let mut last_err: Option<HubError> = None;
     for filename in ["encoder/config.json", "config.json"] {
-        match model_repo
-            .download_file()
-            .filename(filename.to_string())
-            .maybe_revision(revision.map(|s| s.to_string()))
-            .local_files_only(opts.local_files_only)
-            .force_download(false)
-            .send()
-        {
+        match http::download_file(repo, filename, revision.map(|s| s.to_string()), opts) {
             Ok(path) => return Ok(path),
             Err(e) => last_err = Some(e),
         }
     }
     match last_err {
-        Some(e) => Err(HubError::hf(
-            "finding an encoder config (encoder/config.json or config.json)",
-            e,
-        )),
+        Some(e) => Err(e),
         None => Err(HubError::Package(
             "no encoder config found in the checkpoint repo".into(),
         )),
@@ -441,27 +382,20 @@ fn download_config(
 /// Download the first of a list of candidate filenames that exists in the repo,
 /// returning the first successful download. Errors if all candidates fail.
 fn download_first(
-    model_repo: &hf_hub::HFRepositorySync<hf_hub::RepoTypeModel>,
+    repo: &str,
     revision: Option<&str>,
     opts: &ResolveOptions,
     candidates: &[&str],
 ) -> Result<PathBuf> {
-    let mut last_err: Option<hf_hub::HFError> = None;
+    let mut last_err: Option<HubError> = None;
     for filename in candidates {
-        match model_repo
-            .download_file()
-            .filename(filename.to_string())
-            .maybe_revision(revision.map(|s| s.to_string()))
-            .local_files_only(opts.local_files_only)
-            .force_download(false)
-            .send()
-        {
+        match http::download_file(repo, filename, revision.map(|s| s.to_string()), opts) {
             Ok(path) => return Ok(path),
             Err(e) => last_err = Some(e),
         }
     }
     match last_err {
-        Some(e) => Err(HubError::hf("finding a required repo file", e)),
+        Some(e) => Err(e),
         None => Err(HubError::Package("no matching file found in the repo".into())),
     }
 }
