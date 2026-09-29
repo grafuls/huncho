@@ -69,6 +69,7 @@ None yet.
 | 260926-hf | Hugging Face Hub resolution (serve/calibrate/conform/bench by repo id) | 2026-09-26 | Working tree | — |
 | 260926-progress | Download progress feedback when resolving HF model packages by repo id | 2026-09-26 | 8d93c40 | — |
 | 260926-xet | Plain-HTTP download fallback for xet-backed Hub artifacts (fixes silent stall on large weights) | 2026-09-26 | Working tree | — |
+| 260926-redirect | Follow relative 307 resolve-cache redirects in HTTP downloader (fixes fresh-cache config resolution) | 2026-09-26 | Working tree | — |
 | 260926-m0 | Phase 1 tracer bullet: F1 on ONNX Runtime behind `/v1/systemone`, conformance PASS | 2026-09-26 | 2ae8189 | — |
 | 260926-tests | API integration tests, convert/calibrate/bench tests, F2/F4 prompt tests | 2026-09-26 | 2756c4a, 4b4be24, 3dcccbc, cf002f0, 04a8405 | — |
 | 260926-core02 | Load manifest-declared HF tokenizer for byte-identical prompts | 2026-09-26 | 3d8e64a | — |
