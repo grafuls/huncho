@@ -5,12 +5,12 @@ use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 use crate::backend::{Backend, ForwardInput};
-use crate::calibration::{self, confidence};
+use crate::calibration::{self, bucket_size, confidence};
 use crate::contract::{Answer, Question, SystemOneRequest, SystemOneResponse, Usage};
 use crate::error::{Error, Result};
 use crate::head::{self, HeadParams};
 use crate::manifest::{BackendId, CalibrationEntry, Family, ModelManifest};
-use crate::prompt::{Candidate, PromptFormatter, default_formatter};
+use crate::prompt::{Candidate, PromptFormatter, formatter_for};
 #[cfg(test)]
 use crate::tensor::Tensor;
 use crate::tokenizer::Tokenizer;
@@ -53,7 +53,7 @@ impl Engine {
         let dtype = dtype.into();
         let calibration = manifest.calibration.resolve(&backend_id.to_string(), &dtype);
         Ok(Engine {
-            formatter: default_formatter(manifest.family),
+            formatter: formatter_for(&manifest),
             manifest,
             backend: Mutex::new(backend),
             tokenizer,
@@ -116,7 +116,7 @@ impl Engine {
 
             // Run the backend (v1 serializes forwards per model).
             let positions: Vec<usize> = prompt.candidates.iter().map(|c| c.position).collect();
-            let input = ForwardInput::new(prompt.tokens.clone(), positions);
+            let input = ForwardInput::new(prompt.tokens.clone(), positions).with_qtype(prompt.qtype);
             let mut backend = self
                 .backend
                 .lock()
@@ -134,7 +134,7 @@ impl Engine {
             )?;
 
             // Calibration: temperature + softmax.
-            let temperature = self.temperature_for(question);
+            let temperature = self.temperature_for(question, n_options);
             let probabilities = calibration::calibrate(&logits, temperature)?;
 
             if opts.extensions {
@@ -152,10 +152,19 @@ impl Engine {
         Ok(response)
     }
 
-    /// Resolve the temperature for a question type (F4 uses per-type temps).
-    fn temperature_for(&self, question: &Question) -> f32 {
+    /// Resolve the temperature for a question (Laya uses per-type base temps plus
+    /// per `{type}:{bucket}` overrides; F4 uses per-type temps; others use the default).
+    fn temperature_for(&self, question: &Question, n_options: usize) -> f32 {
+        let type_name = question.type_name();
+        // Laya-style per-option-count override, keyed `{type}:{bucket}`.
+        if let Some(tbo) = &self.calibration.temperature_by_options {
+            let bucket = format!("{}:{}", type_name, bucket_size(n_options));
+            if let Some(t) = tbo.get(&bucket) {
+                return *t;
+            }
+        }
         if let Some(per_type) = &self.calibration.per_type_temperatures {
-            if let Some(t) = per_type.get(question.type_name()) {
+            if let Some(t) = per_type.get(type_name) {
                 return *t;
             }
         }
@@ -304,9 +313,11 @@ mod tests {
                 head_budget: 512,
                 max_options: 255,
                 contract_hash: "abc".into(),
+                max_len: 512,
+                head_max_len: 192,
             },
             calibration: CalibrationConfig {
-                default: CalibrationEntry { temperature: 1.0, per_type_temperatures: None, confidence: ConfidenceDef::Peak, status: CalibrationStatus::Fit },
+                default: CalibrationEntry { temperature: 1.0, per_type_temperatures: None, temperature_by_options: None, confidence: ConfidenceDef::Peak, status: CalibrationStatus::Fit },
                 entries: Default::default(),
                 eval_set_hash: None,
             },

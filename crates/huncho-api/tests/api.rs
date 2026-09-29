@@ -51,11 +51,14 @@ fn mock_engine(name: &str) -> Engine {
             head_budget: 256,
             max_options: 255,
             contract_hash: "test-hash".into(),
+            max_len: 512,
+            head_max_len: 192,
         },
         calibration: CalibrationConfig {
             default: CalibrationEntry {
                 temperature: 1.0,
                 per_type_temperatures: None,
+                temperature_by_options: None,
                 confidence: ConfidenceDef::Peak,
                 status: CalibrationStatus::Fit,
             },

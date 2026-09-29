@@ -8,6 +8,20 @@
 use crate::error::{Error, Result};
 use crate::manifest::ConfidenceDef;
 
+/// Laya's `temp_bucket` size segment for a given option count.
+/// Buckets: `2`, `3-5`, `6-10`, `11+`.
+pub fn bucket_size(n_options: usize) -> &'static str {
+    if n_options <= 2 {
+        "2"
+    } else if n_options <= 5 {
+        "3-5"
+    } else if n_options <= 10 {
+        "6-10"
+    } else {
+        "11+"
+    }
+}
+
 /// Numerically stable softmax over a logit vector.
 ///
 /// Returns a probability distribution that sums to 1.

@@ -30,6 +30,10 @@ pub enum HubError {
     #[error("invalid model package: {0}")]
     Package(String),
 
+    /// JSON serialization / deserialization error.
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+
     /// Filesystem error.
     #[error(transparent)]
     Io(#[from] std::io::Error),

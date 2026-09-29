@@ -133,11 +133,14 @@ pub fn build_manifest(args: &ConvertArgs) -> anyhow::Result<ModelManifest> {
             head_budget: 1024,
             max_options: 255,
             contract_hash,
+            max_len: 512,
+            head_max_len: 192,
         },
         calibration: CalibrationConfig {
             default: CalibrationEntry {
                 temperature: 1.0,
                 per_type_temperatures: None,
+                temperature_by_options: None,
                 confidence: ConfidenceDef::Peak,
                 status: CalibrationStatus::Pending,
             },

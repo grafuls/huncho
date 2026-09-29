@@ -28,6 +28,10 @@ pub struct ForwardInput {
     /// Positions (0-based into `tokens`) to read features/logits from. Must be
     /// sorted ascending; each row of the output corresponds to one position.
     pub positions: Vec<usize>,
+    /// The typed-question index for the Laya decision head type embedding
+    /// (`0`=choice, `1`=score, `2`=noul). Unused by backends that do not
+    /// implement the typed option-marker head.
+    pub qtype: u32,
     /// When set, also prefill the sequence and retain a cache handle.
     pub retain_cache: bool,
     /// When set, fork from this prefill instead of running from scratch.
@@ -39,9 +43,16 @@ impl ForwardInput {
         ForwardInput {
             tokens,
             positions,
+            qtype: 0,
             retain_cache: false,
             fork_from: None,
         }
+    }
+
+    /// Builder-style setter for the typed-question index.
+    pub fn with_qtype(mut self, qtype: u32) -> Self {
+        self.qtype = qtype;
+        self
     }
 }
 
@@ -116,6 +127,7 @@ pub trait Backend: Send + Sync {
         let input = ForwardInput {
             tokens: tokens.to_vec(),
             positions: Vec::new(),
+            qtype: 0,
             retain_cache: true,
             fork_from: None,
         };

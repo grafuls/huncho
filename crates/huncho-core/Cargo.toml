@@ -10,6 +10,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 log.workspace = true
 subtle.workspace = true
+indexmap = { version = "2", features = ["serde"] }
 
 # HF tokenizers (behind a feature so the default build stays light).
 tokenizers = { version = "0.20", optional = true }

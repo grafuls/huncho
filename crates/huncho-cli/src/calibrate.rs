@@ -94,6 +94,11 @@ pub fn run(args: CalibrateArgs) -> anyhow::Result<()> {
                 .default
                 .per_type_temperatures
                 .clone(),
+            temperature_by_options: manifest
+                .calibration
+                .default
+                .temperature_by_options
+                .clone(),
             confidence: conf,
             status: CalibrationStatus::Refit,
         },
@@ -151,11 +156,14 @@ mod tests {
                 head_budget: 1024,
                 max_options: 255,
                 contract_hash: "0123456789abcdef".into(),
+                max_len: 512,
+                head_max_len: 192,
             },
             calibration: CalibrationConfig {
                 default: CalibrationEntry {
                     temperature: 1.0,
                     per_type_temperatures: None,
+                    temperature_by_options: None,
                     confidence: ConfidenceDef::Peak,
                     status: CalibrationStatus::Pending,
                 },

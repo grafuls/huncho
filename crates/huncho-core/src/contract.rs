@@ -104,8 +104,11 @@ pub enum Question {
     /// Pick one option from a set.
     Choice {
         instructions: Instructions,
+        /// Option label -> optional description. Insertion order is preserved so
+        /// the typed option-marker head (e.g. Laya) sees options in the order the
+        /// caller supplied, matching the trained model's expectation.
         #[serde(default)]
-        criteria: BTreeMap<String, Option<serde_json::Value>>,
+        criteria: indexmap::IndexMap<String, Option<serde_json::Value>>,
     },
     /// Rate the state along an ordered rubric.
     Score {
@@ -138,6 +141,16 @@ impl Question {
             Question::Choice { .. } => "choice",
             Question::Score { .. } => "score",
             Question::Noul { .. } => "noul",
+        }
+    }
+
+    /// The typed-question embedding index used by the Laya decision head
+    /// (`type_emb`: choice=0, score=1, noul=2).
+    pub fn qtype_index(&self) -> u32 {
+        match self {
+            Question::Choice { .. } => 0,
+            Question::Score { .. } => 1,
+            Question::Noul { .. } => 2,
         }
     }
 
@@ -353,7 +366,7 @@ mod tests {
     fn rejects_too_many_options() {
         let mut req = sample_request();
         // 300 options
-        let mut criteria = std::collections::BTreeMap::new();
+        let mut criteria = indexmap::IndexMap::new();
         for i in 0..300 {
             criteria.insert(format!("opt{i}"), None);
         }

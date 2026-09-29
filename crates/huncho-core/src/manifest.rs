@@ -256,6 +256,20 @@ pub struct PromptContract {
     pub max_options: usize,
     /// Hash of the prompt contract bytes, used to detect upstream drift.
     pub contract_hash: String,
+    /// Total per-question sequence cap (Laya `max_len`; default 512).
+    #[serde(default = "default_prompt_max_len")]
+    pub max_len: usize,
+    /// Head region budget (Laya `head_max_len`; default 192).
+    #[serde(default = "default_prompt_head_max_len")]
+    pub head_max_len: usize,
+}
+
+fn default_prompt_max_len() -> usize {
+    512
+}
+
+fn default_prompt_head_max_len() -> usize {
+    192
 }
 
 /// A single calibration entry (per backend × dtype).
@@ -265,6 +279,10 @@ pub struct CalibrationEntry {
     /// Per question-type temperatures (F4 slot head, and per-type).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub per_type_temperatures: Option<BTreeMap<String, f32>>,
+    /// Per `{type}:{bucket}` temperatures (Laya `temperature_by_options`).
+    /// Buckets are `2`, `3-5`, `6-10`, `11+`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature_by_options: Option<BTreeMap<String, f32>>,
     #[serde(default)]
     pub confidence: ConfidenceDef,
     #[serde(default)]

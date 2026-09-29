@@ -116,11 +116,14 @@ pub fn mock_manifest(name: &str, family: Family, _dtype: &str, temperature: f32)
             head_budget: 1024,
             max_options: 255,
             contract_hash: "mock-hash".into(),
+            max_len: 512,
+            head_max_len: 192,
         },
         calibration: CalibrationConfig {
             default: CalibrationEntry {
                 temperature,
                 per_type_temperatures: None,
+                temperature_by_options: None,
                 confidence: ConfidenceDef::Peak,
                 status: CalibrationStatus::Fit,
             },

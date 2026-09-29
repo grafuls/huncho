@@ -22,6 +22,13 @@ pub trait Tokenizer: Send + Sync {
     fn id_for(&self, token: &str) -> Option<u32>;
     /// A short identifier for this tokenizer (for diagnostics).
     fn name(&self) -> &str;
+    /// The token id for the mask token (`[MASK]`), if the tokenizer has one.
+    /// Needed by models that score candidates at `[MASK]` positions (Laya).
+    fn mask_token_id(&self) -> Option<u32>;
+    /// The token id for the classification/bos token (`[CLS]`), if present.
+    fn cls_token_id(&self) -> Option<u32>;
+    /// The token id for the separator token (`[SEP]`), if present.
+    fn sep_token_id(&self) -> Option<u32>;
 }
 
 /// A deterministic, hash-based tokenizer for offline testing.
@@ -118,15 +125,23 @@ impl Tokenizer for SimpleTokenizer {
     }
 
     fn id_for(&self, token: &str) -> Option<u32> {
-        if token.starts_with('<') && token.ends_with('>') {
-            Some(self.id_for_inner(token))
-        } else {
-            Some(self.id_for_inner(token))
-        }
+        Some(self.id_for_inner(token))
     }
 
     fn name(&self) -> &str {
         "simple"
+    }
+
+    fn mask_token_id(&self) -> Option<u32> {
+        Some(self.id_for_inner("[MASK]"))
+    }
+
+    fn cls_token_id(&self) -> Option<u32> {
+        Some(self.id_for_inner("[CLS]"))
+    }
+
+    fn sep_token_id(&self) -> Option<u32> {
+        Some(self.id_for_inner("[SEP]"))
     }
 }
 
@@ -173,6 +188,18 @@ impl Tokenizer for HfTokenizer {
 
     fn name(&self) -> &str {
         "hf-tokenizers"
+    }
+
+    fn mask_token_id(&self) -> Option<u32> {
+        self.tokenizer.token_to_id("[MASK]")
+    }
+
+    fn cls_token_id(&self) -> Option<u32> {
+        self.tokenizer.token_to_id("[CLS]")
+    }
+
+    fn sep_token_id(&self) -> Option<u32> {
+        self.tokenizer.token_to_id("[SEP]")
     }
 }
 

@@ -44,9 +44,10 @@ pub enum CandleError {
     FeatureDisabled,
 }
 
-/// A candle-backed ModernBERT encoder.
+/// A candle-backed ModernBERT encoder, optionally with a Laya decision head.
 pub struct CandleBackend {
     model: ModernBert,
+    head: Option<LayaHead>,
     hidden_size: usize,
     max_context: usize,
     dtype: String,
@@ -70,12 +71,14 @@ impl CandleBackend {
         let tensors = load_encoder_tensors(weights_path.as_ref(), &device)
             .map_err(|e| Error::Backend(CandleError::Load(weights_path.as_ref().display().to_string(), e.to_string()).to_string()))?;
 
+        let head = LayaHead::from_tensors(&tensors, hidden_size)?;
         let vb = VarBuilder::from_tensors(tensors, DType::F32, &device);
         let model = ModernBert::load(vb, &config)
             .map_err(|e| Error::Backend(CandleError::Load("weights".into(), e.to_string()).to_string()))?;
 
         Ok(CandleBackend {
             model,
+            head,
             hidden_size,
             max_context,
             dtype: dtype.into(),
@@ -148,20 +151,27 @@ fn config_from_value(v: &serde_json::Value, path: &Path) -> Result<Config> {
 ///
 /// * `encoder.*` (as `convaiinnovations/laya` uses) is remapped to `model.*`.
 /// * `model.*` (standard HF ModernBERT) is kept as-is.
-/// * Anything else (e.g. `act_head.*`, `temperature`) is dropped — the F1 head
-///   is applied in `huncho-core`, not inside the backend.
+/// * Laya decision-head keys (`head.*`, `type_emb.*`, `scorer.*`) are kept
+///   as-is so the backend can run the full typed option-marker head.
+/// * Anything else (e.g. `act_head.*`, `temperature`) is dropped — `temperature`
+///   is applied by huncho-core calibration, and `act_head` carries no useful
+///   signal.
 fn remap_key(name: &str) -> Option<String> {
     if let Some(rest) = name.strip_prefix("encoder.") {
         Some(format!("model.{rest}"))
-    } else if name.starts_with("model.") {
+    } else if name.starts_with("model.")
+        || name.starts_with("head.")
+        || name.starts_with("type_emb.")
+        || name.starts_with("scorer.")
+    {
         Some(name.to_string())
     } else {
         None
     }
 }
 
-/// Load the encoder tensors from a safetensors file, remapping the `encoder.`
-/// prefix to `model.` and dropping any non-encoder tensors. Tensors are
+/// Load the model tensors from a safetensors file, remapping the `encoder.`
+/// prefix to `model.` and retaining the Laya decision-head tensors. Tensors are
 /// converted to `f32` for CPU inference.
 fn load_encoder_tensors(path: &Path, device: &Device) -> candle::Result<HashMap<String, Tensor>> {
     let raw = candle::safetensors::load(path, device)?;
@@ -224,6 +234,19 @@ impl Backend for CandleBackend {
             .forward(&ids, &mask)
             .map_err(|e| Error::Backend(CandleError::Inference(e.to_string()).to_string()))?;
 
+        // Laya decision-head path: run the typed option-marker head over the full
+        // sequence and read per-option logits at the mask positions.
+        if let Some(head) = &self.head {
+            let logits = head
+                .forward(&hidden_tensor, input.qtype, &input.positions)
+                .map_err(|e| Error::Backend(CandleError::Inference(e.to_string()).to_string()))?;
+            let values = core_from_tensor(&logits)?;
+            return Ok(ForwardOutput::Logits {
+                positions: input.positions,
+                values,
+            });
+        }
+
         let hidden = hidden_tensor.shape().dims()[2];
         let positions: Vec<u32> = input.positions.iter().map(|&p| p as u32).collect();
         // candle `index_select` requires a 1-D index tensor.
@@ -254,6 +277,189 @@ impl Backend for CandleBackend {
             "candle backend v1 does not support KV forking".into(),
         ))
     }
+}
+
+// ---------------------------------------------------------------------------
+// Laya decision head
+// ---------------------------------------------------------------------------
+
+/// One `nn.TransformerEncoderLayer` (norm_first, batch_first) of the Laya head.
+/// The FFN uses ReLU (the `nn.TransformerEncoderLayer` default), not GELU.
+struct LayaLayer {
+    nhead: usize,
+    head_dim: usize,
+    qkv_w: Tensor,
+    qkv_b: Tensor,
+    out_w: Tensor,
+    out_b: Tensor,
+    norm1_w: Tensor,
+    norm1_b: Tensor,
+    norm2_w: Tensor,
+    norm2_b: Tensor,
+    ff1_w: Tensor,
+    ff1_b: Tensor,
+    ff2_w: Tensor,
+    ff2_b: Tensor,
+}
+
+impl LayaLayer {
+    fn forward(&self, x: &Tensor) -> candle::Result<Tensor> {
+        let d_model = self.qkv_w.dims()[0] / 3;
+        let batch = x.dims()[0];
+        let seq = x.dims()[1];
+        let eps = 1e-5f32;
+
+        // Self-attention with pre-norm (norm_first).
+        let xn = candle_nn::ops::layer_norm(x, &self.norm1_w, &self.norm1_b, eps)?;
+        let qkv = xn
+            .broadcast_matmul(&self.qkv_w.t()?)?
+            .broadcast_add(&self.qkv_b)?;
+        let q = qkv.narrow(2, 0, d_model)?;
+        let k = qkv.narrow(2, d_model, d_model)?;
+        let v = qkv.narrow(2, 2 * d_model, d_model)?;
+
+        let q = q.reshape((batch, seq, self.nhead, self.head_dim))?.transpose(1, 2)?;
+        let k = k.reshape((batch, seq, self.nhead, self.head_dim))?.transpose(1, 2)?;
+        let v = v.reshape((batch, seq, self.nhead, self.head_dim))?.transpose(1, 2)?;
+
+        let scale = 1.0 / (self.head_dim as f64).sqrt();
+        let attn = q.matmul(&k.transpose(2, 3)?)?;
+        let attn = attn.affine(scale, 0.0)?;
+        let attn = candle_nn::ops::softmax(&attn, 3)?;
+        let out = attn.matmul(&v)?;
+        let out = out
+            .transpose(1, 2)?
+            .reshape((batch, seq, d_model))?;
+        let out = out
+            .broadcast_matmul(&self.out_w.t()?)?
+            .broadcast_add(&self.out_b)?;
+        let x = x.broadcast_add(&out)?;
+
+        // Position-wise FFN with ReLU.
+        let xn2 = candle_nn::ops::layer_norm(&x, &self.norm2_w, &self.norm2_b, eps)?;
+        let ff = xn2
+            .broadcast_matmul(&self.ff1_w.t()?)?
+            .broadcast_add(&self.ff1_b)?
+            .relu()?;
+        let ff = ff
+            .broadcast_matmul(&self.ff2_w.t()?)?
+            .broadcast_add(&self.ff2_b)?;
+        let x = x.broadcast_add(&ff)?;
+        Ok(x)
+    }
+}
+
+/// The Laya typed decision head: `type_emb`, two transformer layers, then a
+/// LayerNorm → Linear → GELU → Linear(a,1) scorer over the gathered `[MASK]`
+/// marker features.
+struct LayaHead {
+    type_emb: Tensor,
+    layers: Vec<LayaLayer>,
+    scorer_ln_w: Tensor,
+    scorer_ln_b: Tensor,
+    scorer_lin1_w: Tensor,
+    scorer_lin1_b: Tensor,
+    scorer_lin2_w: Tensor,
+    scorer_lin2_b: Tensor,
+}
+
+impl LayaHead {
+    /// Build the head from the checkpoint tensors, or `None` when the checkpoint
+    /// has no Laya decision head (a bare ModernBERT encoder).
+    fn from_tensors(tensors: &HashMap<String, Tensor>, d: usize) -> Result<Option<LayaHead>> {
+        if !tensors.contains_key("type_emb.weight") {
+            return Ok(None);
+        }
+        let nhead = (d / 64).max(1);
+        let head_dim = d / nhead;
+
+        let mut layers = Vec::new();
+        let mut i = 0usize;
+        loop {
+            let p = format!("head.layers.{i}.");
+            let qkv_key = format!("{p}self_attn.in_proj_weight");
+            let Some(qkv_w) = tensors.get(&qkv_key) else { break };
+            let qkv_b = tensors
+                .get(&format!("{p}self_attn.in_proj_bias"))
+                .cloned()
+                .ok_or_else(|| missing(&qkv_key))?;
+            layers.push(LayaLayer {
+                nhead,
+                head_dim,
+                qkv_w: qkv_w.clone(),
+                qkv_b,
+                out_w: get(tensors, &format!("{p}self_attn.out_proj.weight"))?,
+                out_b: get(tensors, &format!("{p}self_attn.out_proj.bias"))?,
+                norm1_w: get(tensors, &format!("{p}norm1.weight"))?,
+                norm1_b: get(tensors, &format!("{p}norm1.bias"))?,
+                norm2_w: get(tensors, &format!("{p}norm2.weight"))?,
+                norm2_b: get(tensors, &format!("{p}norm2.bias"))?,
+                ff1_w: get(tensors, &format!("{p}linear1.weight"))?,
+                ff1_b: get(tensors, &format!("{p}linear1.bias"))?,
+                ff2_w: get(tensors, &format!("{p}linear2.weight"))?,
+                ff2_b: get(tensors, &format!("{p}linear2.bias"))?,
+            });
+            i += 1;
+        }
+        if layers.is_empty() {
+            return Err(Error::Backend(
+                "checkpoint has a Laya head (`type_emb.weight`) but no head layers".into(),
+            ));
+        }
+
+        Ok(Some(LayaHead {
+            type_emb: tensors["type_emb.weight"].clone(),
+            layers,
+            scorer_ln_w: get(tensors, "scorer.0.weight")?,
+            scorer_ln_b: get(tensors, "scorer.0.bias")?,
+            scorer_lin1_w: get(tensors, "scorer.1.weight")?,
+            scorer_lin1_b: get(tensors, "scorer.1.bias")?,
+            scorer_lin2_w: get(tensors, "scorer.3.weight")?,
+            scorer_lin2_b: get(tensors, "scorer.3.bias")?,
+        }))
+    }
+
+    fn forward(&self, h: &Tensor, qtype: u32, positions: &[usize]) -> candle::Result<Tensor> {
+        let qrow = self
+            .type_emb
+            .narrow(0, qtype as usize, 1)?
+            .unsqueeze(0)?; // [1, 1, d]
+        let mut z = h.broadcast_add(&qrow)?;
+        for layer in &self.layers {
+            z = layer.forward(&z)?;
+        }
+
+        let pos: Vec<u32> = positions.iter().map(|&p| p as u32).collect();
+        let pos_t = Tensor::new(pos.as_slice(), h.device())?;
+        let m = z.index_select(&pos_t, 1)?.squeeze(0)?; // [n, d]
+
+        let y = candle_nn::ops::layer_norm(&m, &self.scorer_ln_w, &self.scorer_ln_b, 1e-5f32)?;
+        let y = y.matmul(&self.scorer_lin1_w.t()?)?.broadcast_add(&self.scorer_lin1_b)?;
+        let y = y.gelu_erf()?;
+        let y = y.matmul(&self.scorer_lin2_w.t()?)?.broadcast_add(&self.scorer_lin2_b)?;
+        Ok(y)
+    }
+}
+
+fn missing(key: &str) -> Error {
+    Error::Backend(format!("Laya head tensors missing `{key}`"))
+}
+
+fn get(tensors: &HashMap<String, Tensor>, key: &str) -> Result<Tensor> {
+    tensors.get(key).cloned().ok_or_else(|| missing(key))
+}
+
+/// Convert a 2-D candle tensor into a core tensor (used for the per-option logits).
+fn core_from_tensor(t: &Tensor) -> Result<CoreTensor> {
+    let dims = t.dims();
+    let rows = t
+        .to_vec2::<f32>()
+        .map_err(|e| Error::Backend(CandleError::Inference(e.to_string()).to_string()))?;
+    let mut data = Vec::with_capacity(rows.len().saturating_mul(dims.last().copied().unwrap_or(0)));
+    for row in rows {
+        data.extend(row);
+    }
+    CoreTensor::new(dims.to_vec(), data)
 }
 
 #[cfg(test)]

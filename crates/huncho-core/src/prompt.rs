@@ -8,8 +8,13 @@
 
 use crate::contract::{Question, StateValue};
 use crate::error::{Error, Result};
-use crate::manifest::Family;
+use crate::manifest::{Family, ModelManifest};
 use crate::tokenizer::Tokenizer;
+
+/// The mask/special-token string used by ModernBERT-based decision models (Laya).
+const LAYA_MASK_STR: &str = "[MASK]";
+/// Laya caps each option description at this many tokens.
+const LAYA_OPTION_MAX_TOKENS: usize = 48;
 
 /// What a candidate represents, which drives how its logits become an answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,6 +47,9 @@ pub struct BuiltPrompt {
     pub candidates: Vec<Candidate>,
     /// Length of the shared state/instructions prefix (the F2 fork boundary).
     pub prefix_len: usize,
+    /// Typed-question index for the Laya decision head type embedding
+    /// (choice=0, score=1, noul=2). Ignored by non-Laya formatters.
+    pub qtype: u32,
 }
 
 impl BuiltPrompt {
@@ -68,6 +76,23 @@ pub trait PromptFormatter: Send + Sync {
 /// Return the default [`PromptFormatter`] for a family.
 pub fn default_formatter(family: Family) -> Box<dyn PromptFormatter> {
     Box::new(DefaultFormatter { family })
+}
+
+/// Select the [`PromptFormatter`] pinned by a manifest's prompt contract.
+///
+/// `laya-v1` selects the Laya option-marker formatter (typed `[MASK]` markers);
+/// all other templates use the family default.
+pub fn formatter_for(manifest: &ModelManifest) -> Box<dyn PromptFormatter> {
+    let pc = &manifest.prompt_contract;
+    match pc.template.as_str() {
+        "laya-v1" => Box::new(LayaFormatter {
+            max_len: pc.max_len,
+            head_max_len: pc.head_max_len,
+        }),
+        _ => Box::new(DefaultFormatter {
+            family: manifest.family,
+        }),
+    }
 }
 
 /// Appends the textual representation of the question's instructions.
@@ -253,6 +278,7 @@ impl DefaultFormatter {
             tokens,
             candidates,
             prefix_len,
+            qtype: question.qtype_index(),
         })
     }
 
@@ -366,6 +392,7 @@ impl DefaultFormatter {
             tokens,
             candidates,
             prefix_len,
+            qtype: question.qtype_index(),
         })
     }
 
@@ -472,6 +499,7 @@ impl DefaultFormatter {
             tokens,
             candidates,
             prefix_len,
+            qtype: question.qtype_index(),
         })
     }
 
@@ -574,7 +602,226 @@ impl DefaultFormatter {
             tokens,
             candidates,
             prefix_len,
+            qtype: question.qtype_index(),
         })
+    }
+}
+
+/// Render one criterion value to text the way Laya's `render_criterion` does:
+/// strings pass through, null becomes `null`, and structured values are JSON.
+fn laya_render_criterion(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Null => "null".into(),
+        other => other.to_string(),
+    }
+}
+
+/// True when a criterion value counts as "no description" in Laya (None or "").
+fn laya_is_empty_criterion(v: &Option<serde_json::Value>) -> bool {
+    match v {
+        None => true,
+        Some(serde_json::Value::String(s)) => s.is_empty(),
+        Some(serde_json::Value::Null) => true,
+        Some(_) => false,
+    }
+}
+
+/// Render the candidate option texts in Laya order (dict insertion order).
+/// Note: huncho's `Choice.criteria` is a `BTreeMap`, so choice options are
+/// rendered alphabetically rather than in the exact insertion order Laya preserves;
+/// this is a documented limitation (the model's top choice is normally unaffected).
+fn laya_option_texts(question: &Question) -> Vec<String> {
+    match question {
+        Question::Choice { criteria, .. } => criteria
+            .iter()
+            .map(|(label, desc)| {
+                if laya_is_empty_criterion(desc) {
+                    label.clone()
+                } else {
+                    format!("{label}: {}", laya_render_criterion(desc.as_ref().unwrap()))
+                }
+            })
+            .collect(),
+        Question::Score { criteria, .. } => criteria
+            .iter()
+            .enumerate()
+            .map(|(i, c)| format!("level {i}: {}", laya_render_criterion(c)))
+            .collect(),
+        Question::Noul { criteria, .. } => {
+            let no_desc = criteria.as_ref().and_then(|c| c.no.as_ref());
+            let yes_desc = criteria.as_ref().and_then(|c| c.yes.as_ref());
+            let no_text = match no_desc {
+                Some(v) if !(v.is_null() || v.as_str().is_some_and(|s| s.is_empty())) => {
+                    laya_render_criterion(v)
+                }
+                _ => "no, the statement does not hold".into(),
+            };
+            let yes_text = match yes_desc {
+                Some(v) if !(v.is_null() || v.as_str().is_some_and(|s| s.is_empty())) => {
+                    laya_render_criterion(v)
+                }
+                _ => "yes, the statement holds".into(),
+            };
+            vec![
+                format!("false: {no_text}"),
+                format!("true: {yes_text}"),
+            ]
+        }
+    }
+}
+
+/// The Laya `[CLS] <type> question: <ins> [SEP] [MASK] opt0 [MASK] opt1 ... [SEP] state [SEP]`
+/// formatter.
+struct LayaFormatter {
+    /// Total per-question sequence cap (`max_len`, default 512).
+    max_len: usize,
+    /// Head region budget (`head_max_len`, default 192).
+    head_max_len: usize,
+}
+
+impl PromptFormatter for LayaFormatter {
+    fn family(&self) -> Family {
+        Family::F1
+    }
+
+    fn build(
+        &self,
+        state: &StateValue,
+        question: &Question,
+        tokenizer: &dyn Tokenizer,
+    ) -> Result<BuiltPrompt> {
+        let mask_id = tokenizer.mask_token_id().ok_or_else(|| {
+            Error::Package("Laya formatter requires a tokenizer with a [MASK] token".into())
+        })?;
+        let cls_id = tokenizer.cls_token_id().ok_or_else(|| {
+            Error::Package("Laya formatter requires a tokenizer with a [CLS] token".into())
+        })?;
+        let sep_id = tokenizer.sep_token_id().ok_or_else(|| {
+            Error::Package("Laya formatter requires a tokenizer with a [SEP] token".into())
+        })?;
+
+        let ins = instructions_text(question).replace(LAYA_MASK_STR, " ");
+        let head_text = format!("{} question: {}", question.type_name(), ins);
+        let mut head_ids = tokenizer.encode(&head_text, false)?;
+
+        let opts = laya_option_texts(question);
+        let n = opts.len();
+        let mut opt_ids: Vec<Vec<u32>> = Vec::with_capacity(n);
+        let mut total_opt = 0usize;
+        for opt in &opts {
+            let mut ids = tokenizer.encode(&format!(" {opt}"), false)?;
+            ids.truncate(LAYA_OPTION_MAX_TOKENS);
+            total_opt += ids.len();
+            opt_ids.push(ids);
+        }
+
+        let mut opt_budget = self.head_max_len.saturating_sub(total_opt);
+        if opt_budget < 16 {
+            let per = ((self.head_max_len.saturating_sub(16)) / n.max(1)).max(4);
+            for ids in &mut opt_ids {
+                ids.truncate(per);
+            }
+            let total: usize = opt_ids.iter().map(|v| v.len()).sum();
+            opt_budget = self.head_max_len.saturating_sub(total);
+        }
+        head_ids.truncate(8.max(opt_budget));
+
+        let mut ids = Vec::with_capacity(self.max_len);
+        ids.push(cls_id);
+        ids.extend(head_ids);
+        ids.push(sep_id);
+
+        let mut markers = Vec::with_capacity(n);
+        for o in &opt_ids {
+            markers.push(ids.len());
+            ids.push(mask_id);
+            ids.extend(o);
+        }
+        ids.push(sep_id);
+
+        let room = self.max_len.saturating_sub(ids.len()).saturating_sub(1);
+        let state_ids = tokenizer.encode(
+            &state_text(state).replace(LAYA_MASK_STR, " "),
+            false,
+        )?;
+        ids.extend(state_ids.iter().take(room));
+        ids.push(sep_id);
+        ids.truncate(self.max_len);
+        markers.retain(|&m| m < self.max_len);
+
+        let candidates = laya_candidates(question, &markers);
+        let prefix_len = markers.first().copied().unwrap_or(ids.len());
+        Ok(BuiltPrompt {
+            tokens: ids,
+            candidates,
+            prefix_len,
+            qtype: question.qtype_index(),
+        })
+    }
+}
+
+/// Build candidates for each Laya marker position, mapping to the answer
+/// semantics huncho's `build_answer` expects.
+fn laya_candidates(question: &Question, markers: &[usize]) -> Vec<Candidate> {
+    match question {
+        Question::Choice { criteria, .. } => criteria
+            .iter()
+            .enumerate()
+            .map(|(i, (label, desc))| Candidate {
+                kind: CandidateKind::Option,
+                position: markers.get(i).copied().unwrap_or(0),
+                code_id: 0,
+                label: label.clone(),
+                description: {
+                    let d = laya_criterion_opt(desc);
+                    if d.is_empty() {
+                        None
+                    } else {
+                        Some(d)
+                    }
+                },
+                index: i,
+            })
+            .collect(),
+        Question::Score { criteria, .. } => criteria
+            .iter()
+            .enumerate()
+            .map(|(i, level)| Candidate {
+                kind: CandidateKind::Level,
+                position: markers.get(i).copied().unwrap_or(0),
+                code_id: 0,
+                label: i.to_string(),
+                description: Some(laya_render_criterion(level)),
+                index: i,
+            })
+            .collect(),
+        Question::Noul { .. } => vec![
+            // stanza[0] = false (label "no"), stanza[1] = true (label "yes").
+            Candidate {
+                kind: CandidateKind::YesNo,
+                position: markers.first().copied().unwrap_or(0),
+                code_id: 0,
+                label: "no".into(),
+                description: None,
+                index: 0,
+            },
+            Candidate {
+                kind: CandidateKind::YesNo,
+                position: markers.get(1).copied().unwrap_or(0),
+                code_id: 0,
+                label: "yes".into(),
+                description: None,
+                index: 1,
+            },
+        ],
+    }
+}
+
+fn laya_criterion_opt(v: &Option<serde_json::Value>) -> String {
+    match v {
+        Some(val) => laya_render_criterion(val),
+        None => String::new(),
     }
 }
 
@@ -616,9 +863,9 @@ mod tests {
         let f = default_formatter(Family::F1);
         let built = f.build(&test_state(), &q_choice(), &tk).unwrap();
         assert_eq!(built.candidates.len(), 2);
-        // `criteria` is a BTreeMap, so labels are emitted in sorted key order.
-        assert_eq!(built.candidates[0].label, "billing");
-        assert_eq!(built.candidates[1].label, "returns");
+        // `criteria` preserves insertion order, so labels appear as supplied.
+        assert_eq!(built.candidates[0].label, "returns");
+        assert_eq!(built.candidates[1].label, "billing");
         // positions differ
         assert_ne!(built.candidates[0].position, built.candidates[1].position);
     }
@@ -670,8 +917,8 @@ mod tests {
         let f = default_formatter(Family::F2);
         let built = f.build(&test_state(), &q_choice(), &tk).unwrap();
         assert_eq!(built.candidates.len(), 2);
-        assert_eq!(built.candidates[0].label, "billing");
-        assert_eq!(built.candidates[1].label, "returns");
+        assert_eq!(built.candidates[0].label, "returns");
+        assert_eq!(built.candidates[1].label, "billing");
         // Each option has its own marker position (pointer head), unlike F3.
         assert_ne!(built.candidates[0].position, built.candidates[1].position);
         // `prefix_len` is the block-causal fork boundary: the first option marker.
@@ -712,13 +959,13 @@ mod tests {
     #[test]
     fn f4_builds_slot_choice() {
         // F4 (OpenThai) uses `<slot:n>` markers; candidates are emitted in
-        // sorted key order (criteria is a BTreeMap) and each has its own slot.
+        // the supplied (insertion) order and each has its own slot.
         let tk = SimpleTokenizer::new(32768);
         let f = default_formatter(Family::F4);
         let built = f.build(&test_state(), &q_choice(), &tk).unwrap();
         assert_eq!(built.candidates.len(), 2);
-        assert_eq!(built.candidates[0].label, "billing");
-        assert_eq!(built.candidates[1].label, "returns");
+        assert_eq!(built.candidates[0].label, "returns");
+        assert_eq!(built.candidates[1].label, "billing");
         assert_ne!(built.candidates[0].position, built.candidates[1].position);
         // F4 is a single forward pass, so the whole prompt is the "prefix".
         assert_eq!(built.prefix_len, built.tokens.len());
