@@ -28,11 +28,23 @@ pub struct FileDownloadProgress {
 
 impl FileDownloadProgress {
     pub fn new(repo: impl Into<String>, filename: impl Into<String>) -> Self {
+        let repo = repo.into();
+        let filename = filename.into();
+        let tty = io::stderr().is_terminal();
+        // Diagnostic aid: `HUNCHO_PROGRESS_DEBUG=1 huncho serve ...` prints the
+        // detected rendering mode so a silent hang can be attributed to a
+        // non-TTY stderr or to a download not being attempted at all.
+        if std::env::var_os("HUNCHO_PROGRESS_DEBUG").is_some() {
+            eprintln!(
+                "[huncho-hub] progress {repo}:{filename} mode={} (stderr tty)",
+                if tty { "live-bar" } else { "one-line" }
+            );
+        }
         Self {
-            repo: repo.into(),
-            filename: filename.into(),
+            repo,
+            filename,
             start: Instant::now(),
-            tty: io::stderr().is_terminal(),
+            tty,
             last_print_ms: AtomicU64::new(0),
             done: AtomicBool::new(false),
         }
@@ -41,7 +53,11 @@ impl FileDownloadProgress {
     fn render(&self, bytes: u64, total: u64, rate_bps: Option<f64>) {
         let now_ms = self.start.elapsed().as_millis() as u64;
         let last_ms = self.last_print_ms.load(Ordering::Relaxed);
-        if now_ms.saturating_sub(last_ms) < 150 {
+        // TTY: fast in-place bar (~6 Hz). Non-TTY: a one-line log line ~1 Hz
+        // so a long transfer is never silent even when stderr is not a TTY
+        // (piped logs, capture, or an awkward terminal configuration).
+        let interval_ms = if self.tty { 150 } else { 1000 };
+        if now_ms.saturating_sub(last_ms) < interval_ms {
             return;
         }
         self.last_print_ms.store(now_ms, Ordering::Relaxed);
@@ -51,21 +67,29 @@ impl FileDownloadProgress {
         } else {
             0.0
         };
+        let rate = rate_bps.map(|r| format!(" @ {}", human_rate(r))).unwrap_or_default();
 
         if self.tty {
             // The terminal bar is written to stderr (not stdout) so an
             // interactive `\r` bar is not trapped in line-buffered stdout.
-            let rate = rate_bps.map(|r| format!(" @ {}", human_rate(r))).unwrap_or_default();
             eprint!(
-                "\r  {}/{}  {:>5.1}%{rate}",
+                "\r  {}/{}  {:>5.1}%  {} / {} {rate}",
                 self.filename,
                 self.repo,
-                pct
+                pct,
+                human_bytes(bytes),
+                human_bytes(total)
             );
             let _ = io::stderr().flush();
         } else {
-            // Non-interactive: only surface the headline and the completion.
-            // (Progress deltas are suppressed to keep logs readable.)
+            eprintln!(
+                "  downloading {}:{}  {:>5.1}%  {} / {} {rate}",
+                self.repo,
+                self.filename,
+                pct,
+                human_bytes(bytes),
+                human_bytes(total)
+            );
         }
     }
 
