@@ -8,7 +8,7 @@
 
 use crate::contract::{Question, StateValue};
 use crate::error::{Error, Result};
-use crate::manifest::{Family, ModelManifest};
+use crate::manifest::{F3Config, Family, ModelManifest};
 use crate::tokenizer::Tokenizer;
 
 /// The mask/special-token string used by ModernBERT-based decision models (Laya).
@@ -80,8 +80,11 @@ pub fn default_formatter(family: Family) -> Box<dyn PromptFormatter> {
 
 /// Select the [`PromptFormatter`] pinned by a manifest's prompt contract.
 ///
-/// `laya-v1` selects the Laya option-marker formatter (typed `[MASK]` markers);
-/// all other templates use the family default.
+/// * `laya-v1` selects the Laya option-marker formatter (typed `[MASK]` markers).
+/// * `nimble-v1` selects the F3 candidate-logit formatter (single-field schema
+///   + one-token answer codes via the LM head), using the manifest's `f3`
+///   codebook.
+/// * All other templates use the family default.
 pub fn formatter_for(manifest: &ModelManifest) -> Box<dyn PromptFormatter> {
     let pc = &manifest.prompt_contract;
     match pc.template.as_str() {
@@ -89,6 +92,17 @@ pub fn formatter_for(manifest: &ModelManifest) -> Box<dyn PromptFormatter> {
             max_len: pc.max_len,
             head_max_len: pc.head_max_len,
         }),
+        "nimble-v1" => match &manifest.f3 {
+            Some(config) => Box::new(NimbleFormatter {
+                config: config.clone(),
+            }),
+            // A `nimble-v1` contract without an `f3` codebook cannot build the
+            // candidate codes; fall back to the family default (which errors
+            // informatively on a malformed package via manifest validation).
+            None => Box::new(DefaultFormatter {
+                family: manifest.family,
+            }),
+        },
         _ => Box::new(DefaultFormatter {
             family: manifest.family,
         }),
@@ -825,6 +839,176 @@ fn laya_criterion_opt(v: &Option<serde_json::Value>) -> String {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Nimble (F3 candidate-logit) formatter
+// ---------------------------------------------------------------------------
+
+/// Serialize a JSON value the way the Nimble reference `safe_json` does:
+/// compact JSON with `<` and `>` escaped as `\u003c`/`\u003e` so context can
+/// never inject markup ambiguity into the schema.
+fn nimble_safe_json(value: &serde_json::Value) -> String {
+    let s = serde_json::to_string(value).unwrap_or_default();
+    s.replace('<', "\\u003c").replace('>', "\\u003e")
+}
+
+/// The single field name + description a huncho [`Question`] maps to in the
+/// Nimble schema. Since huncho asks one decision at a time, the schema has a
+/// single field and we request it.
+fn nimble_field(q: &Question) -> (String, String) {
+    (q.type_name().to_string(), instructions_text(q))
+}
+
+/// The schema choices for a question as `(value, label, description)` triples.
+///
+/// * `value` is the JSON value written into the schema (`bool` for Noul).
+/// * `label` is the huncho answer label (`"yes"`/`"no"` for Noul).
+/// * `description` is the per-choice description, when present.
+fn nimble_choice_specs(q: &Question) -> Vec<(serde_json::Value, String, Option<String>)> {
+    match q {
+        Question::Choice { criteria, .. } => criteria
+            .iter()
+            .map(|(label, desc)| {
+                let d = criteria_text(desc);
+                (
+                    serde_json::Value::String(label.clone()),
+                    label.clone(),
+                    if d.is_empty() { None } else { Some(d) },
+                )
+            })
+            .collect(),
+        Question::Score { criteria, .. } => criteria
+            .iter()
+            .enumerate()
+            .map(|(i, level)| {
+                (
+                    serde_json::Value::String(i.to_string()),
+                    i.to_string(),
+                    Some(level_text(level)),
+                )
+            })
+            .collect(),
+        Question::Noul { criteria, .. } => {
+            let no_desc = criteria
+                .as_ref()
+                .and_then(|c| c.no.as_ref())
+                .map(|v| criteria_text(&Some(v.clone())))
+                .filter(|s| !s.is_empty());
+            let yes_desc = criteria
+                .as_ref()
+                .and_then(|c| c.yes.as_ref())
+                .map(|v| criteria_text(&Some(v.clone())))
+                .filter(|s| !s.is_empty());
+            vec![
+                (serde_json::Value::Bool(false), "no".to_string(), no_desc),
+                (serde_json::Value::Bool(true), "yes".to_string(), yes_desc),
+            ]
+        }
+    }
+}
+
+/// The `nimble-v1` F3 candidate-logit formatter.
+///
+/// Builds the classified-fields prompt used by `Bespoke-Nimble` adapters: a
+/// single-field schema rendered as `{"context": ..., "schema": [...]}` plus a
+/// `Requested field:` marker. Candidates are one-token answer codes scored
+/// through the LM head; logits are read at the final position.
+///
+/// Note: the upstream prompt is produced by the Qwen chat template
+/// (`apply_chat_template(..., enable_thinking=False)`). This formatter emits the
+/// same schema/field structure but plain text; byte-identical prompts require a
+/// chat-template-aware tokenizer (a later stage).
+struct NimbleFormatter {
+    config: F3Config,
+}
+
+impl PromptFormatter for NimbleFormatter {
+    fn family(&self) -> Family {
+        Family::F3
+    }
+
+    fn build(
+        &self,
+        state: &StateValue,
+        question: &Question,
+        tokenizer: &dyn Tokenizer,
+    ) -> Result<BuiltPrompt> {
+        let context = state_text(state);
+        let (field_name, description) = nimble_field(question);
+        let specs = nimble_choice_specs(question);
+        if specs.is_empty() {
+            return Err(Error::Request("question has no choices".into()));
+        }
+        let codes = &self.config.candidate_codes;
+        let ids = &self.config.candidate_token_ids;
+        if specs.len() > codes.len() || specs.len() > ids.len() {
+            return Err(Error::Request(format!(
+                "question has {} choices but the candidate codebook declares only {} codes",
+                specs.len(),
+                codes.len()
+            )));
+        }
+
+        let schema_choices: Vec<serde_json::Value> = specs
+            .iter()
+            .enumerate()
+            .map(|(i, (value, _label, desc))| {
+                let mut obj = serde_json::Map::new();
+                obj.insert("code".into(), serde_json::Value::String(codes[i].clone()));
+                obj.insert("value".into(), value.clone());
+                if let Some(d) = desc {
+                    obj.insert("description".into(), serde_json::Value::String(d.clone()));
+                }
+                serde_json::Value::Object(obj)
+            })
+            .collect();
+        let field = serde_json::json!({
+            "name": field_name,
+            "description": description,
+            "choices": schema_choices,
+        });
+        let content = format!(
+            "{}\n\nRequested field: {}",
+            nimble_safe_json(&serde_json::json!({"context": context, "schema": [field]})),
+            field_name
+        );
+        let system = &self.config.system_prompt;
+        let messages_text = if system.is_empty() {
+            content.clone()
+        } else {
+            format!("{system}\n\n{content}")
+        };
+
+        // Encode without extra special tokens so the final token is the answer
+        // generation point whose logits are scored for the one-token codes.
+        let tokens = tokenizer.encode(&messages_text, false)?;
+        let position = tokens.len().saturating_sub(1);
+
+        let candidates = specs
+            .iter()
+            .enumerate()
+            .map(|(i, (_value, label, desc))| Candidate {
+                kind: match question {
+                    Question::Choice { .. } => CandidateKind::Option,
+                    Question::Score { .. } => CandidateKind::Level,
+                    Question::Noul { .. } => CandidateKind::YesNo,
+                },
+                position,
+                code_id: ids[i],
+                label: label.clone(),
+                description: desc.clone(),
+                index: i,
+            })
+            .collect();
+
+        Ok(BuiltPrompt {
+            tokens,
+            candidates,
+            prefix_len: position + 1,
+            qtype: question.qtype_index(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -980,4 +1164,67 @@ mod tests {
         assert_eq!(built.candidates[0].label, "yes");
         assert_eq!(built.candidates[1].label, "no");
     }
+
+    // --- Nimble (F3 candidate-logit) formatter ---
+
+    fn nimble_config() -> F3Config {
+        F3Config {
+            candidate_codes: vec!["A".into(), "B".into(), "C".into()],
+            candidate_token_ids: vec![32, 33, 34],
+            system_prompt: "Classify the context using the supplied schema.".into(),
+            prompt_code_sha256: "deadbeef".into(),
+            max_input_tokens: 8192,
+        }
+    }
+
+    fn nimble_formatter() -> NimbleFormatter {
+        NimbleFormatter {
+            config: nimble_config(),
+        }
+    }
+
+    #[test]
+    fn nimble_builds_choice_all_at_last_position() {
+        let tk = SimpleTokenizer::new(32768);
+        let f = nimble_formatter();
+        let built = f.build(&test_state(), &q_choice(), &tk).unwrap();
+        assert_eq!(built.candidates.len(), 2);
+        assert_eq!(built.candidates[0].label, "returns");
+        assert_eq!(built.candidates[1].label, "billing");
+        // Candidate-logit: all codes share the final generation position.
+        assert_eq!(built.candidates[0].position, built.candidates[1].position);
+        assert_eq!(built.candidates[0].position, built.tokens.len() - 1);
+        // code ids come from the codebook.
+        assert_eq!(built.candidates[0].code_id, 32);
+        assert_eq!(built.candidates[1].code_id, 33);
+    }
+
+    #[test]
+    fn nimble_builds_noul_yes_no() {
+        let tk = SimpleTokenizer::new(32768);
+        let f = nimble_formatter();
+        let built = f.build(&test_state(), &q_noul(), &tk).unwrap();
+        assert_eq!(built.candidates.len(), 2);
+        // A -> no (false), B -> yes (true).
+        assert_eq!(built.candidates[0].label, "no");
+        assert_eq!(built.candidates[1].label, "yes");
+        assert_eq!(built.candidates[0].code_id, 32);
+        assert_eq!(built.candidates[1].code_id, 33);
+        assert_eq!(built.candidates[0].position, built.candidates[1].position);
+    }
+
+    #[test]
+    fn nimble_builds_score_levels_with_legend() {
+        let tk = SimpleTokenizer::new(32768);
+        let f = nimble_formatter();
+        let built = f.build(&test_state(), &q_score(), &tk).unwrap();
+        assert_eq!(built.candidates.len(), 3);
+        assert_eq!(built.candidates[0].label, "0");
+        assert_eq!(built.candidates[2].label, "2");
+        assert!(built.candidates[0].description.is_some());
+        for c in &built.candidates {
+            assert_eq!(c.position, built.tokens.len() - 1);
+        }
+    }
 }
+

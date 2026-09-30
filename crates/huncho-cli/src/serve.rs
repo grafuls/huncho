@@ -110,7 +110,9 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
     }
 
     for model in &args.model {
-        tracing::info!("resolving model reference `{model}`");
+        tracing::info!(
+            "loading model `{model}` (fetching base weights if needed, then materializing; first load can take a couple of minutes)..."
+        );
         let engine = engine_from_ref(
             model,
             backend_id,

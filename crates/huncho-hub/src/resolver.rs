@@ -10,9 +10,9 @@
 use std::path::{Path, PathBuf};
 
 use huncho_core::manifest::{
-    self, ArtifactRef, Backbone, BackboneSource, BackendId, CalibrationConfig, CalibrationEntry,
-    CalibrationStatus, ConfidenceDef, Family, HeadConfig, ModelCapabilities, ModelManifest,
-    PromptContract,
+    self, Adapter, ArtifactRef, Backbone, BackboneSource, BackendId, CalibrationConfig,
+    CalibrationEntry, CalibrationStatus, ConfidenceDef, F3Config, Family, HeadConfig,
+    ModelCapabilities, ModelManifest, PromptContract,
 };
 
 use crate::error::{HubError, Result};
@@ -266,9 +266,27 @@ fn synthesize_checkpoint(
             "no `huncho-model.json` in `{repo}`; only the `candle` backend can be synthesized from a raw checkpoint"
         )));
     }
+    // Base models are large; the Qwen3.5+LoRA (F3) path can build in fp32/fp16/
+    // bf16. The ModernBERT (F1) candle backend always builds in fp32, so the
+    // fp32-only restriction is enforced below only for that path.
+    if !matches!(dtype, "fp32" | "fp16" | "f16" | "bf16" | "bfloat16") {
+        return Err(HubError::Package(format!(
+            "unsupported dtype `{dtype}` for `{repo}` (expected one of `fp32`, `fp16`, `bf16`)"
+        )));
+    }
+
+    // Probe for the F3 (Nimble) PEFT signature before falling through to the
+    // ModernBERT synthesis. Bespoke-Nimble repos carry an `adapter_config.json`
+    // (a LoRA adapter over a base model) but no `config.json`, so a ModernBERT
+    // probe would 404 on both candidates and produce a misleading error.
+    if let Some(adapter_path) = probe_f3(repo, revision, opts)? {
+        return synthesize_f3(repo, revision, opts, &adapter_path);
+    }
+
+    // The ModernBERT (F1) candle backend always builds in fp32.
     if dtype != "fp32" {
         return Err(HubError::Package(format!(
-            "synthesized `{repo}` only supports dtype `fp32` (requested `{dtype}`)"
+            "synthesized `{repo}` (ModernBERT) only supports dtype `fp32` (requested `{dtype}`)"
         )));
     }
 
@@ -400,6 +418,354 @@ fn download_first(
     }
 }
 
+/// Read a JSON file from a downloaded snapshot path.
+fn read_json(path: &Path) -> Result<serde_json::Value> {
+    let bytes = std::fs::read(path)?;
+    Ok(serde_json::from_slice(&bytes)?)
+}
+
+/// Probe a raw checkpoint repo for the F3 (Nimble) PEFT signature.
+///
+/// Returns `Ok(Some(adapter_config_path))` when `adapter_config.json` is
+/// present, `Ok(None)` when the file is genuinely missing (404), and propagates
+/// any other (e.g. network) error.
+fn probe_f3(
+    repo: &str,
+    revision: Option<&str>,
+    opts: &ResolveOptions,
+) -> Result<Option<PathBuf>> {
+    match http::download_file(repo, "adapter_config.json", revision.map(|s| s.to_string()), opts) {
+        Ok(path) => Ok(Some(path)),
+        Err(HubError::NotFound { .. }) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// Download the base-language-model weights for an F3 (Nimble) adapter into the
+/// base repo's snapshot directory (pinned to `rev`), so the Qwen3.5 candle
+/// backend can build the model at serve time.
+///
+/// Prefers the sharded layout via `model.safetensors.index.json`, falling back
+/// to a single `model.safetensors`. Reuses the snapshot path as a cache, so
+/// already-downloaded shards are skipped. A repo with no reachable weights is
+/// not an error here (the backend reports a clear error later); genuine
+/// transport failures are surfaced.
+fn download_f3_base_weights(repo: &str, rev: &str, opts: &ResolveOptions) -> Result<()> {
+    let rev_opt = Some(rev.to_string());
+
+    let shards = match http::download_file(repo, "model.safetensors.index.json", rev_opt.clone(), opts)
+    {
+        Ok(index_path) => {
+            let bytes = std::fs::read(&index_path)
+                .map_err(|e| HubError::Package(format!("reading `{}`: {e}", index_path.display())))?;
+            let idx: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| {
+                HubError::Package(format!(
+                    "parsing `model.safetensors.index.json` for `{repo}`: {e}"
+                ))
+            })?;
+            let mut set = std::collections::BTreeSet::new();
+            if let Some(wm) = idx.get("weight_map").and_then(|v| v.as_object()) {
+                for p in wm.values().filter_map(|v| v.as_str()) {
+                    if p.ends_with(".safetensors") {
+                        set.insert(p.to_string());
+                    }
+                }
+            }
+            set.into_iter().collect::<Vec<_>>()
+        }
+        Err(HubError::NotFound { .. }) => Vec::new(),
+        Err(e) => return Err(e),
+    };
+
+    if shards.is_empty() {
+        // Single-file model, or no weights at all.
+        match http::download_file(repo, "model.safetensors", rev_opt, opts) {
+            Ok(_) => {}
+            Err(HubError::NotFound { .. }) => {
+                log::warn!(
+                    "no base weights found for F3 fleet `{repo}`; the Qwen3.5 candle backend \
+                     will fail at serve time until the base weights are available"
+                );
+            }
+            Err(e) => return Err(e),
+        }
+        return Ok(());
+    }
+
+    for shard in &shards {
+        http::download_file(repo, shard, rev_opt.clone(), opts)?;
+    }
+    Ok(())
+}
+
+/// Synthesize an F3 (Nimble) `ModelManifest` from a Bespoke-Nimble LoRA repo.
+///
+/// F3 packages are PEFT adapters over a base language model (e.g. a
+/// `Qwen/Qwen3.5-*` backbone). The adapter repo carries an `adapter_config.json`
+/// (LoRA rank), `schema_config.json` / `serving_config.json` (the candidate
+/// codebook + system prompt), and `temperature_config.json` (calibration), but
+/// no `config.json`. The base model reference and the architecture dimensions
+/// are read from the base model's `config.json`, which is fetched (best-effort).
+fn synthesize_f3(
+    repo: &str,
+    revision: Option<&str>,
+    opts: &ResolveOptions,
+    adapter_path: &Path,
+) -> Result<ResolvedPackage> {
+    let rev = revision.unwrap_or("main");
+    let package_root = snapshot_root(adapter_path).ok_or_else(|| {
+        HubError::Package("could not locate the HF snapshot directory for the adapter".into())
+    })?;
+    let commit = package_root
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    let schema_path = download_first(repo, revision, opts, &["schema_config.json"])?;
+    let serving_path = download_first(repo, revision, opts, &["serving_config.json"])?;
+    let temp_path = download_first(repo, revision, opts, &["temperature_config.json"]).ok();
+    let tokenizer_path = download_first(repo, revision, opts, &["tokenizer.json"])
+        .ok()
+        .and_then(|p| {
+            p.strip_prefix(&package_root)
+                .ok()
+                .map(|s| s.to_string_lossy().replace('\\', "/"))
+        });
+
+    let schema = read_json(&schema_path)?;
+    let serving = read_json(&serving_path)?;
+    let temp = match &temp_path {
+        Some(p) => read_json(p)?,
+        None => serde_json::Value::Null,
+    };
+    let adapter = read_json(adapter_path)?;
+
+    let base_repo = schema
+        .get("model")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Qwen/Qwen3.5-9B")
+        .to_string();
+    let base_rev = schema
+        .get("revision")
+        .and_then(|v| v.as_str())
+        .unwrap_or("main")
+        .to_string();
+
+    // The adapter repo has no `config.json`, so fetch the base model's tiny
+    // `config.json` to derive the architecture dimensions. The resolved commit
+    // (the snapshot dir name) is captured so base weights are downloaded and
+    // later located deterministically at serve time.
+    let base_config_path =
+        http::download_file(&base_repo, "config.json", Some(base_rev.clone()), opts).ok();
+    let base_config = base_config_path
+        .as_deref()
+        .and_then(|p| std::fs::read(p).ok())
+        .and_then(|b| serde_json::from_slice(&b).ok());
+    let base_pin = base_config_path
+        .as_deref()
+        .and_then(snapshot_root)
+        .and_then(|r| r.file_name().map(|s| s.to_string_lossy().to_string()))
+        .unwrap_or_else(|| base_rev.clone());
+
+    // Auto-fetch the (large) base weights into the base repo's snapshot dir so
+    // the Qwen3.5 candle backend can build the model at serve time. Only when
+    // the base config was reachable (the repo exists).
+    if base_config.is_some() {
+        download_f3_base_weights(&base_repo, &base_pin, opts)?;
+    }
+
+    let manifest = build_f3_manifest(
+        &schema,
+        &serving,
+        &temp,
+        &adapter,
+        base_config.as_ref(),
+        repo,
+        if commit.is_empty() { rev } else { &commit },
+        &base_repo,
+        &base_pin,
+        tokenizer_path.as_deref(),
+    )?;
+
+    // Mirror the base `config.json` next to the adapter as a fallback. The
+    // Qwen3.5 candle backend locates the base weights/config via the manifest's
+    // `backbone.source` (the base repo snapshot), so this copy is only used when
+    // that base-snapshot resolution cannot be derived (e.g. a local manifest).
+    if let Some(cfg) = &base_config {
+        if let Ok(bytes) = serde_json::to_vec_pretty(cfg) {
+            let _ = std::fs::write(package_root.join("config.json"), bytes);
+        }
+    }
+
+    // Persist the synthesized manifest in the resolved snapshot directory so a
+    // later `serve --model` is deterministic and offline-resolvable.
+    let manifest_path = package_root.join("huncho-model.json");
+    std::fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest)?)?;
+
+    // Pin artifact downloads to the resolved snapshot commit.
+    let pinned: Option<String> = if commit.is_empty() {
+        revision.map(|s| s.to_string())
+    } else {
+        Some(commit.clone())
+    };
+    for file in required_files(&manifest, Some(BackendId::Candle), "fp32", false)? {
+        http::download_file(repo, &file, pinned.clone(), opts)?;
+    }
+
+    Ok(ResolvedPackage { manifest_path })
+}
+
+/// Build an F3 (Nimble) `ModelManifest` from the adapter repo's service configs.
+/// Pure: performs no I/O, so it is unit-testable against sampled configs.
+#[allow(clippy::too_many_arguments)]
+fn build_f3_manifest(
+    schema: &serde_json::Value,
+    serving: &serde_json::Value,
+    temp: &serde_json::Value,
+    adapter: &serde_json::Value,
+    base_config: Option<&serde_json::Value>,
+    repo: &str,
+    adapter_revision: &str,
+    base_repo: &str,
+    base_rev: &str,
+    tokenizer_path: Option<&str>,
+) -> Result<ModelManifest> {
+    let name = repo.rsplit('/').next().unwrap_or("model").to_string();
+
+    let hidden_size = base_config
+        .and_then(|c| c.get("hidden_size").and_then(|v| v.as_u64()))
+        .unwrap_or(4096) as usize;
+    let max_context = schema
+        .get("max_length")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(8192) as usize;
+
+    let system_prompt = schema
+        .get("system_prompt")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let prompt_code_sha256 = schema
+        .get("prompt_code_sha256")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let max_length = max_context;
+    let lora_rank = schema
+        .get("lora_rank")
+        .and_then(|v| v.as_u64())
+        .or_else(|| adapter.get("r").and_then(|v| v.as_u64()))
+        .unwrap_or(16) as usize;
+
+    let max_choices = serving
+        .get("max_choices")
+        .and_then(|v| v.as_u64())
+        .or_else(|| schema.get("max_choices").and_then(|v| v.as_u64()))
+        .unwrap_or(255) as usize;
+
+    let candidate_codes: Vec<String> = serving
+        .get("candidate_codes")
+        .and_then(|v| v.as_array())
+        .or_else(|| schema.get("candidate_codes").and_then(|v| v.as_array()))
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let candidate_token_ids: Vec<u32> = serving
+        .get("candidate_token_ids")
+        .and_then(|v| v.as_array())
+        .or_else(|| schema.get("candidate_token_ids").and_then(|v| v.as_array()))
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_u64().map(|n| n as u32))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let temperature = temp
+        .get("temperature")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(1.0) as f32;
+
+    let effective_prompt_hash = if prompt_code_sha256.is_empty() {
+        fnv1a("nimble-v1", repo)
+    } else {
+        prompt_code_sha256.clone()
+    };
+
+    let mut artifacts = std::collections::BTreeMap::new();
+    artifacts.insert(
+        BackendId::Candle,
+        vec![ArtifactRef {
+            path: "adapter_model.safetensors".to_string(),
+            dtype: "fp32".to_string(),
+            quantization: None,
+        }],
+    );
+
+    let manifest = ModelManifest {
+        schema_version: manifest::MANIFEST_SCHEMA_VERSION.into(),
+        name,
+        family: Family::F3,
+        backbone: Backbone {
+            source: BackboneSource::Hf {
+                repo: base_repo.to_string(),
+                revision: base_rev.to_string(),
+            },
+            artifacts,
+            hidden_size,
+            max_context,
+            // The Qwen tokenizer (for the base model) ships in the adapter repo.
+            tokenizer: tokenizer_path.map(|s| s.to_string()),
+        },
+        adapter: Some(Adapter {
+            repo: repo.to_string(),
+            revision: adapter_revision.to_string(),
+            rank: lora_rank,
+        }),
+        f3: Some(F3Config {
+            candidate_codes,
+            candidate_token_ids,
+            system_prompt,
+            prompt_code_sha256: effective_prompt_hash.clone(),
+            max_input_tokens: max_length,
+        }),
+        head: HeadConfig {
+            kind: manifest::family_kind(Family::F3),
+            weights: String::new(),
+            width: 1,
+            pointer_offset: None,
+        },
+        prompt_contract: PromptContract {
+            template: "nimble-v1".to_string(),
+            option_marker_tokens: vec![],
+            state_budget: max_length,
+            head_budget: 0,
+            max_options: max_choices,
+            contract_hash: effective_prompt_hash,
+            max_len: max_length,
+            head_max_len: 0,
+        },
+        calibration: CalibrationConfig {
+            default: CalibrationEntry {
+                temperature,
+                per_type_temperatures: None,
+                temperature_by_options: None,
+                confidence: ConfidenceDef::Peak,
+                status: CalibrationStatus::Pending,
+            },
+            entries: std::collections::BTreeMap::new(),
+            eval_set_hash: None,
+        },
+        reference: None,
+        capabilities: ModelCapabilities::default(),
+    };
+    manifest.validate().map_err(|e| HubError::Package(e.to_string()))?;
+    Ok(manifest)
+}
+
 /// Build an F1 (ModernBERT) `ModelManifest` from a raw checkpoint config.
 /// Pure: performs no I/O, so it is unit-testable against a sampled config.
 fn build_synth_manifest(
@@ -468,6 +834,7 @@ fn build_synth_manifest(
             tokenizer: tokenizer_path.map(|s| s.to_string()),
         },
         adapter: None,
+        f3: None,
         head: HeadConfig {
             kind: manifest::family_kind(Family::F1),
             // The decision-head tensors live inside `model.safetensors`; the
@@ -759,6 +1126,121 @@ mod tests {
         let config = serde_json::json!({ "model_type": "qwen3", "hidden_size": 4096 });
         let err = build_synth_manifest(&config, "org/qwen", "main", None, None).unwrap_err();
         assert!(matches!(err, HubError::Package(_)));
+    }
+
+    #[test]
+    fn synthesize_f3_manifest() {
+        let schema = serde_json::json!({
+            "model": "Qwen/Qwen3.5-9B",
+            "revision": "c202236235762e1c871ad0ccb60c8ee5ba337b9a",
+            "system_prompt": "Classify using the schema; answer with one letter.",
+            "prompt_code_sha256": "deadbeef",
+            "max_length": 8192,
+            "lora_rank": 16,
+            "max_choices": 255
+        });
+        let serving = serde_json::json!({
+            "max_choices": 255,
+            "candidate_codes": ["A", "B", "C"],
+            "candidate_token_ids": [1001, 1002, 1003]
+        });
+        let temp = serde_json::json!({"temperature": 1.0});
+        let adapter = serde_json::json!({"peft_type": "LORA", "r": 16, "lora_alpha": 32});
+        let base_config =
+            serde_json::json!({"model_type": "qwen3", "hidden_size": 4096, "max_position_embeddings": 262144});
+
+        let m = build_f3_manifest(
+            &schema, &serving, &temp, &adapter, Some(&base_config),
+            "bespokelabs/Bespoke-Nimble-9B", "c2022",
+            "Qwen/Qwen3.5-9B", "c202236235762e1c871ad0ccb60c8ee5ba337b9a",
+            Some("tokenizer.json"),
+        )
+        .unwrap();
+
+        assert_eq!(m.family, Family::F3);
+        assert_eq!(m.name, "Bespoke-Nimble-9B");
+        assert_eq!(m.backbone.hidden_size, 4096);
+        assert_eq!(m.backbone.max_context, 8192);
+        assert_eq!(m.backbone.tokenizer.as_deref(), Some("tokenizer.json"));
+        assert_eq!(m.head.kind, manifest::family_kind(Family::F3));
+
+        // Base model reference + adapter bookkeeping.
+        match &m.backbone.source {
+            BackboneSource::Hf { repo, revision } => {
+                assert_eq!(repo, "Qwen/Qwen3.5-9B");
+                assert_eq!(revision, "c202236235762e1c871ad0ccb60c8ee5ba337b9a");
+            }
+            other => panic!("expected an Hf base source, got {other:?}"),
+        }
+        let adapter = m.adapter.as_ref().unwrap();
+        assert_eq!(adapter.repo, "bespokelabs/Bespoke-Nimble-9B");
+        assert_eq!(adapter.revision, "c2022");
+        assert_eq!(adapter.rank, 16);
+
+        // F3 codebook + system prompt.
+        let f3 = m.f3.as_ref().unwrap();
+        assert_eq!(f3.candidate_codes, vec!["A", "B", "C"]);
+        assert_eq!(f3.candidate_token_ids, vec![1001, 1002, 1003]);
+        assert_eq!(f3.max_input_tokens, 8192);
+        assert_eq!(f3.prompt_code_sha256, "deadbeef");
+
+        assert_eq!(m.prompt_contract.template, "nimble-v1");
+        assert_eq!(m.prompt_contract.contract_hash, "deadbeef");
+        assert_eq!(m.calibration.default.temperature, 1.0);
+
+        // The candle artifact is the LoRA adapter; the tokenizer is bundled.
+        let files = required_files(&m, Some(BackendId::Candle), "fp32", false).unwrap();
+        assert!(files.contains(&"adapter_model.safetensors".to_string()));
+        assert!(files.contains(&"tokenizer.json".to_string()));
+    }
+
+    #[test]
+    fn synthesize_f3_rejects_mismatched_codebook() {
+        let schema = serde_json::json!({
+            "model": "Qwen/Qwen3.5-9B", "revision": "c2022",
+            "system_prompt": "s", "prompt_code_sha256": "h", "max_length": 4096
+        });
+        let serving = serde_json::json!({
+            "max_choices": 3,
+            "candidate_codes": ["A", "B"],
+            "candidate_token_ids": [1001, 1002, 1003]
+        });
+        let temp = serde_json::json!({});
+        let adapter = serde_json::json!({"r": 16});
+
+        let err = build_f3_manifest(
+            &schema, &serving, &temp, &adapter, None,
+            "bespokelabs/Bespoke-Nimble-9B", "c2022",
+            "Qwen/Qwen3.5-9B", "c2022", None,
+        )
+        .unwrap_err();
+        assert!(matches!(err, HubError::Package(_)));
+    }
+
+    #[test]
+    fn synthesize_f3_defaults_temperature_and_contract_hash() {
+        let schema = serde_json::json!({
+            "model": "Qwen/Qwen3.5-9B", "revision": "c2022",
+            "system_prompt": "s", "max_length": 4096
+        });
+        let serving = serde_json::json!({
+            "max_choices": 2,
+            "candidate_codes": ["A", "B"],
+            "candidate_token_ids": [1001, 1002]
+        });
+        let temp = serde_json::json!({});
+        let adapter = serde_json::json!({"r": 16});
+
+        let m = build_f3_manifest(
+            &schema, &serving, &temp, &adapter, None,
+            "bespokelabs/Bespoke-Nimble-9B", "c2022",
+            "Qwen/Qwen3.5-9B", "c2022", None,
+        )
+        .unwrap();
+        // No temperature config -> T = 1.0; no prompt hash -> FNV fallback.
+        assert_eq!(m.calibration.default.temperature, 1.0);
+        assert!(!m.prompt_contract.contract_hash.is_empty());
+        assert_eq!(m.f3.as_ref().unwrap().candidate_codes, vec!["A", "B"]);
     }
 
     #[test]

@@ -209,6 +209,27 @@ pub struct Adapter {
     pub rank: usize,
 }
 
+/// F3 candidate-logit configuration (Nimble family).
+///
+/// F3 (candidate-logit) models — e.g. the `Bespoke-Nimble` adapters — classify
+/// a requested schema field by scoring one-token answer codes through the LM
+/// head. This section carries the codebook the model was trained with, the
+/// system prompt, and the hash of the reference prompt builder so prompts stay
+/// aligned with the upstream `prompt_code_sha256`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct F3Config {
+    /// Candidate answer codes (e.g. `"A"`, `"B"`, ...) in serving order.
+    pub candidate_codes: Vec<String>,
+    /// Token ids corresponding to each candidate code.
+    pub candidate_token_ids: Vec<u32>,
+    /// The system prompt prepended to the classified-fields prompt.
+    pub system_prompt: String,
+    /// Hash of the reference prompt-building source (`prompt_code_sha256`).
+    pub prompt_code_sha256: String,
+    /// Maximum input tokens the prompt may occupy.
+    pub max_input_tokens: usize,
+}
+
 /// The head section of the manifest.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HeadConfig {
@@ -346,6 +367,10 @@ pub struct ModelManifest {
     pub backbone: Backbone,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adapter: Option<Adapter>,
+    /// F3 candidate-logit (Nimble) codebook/system-prompt config. Present only
+    /// for [`Family::F3`] packages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub f3: Option<F3Config>,
     pub head: HeadConfig,
     pub prompt_contract: PromptContract,
     pub calibration: CalibrationConfig,
@@ -391,6 +416,34 @@ impl ModelManifest {
             return Err(Error::Package(
                 "prompt_contract.contract_hash must be non-empty".into(),
             ));
+        }
+        if self.family == Family::F3 && self.f3.is_none() {
+            return Err(Error::Package(
+                "family F3 requires an `f3` candidate-logit configuration".into(),
+            ));
+        }
+        if let Some(f3) = &self.f3 {
+            if self.family != Family::F3 {
+                return Err(Error::Package(format!(
+                    "family {} cannot declare an `f3` configuration",
+                    self.family
+                )));
+            }
+            if f3.candidate_codes.is_empty() {
+                return Err(Error::Package("f3.candidate_codes must be non-empty".into()));
+            }
+            if f3.candidate_codes.len() != f3.candidate_token_ids.len() {
+                return Err(Error::Package(format!(
+                    "f3 candidate_codes ({}) must match candidate_token_ids ({})",
+                    f3.candidate_codes.len(),
+                    f3.candidate_token_ids.len()
+                )));
+            }
+            if f3.prompt_code_sha256.trim().is_empty() {
+                return Err(Error::Package(
+                    "f3.prompt_code_sha256 must be non-empty".into(),
+                ));
+            }
         }
         if self.calibration.default.temperature <= 0.0 {
             return Err(Error::Package(

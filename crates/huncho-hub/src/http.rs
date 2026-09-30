@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use reqwest::blocking::{Client, Response};
-use reqwest::header::LOCATION;
+use reqwest::header::{CONTENT_RANGE, LOCATION, RANGE};
 use reqwest::redirect::Policy;
 use reqwest::StatusCode;
 
@@ -117,29 +117,65 @@ fn blocking_download(
         return Ok(dest);
     }
 
-    let (mut resp, total) = if status.is_redirection() {
+    let tmp = temp_path(&dest);
+    // Resume support: a big base checkpoint can take tens of minutes. If a
+    // previous attempt left a partial `.incomplete` temp file, request the
+    // remaining bytes via a `Range` header instead of re-downloading from zero.
+    let existing = tmp
+        .metadata()
+        .ok()
+        .map(|m| m.len())
+        .filter(|&n| n > 0)
+        .unwrap_or(0);
+
+    // Follow the Hub redirect (absolute CDN for xet-backed 302, or a relative
+    // `/api/resolve-cache/...` for ordinary 307) to the final content URL.
+    let content_url = if status.is_redirection() {
         let loc = headers
             .get(LOCATION)
             .and_then(|v| v.to_str().ok())
             .ok_or_else(|| {
                 HubError::Hf(format!("redirect without a Location for `{filename}` in `{repo}`"))
             })?;
-        // The Hub returns an absolute CDN URL for xet-backed files (302) but a
-        // *relative* `/api/resolve-cache/...` path for ordinary files (307).
-        // Resolve it against the original URL so both forms work.
-        let target = resolve_redirect(&url, loc)?;
-        let r = send_get(&client, target.as_str(), token.as_deref())?;
-        if !r.status().is_success() {
-            return Err(HubError::Hf(format!(
-                "fetching `{filename}` from `{repo}`: HTTP {}",
-                r.status()
-            )));
-        }
-        let t = r.content_length().or(linked_size).unwrap_or(0);
-        (r, t)
+        resolve_redirect(&url, loc)?
     } else {
-        let t = resp0.content_length().or(linked_size).unwrap_or(0);
-        (resp0, t)
+        url.clone()
+    };
+
+    let mut req = client.get(&content_url);
+    if let Some(t) = token.as_deref() {
+        req = req.bearer_auth(t);
+    }
+    if existing > 0 {
+        req = req.header(RANGE, format!("bytes={existing}-"));
+    }
+    let content_resp = req
+        .send()
+        .map_err(|e| HubError::Hf(format!("requesting `{content_url}`: {e}")))?;
+
+    let (mut resp, total, start_from) = match content_resp.status() {
+        StatusCode::PARTIAL_CONTENT => {
+            // 206: the server honored the `Range`. The full size is in the
+            // `Content-Range: bytes start-end/total` header.
+            let total = content_resp
+                .headers()
+                .get(CONTENT_RANGE)
+                .and_then(|v| v.to_str().ok())
+                .and_then(parse_content_range_total)
+                .or_else(|| content_resp.content_length())
+                .unwrap_or(0);
+            (content_resp, total, existing)
+        }
+        StatusCode::OK => {
+            // 200: the server rejected the `Range`; re-download from scratch.
+            let total = content_resp.content_length().or(linked_size).unwrap_or(0);
+            (content_resp, total, 0)
+        }
+        s => {
+            return Err(HubError::Hf(format!(
+                "fetching `{filename}` from `{repo}`: HTTP {s}"
+            )))
+        }
     };
 
     let parent = dest.parent().unwrap_or_else(|| Path::new("."));
@@ -152,11 +188,14 @@ fn blocking_download(
         p.begin(total);
     }
 
-    let tmp = temp_path(&dest);
     let start = Instant::now();
-    let mut bytes: u64 = 0;
+    let mut bytes = start_from;
     {
-        let mut file = std::fs::File::create(&tmp)?;
+        let mut file = if start_from > 0 {
+            std::fs::OpenOptions::new().append(true).open(&tmp)?
+        } else {
+            std::fs::File::create(&tmp)?
+        };
         let mut buffer = vec![0u8; CHUNK];
         loop {
             let n = resp.read(&mut buffer)?;
@@ -220,6 +259,11 @@ fn commit(headers: &reqwest::header::HeaderMap, revision: Option<&str>) -> Optio
         .map(|s| s.trim().to_string())
         .filter(|s| is_commit_hash(s))
         .or_else(|| revision.filter(|s| is_commit_hash(s)).map(String::from))
+}
+
+/// Parse the total from a `Content-Range: bytes <start>-<end>/<total>` header.
+fn parse_content_range_total(value: &str) -> Option<u64> {
+    value.rsplit('/').next()?.trim().parse::<u64>().ok()
 }
 
 fn send_get(client: &Client, url: &str, token: Option<&str>) -> Result<Response> {
@@ -317,6 +361,14 @@ mod tests {
     #[test]
     fn repo_folder_replaces_slash() {
         assert_eq!(repo_folder("org/repo"), "models--org--repo");
+    }
+
+    #[test]
+    fn content_range_total_is_parsed() {
+        assert_eq!(parse_content_range_total("bytes 0-49999999/19306216416"), Some(19306216416));
+        assert_eq!(parse_content_range_total("bytes 0-9/10"), Some(10));
+        assert_eq!(parse_content_range_total("bytes 0-9/*"), None);
+        assert_eq!(parse_content_range_total("not-a-range"), None);
     }
 
     #[test]

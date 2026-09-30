@@ -38,6 +38,7 @@ fn mock_engine(name: &str) -> Engine {
             tokenizer: None,
         },
         adapter: None,
+        f3: None,
         head: HeadConfig {
             kind: HeadKind::OptionMarker,
             weights: "head.safetensors".into(),

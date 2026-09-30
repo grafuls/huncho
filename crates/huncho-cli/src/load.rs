@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use huncho_backend::MockBackend;
 #[cfg(feature = "candle")]
 use huncho_backend::CandleBackend;
+#[cfg(feature = "candle")]
+use huncho_backend::Qwen3_5Backend;
 #[cfg(feature = "onnx")]
 use huncho_backend::OnnxBackend;
 use huncho_core::backend::Backend;
@@ -106,6 +108,7 @@ pub fn mock_manifest(name: &str, family: Family, _dtype: &str, temperature: f32)
             tokenizer: None,
         },
         adapter: None,
+        f3: None,
         head: HeadConfig {
             kind: head_kind,
             weights: "mock-head.safetensors".into(),
@@ -147,9 +150,20 @@ pub fn engine_from_manifest(
     dtype: Option<&str>,
 ) -> Result<Engine> {
     let manifest = ModelManifest::load(path.as_ref())?;
+    // F3 (Qwen3.5+LoRA) backbones are large (9B+); default them to fp16 so a
+    // plain `serve --backend candle` does not try to materialize a multi-GB
+    // checkpoint in fp32. Candle's CPU matmul supports fp16 (but not bf16), so
+    // fp16 is the right reduced-precision default here. Explicit `--dtype`
+    // always wins.
     let dtype = dtype
         .map(|s| s.to_string())
-        .unwrap_or_else(|| "fp32".to_string());
+        .unwrap_or_else(|| {
+            if manifest.family == Family::F3 {
+                "fp16".to_string()
+            } else {
+                "fp32".to_string()
+            }
+        });
 
     // Artifacts and the tokenizer are declared relative to the manifest's
     // directory, not the manifest file itself.
@@ -176,6 +190,30 @@ fn load_backend(
 
 #[cfg(feature = "candle")]
 fn load_candle(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<dyn Backend>> {
+    // F3 (Bespoke-Nimble) packages are candidate-logit PEFT adapters over a
+    // Qwen3.5 hybrid backbone. Build the from-scratch Qwen3.5+LoRA candle
+    // backend from the package directory (which holds `config.json`, the
+    // `adapter_model.safetensors`/`adapter_config.json`, and the base weights
+    // when the user has fetched them).
+    if manifest.family == Family::F3 {
+        // The adapter lives in the package dir; the (large) base weights are
+        // downloaded into the base repo's own snapshot dir (same cache).
+        let adapter_dir = dir;
+        let base_dir = f3_base_dir(manifest, adapter_dir);
+        let backend = Qwen3_5Backend::load(
+            &base_dir,
+            Some(adapter_dir),
+            manifest.backbone.max_context,
+            dtype.to_string(),
+        )
+        .map_err(|e| {
+            Error::Package(format!(
+                "failed to load the F3 (Qwen3.5+LoRA) candle backend for `{}`: {e}",
+                manifest.name
+            ))
+        })?;
+        return Ok(Box::new(backend) as Box<dyn Backend>);
+    }
     let artifact = manifest
         .find_artifact(BackendId::Candle, dtype)
         .ok_or_else(|| Error::Package(format!("no candle artifact for dtype `{dtype}`")))?;
@@ -190,6 +228,32 @@ fn load_candle(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<
     )
     .map_err(|e| Error::Package(format!("failed to load candle backend: {e}")))?;
     Ok(Box::new(backend) as Box<dyn Backend>)
+}
+
+/// Locate the base-language-model directory for an F3 manifest from the
+/// adapter's resolved snapshot dir.
+///
+/// The adapter `dir` lives at `<cache>/models--<adapter>/snapshots/<commit>`.
+/// The base weights are downloaded into the base repo's own snapshot dir in the
+/// same cache, so we walk up to the cache root and rebuild the base path from
+/// `backbone.source`. Falls back to `adapter_dir` when the layout does not match
+/// the HF cache (e.g. a locally-authored manifest).
+fn f3_base_dir(manifest: &ModelManifest, adapter_dir: &Path) -> PathBuf {
+    let BackboneSource::Hf { repo, revision } = &manifest.backbone.source else {
+        return adapter_dir.to_path_buf();
+    };
+    let Some(cache) = adapter_dir
+        .parent()
+        .and_then(|p| p.parent())
+        .and_then(|p| p.parent())
+    else {
+        return adapter_dir.to_path_buf();
+    };
+    let revision = if revision.is_empty() { "main" } else { revision };
+    cache
+        .join(format!("models--{}", repo.replace('/', "--")))
+        .join("snapshots")
+        .join(revision)
 }
 
 #[cfg(not(feature = "candle"))]
@@ -349,6 +413,56 @@ mod candle_tests {
 
         let out = backend.forward(ForwardInput::new(vec![1, 2, 3, 4], vec![1])).unwrap();
         assert_eq!(out.values().shape(), &[1, 8]);
+    }
+
+    #[test]
+    fn load_candle_f3_routes_to_qwen35_backend() {
+        // An F3 (Bespoke-Nimble) package must route to the Qwen3.5+LoRA candle
+        // backend (not be misinterpreted as ModernBERT). With no base weights in
+        // the directory it must surface a clear package error rather than
+        // silently loading the LoRA adapter as ModernBERT.
+        let manifest: ModelManifest = serde_json::from_value(serde_json::json!({
+            "schema_version": "1.0",
+            "name": "nimble",
+            "family": "F3",
+            "backbone": {
+                "source": { "kind": "hf", "repo": "Qwen/Qwen3.5-9B", "revision": "c2022" },
+                "artifacts": { "candle": [{ "path": "adapter_model.safetensors", "dtype": "fp32", "quantization": null }] },
+                "hidden_size": 4096,
+                "max_context": 8192,
+                "tokenizer": null
+            },
+            "f3": {
+                "candidate_codes": ["A", "B"],
+                "candidate_token_ids": [1001, 1002],
+                "system_prompt": "Classify.",
+                "prompt_code_sha256": "deadbeef",
+                "max_input_tokens": 8192
+            },
+            "head": { "kind": "candidate-logit", "weights": "", "width": 1, "pointer_offset": null },
+            "prompt_contract": {
+                "template": "nimble-v1", "option_marker_tokens": [], "state_budget": 8192,
+                "head_budget": 0, "max_options": 255, "contract_hash": "deadbeef",
+                "max_len": 8192, "head_max_len": 0
+            },
+            "calibration": { "default": { "temperature": 1.0, "confidence": "peak" } }
+        }))
+        .unwrap();
+
+        let dir = tempdir().unwrap();
+        let err = match load_candle(&manifest, "fp32", dir.path()) {
+            Ok(_) => panic!("expected an F3 load error without base weights"),
+            Err(e) => e,
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.contains("F3"),
+            "expected the error to reference the F3 backend, got: {msg}"
+        );
+        assert!(
+            !msg.contains("ModernBERT"),
+            "F3 adapters must not be interpreted as ModernBERT: {msg}"
+        );
     }
 
     #[test]

@@ -120,6 +120,7 @@ pub fn build_manifest(args: &ConvertArgs) -> anyhow::Result<ModelManifest> {
             tokenizer: args.tokenizer.clone(),
         },
         adapter: None,
+        f3: None,
         head: HeadConfig {
             kind: head_kind,
             weights: "head.safetensors".into(),

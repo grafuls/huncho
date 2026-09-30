@@ -32,8 +32,13 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Default to `info` when `RUST_LOG` is unset so a `serve` shows its
+    // lifecycle (resolving / loading / listening) instead of silently blocking
+    // on a first-time model load or download. `RUST_LOG` still overrides.
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_env_filter(filter)
         .with_target(false)
         .init();
 

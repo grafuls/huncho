@@ -305,6 +305,7 @@ mod tests {
                 tokenizer: None,
             },
             adapter: None,
+            f3: None,
             head: HeadConfig { kind: HeadKind::OptionMarker, weights: "head.safetensors".into(), width: 1, pointer_offset: None },
             prompt_contract: PromptContract {
                 template: "laya-v1".into(),
