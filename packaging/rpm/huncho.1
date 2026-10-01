@@ -1,0 +1,68 @@
+.TH HUNCHO 1 "October 2026" "huncho 0.1.0" "User Commands"
+.SH NAME
+huncho \- portable serving engine for System One decision models
+.SH SYNOPSIS
+.B huncho
+[\fISUBCOMMAND\fR] [\fIOPTIONS\fR]
+.SH DESCRIPTION
+.B huncho
+is a portable serving engine for Jev-style "System One" decision models. It
+takes a state and a set of typed questions and returns calibrated probabilities
+without text generation. It implements the Jev wire contract, so an unmodified
+Python SDK works against it with only a base-URL change.
+.SH SUBCOMMANDS
+.TP
+.B serve
+Run the HTTP API (\fI/v1/systemone\fR, \fI/health\fR, \fI/v1/models\fR,
+\fI/metrics\fR). Serves a built-in mock model with
+.BR --mock ,
+or real manifests (\fB--manifest\fR) and Hugging Face model references
+(\fB--model\fR).
+.TP
+.B convert
+Convert model artifacts into a huncho model package (manifest + head + files).
+.TP
+.B calibrate
+Fit calibration temperatures/confidence against golden vectors.
+.TP
+.B conform
+Compare a backend against golden vectors and gate on probability fidelity,
+argmax agreement, and ECE drift.
+.TP
+.B bench
+Run a throughput/latency benchmark.
+.SH COMMON OPTIONS
+.TP
+.BR \-h ", " \-\-help
+Print help.
+.TP
+.BR \-V ", " \-\-version
+Print version.
+.SH ENVIRONMENT
+.TP
+.B HUNCHO_BIND
+Listener address (host:port), default \fI127.0.0.1:8080\fR.
+.TP
+.B HUNCHO_AUTH_TOKEN
+Optional bearer token required on requests.
+.TP
+.B HUNCHO_BACKEND
+Backend for manifests/models: \fImock\fR, \fIONNX\fR (ONNX Runtime), or
+\fIcandle\fR (HF safetensors, e.g. F1/ModernBERT).
+.TP
+.B HUNCHO_DTYPE
+Override the model dtype (default \fIfp32\fR).
+.TP
+.B HUNCHO_CACHE_DIR
+Model cache directory, also used by Hugging Face resolution.
+.SH FILES
+.TP
+.I /etc/huncho/huncho.env
+Environment file read by the packaged systemd unit.
+.TP
+.I /usr/share/huncho/examples/mock-model
+Bundled reference model package for testing.
+.SH SEE ALSO
+.BR systemd.service (5)
+.SH COPYRIGHT
+Apache License 2.0.

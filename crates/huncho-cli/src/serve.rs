@@ -48,7 +48,7 @@ pub struct ServeArgs {
     #[arg(long)]
     pub token: Option<String>,
 
-    /// Backend to use for manifest/models (onnx|mock). Also read from `HUNCHO_BACKEND`.
+    /// Backend to use for manifest/models (onnx|candle|mock). Also read from `HUNCHO_BACKEND`.
     #[arg(long, default_value = "mock", env = "HUNCHO_BACKEND")]
     pub backend: String,
 

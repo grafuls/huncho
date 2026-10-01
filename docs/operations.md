@@ -29,11 +29,14 @@ prompt encoding is byte-identical to the reference implementation (CORE-02).
 Enable everything for real models:
 
 ```bash
-cargo build --release -p huncho-cli --features onnx,hf,tokenizers
+cargo build --release -p huncho-cli --features onnx,hf,tokenizers,candle
 ```
 
 > `onnx` fetches a prebuilt ONNX Runtime at build time (needs network), and
-> `hf`'s TLS provider needs system OpenSSL (`libssl-dev`/`pkg-config`).
+> `hf`'s TLS provider needs system OpenSSL (`libssl-dev`/`pkg-config`). The
+> `candle` backend loads Hugging Face `safetensors` weights directly with
+> `candle-core` (no ONNX export, no extra system libs) and is the primary
+> real-model path for F1/ModernBERT packages such as `convaiinnovations/laya`.
 
 ## Run
 
@@ -46,9 +49,13 @@ huncho serve --mock --bind 127.0.0.1:8080
 Serve one or more model manifests:
 
 ```bash
-huncho serve --manifest ./models/laya/huncho-model.json --backend onnx \
+huncho serve --manifest ./models/laya/huncho-model.json --backend candle \
   --manifest ./models/kev/huncho-model.json --backend onnx
 ```
+
+> The backend must be a backend the package actually declares. An F1 package
+> such as `convaiinnovations/laya` ships a `candle` artifact (`model.safetensors`)
+> but no ONNX artifact, so it needs `--backend candle`.
 
 Serve a manifest using the mock backend (offline demo, no weights):
 
@@ -61,7 +68,7 @@ Serve a model package by Hugging Face repo id. The manifest
 cache, and all artifacts are pinned to the exact resolved commit:
 
 ```bash
-huncho serve --model my-org/laya --backend onnx --dtype fp32 --bind 127.0.0.1:8080
+huncho serve --model convaiinnovations/laya --backend candle --dtype fp32 --bind 127.0.0.1:8080
 ```
 
 While the repo is being resolved, a per-file progress bar is drawn to stderr
@@ -246,6 +253,13 @@ The serve flags (`--bind`, `--backend`, `--dtype`, `--cache-dir`, and
 `HUNCHO_DTYPE`, `HUNCHO_CACHE_DIR`, and `HUNCHO_AUTH_TOKEN`, so secrets never
 have to appear on the command line. The binary is single-file and
 rootless-friendly; for SELinux hosts use the `:Z` volume label.
+
+## RPM package
+
+For RPM distros (Fedora, RHEL, Rocky), `packaging/rpm/build-rpm.sh` builds a
+binary + source RPM with the full feature set (`onnx,hf,tokenizers,candle`) and ships a
+systemd unit, an env file, a man page, and the mock model package. See
+[`packaging/rpm/README.md`](../packaging/rpm/README.md).
 
 ## Release gates
 

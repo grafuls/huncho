@@ -1,0 +1,42 @@
+# huncho serving engine — packaged systemd unit.
+#
+# Serves the built-in mock model so the service comes up out of the box.
+# To serve a real model package, edit the ExecStart line to use `--manifest`
+# (absolute path to a huncho-model.json) or `--model owner/repo`, and set the
+# matching HUNCHO_BACKEND in /etc/huncho/huncho.env.
+#
+# A bundled reference package is installed at:
+#   /usr/share/huncho/examples/mock-model/huncho-model.json
+# Try it first with:
+#   ExecStart=/usr/bin/huncho serve --manifest /usr/share/huncho/examples/mock-model/huncho-model.json
+
+[Unit]
+Description=Huncho System One decision-model serving engine
+Documentation=https://github.com/grafuls/huncho
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=huncho
+Group=huncho
+
+# Config comes from the env file (HUNCHO_BIND / HUNCHO_BACKEND / HUNCHO_DTYPE /
+# HUNCHO_AUTH_TOKEN / HUNCHO_CACHE_DIR).
+EnvironmentFile=-/etc/huncho/huncho.env
+ExecStart=/usr/bin/huncho serve --mock
+Restart=on-failure
+RestartSec=5
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/huncho
+CapabilityBoundingSet=
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
