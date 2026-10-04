@@ -5,8 +5,10 @@
 #     make -f .copr/Makefile srpm outdir="<dir>" spec="<spec_path>"
 # The `srpm` target must drop the built source RPM into $(outdir).
 #
-# It runs with root privileges inside a mock chroot, so we may install
-# packages or touch the network. COPR leaves %dist empty for SRPM builds.
+# It runs with root privileges inside a mock chroot. That chroot does not
+# install a full git, so the source tarball is produced with `tar` (falling
+# back to `git ls-files` only when git is actually available). COPR leaves
+# %dist empty for SRPM builds.
 #
 
 NAME    := huncho
@@ -23,14 +25,15 @@ WORK := .copr-work
 
 .PHONY: srpm tarball clean
 
-srpm: tarball
+srpm:
 	# `%sysusers_create_package` and the `%systemd_*` helpers ship in
 	# systemd-rpm-macros; install it if the buildroot lacks it.
 	@[ -f /usr/lib/rpm/macros.d/macros.systemd ] \
 		|| dnf -y install systemd-rpm-macros >/dev/null 2>&1 || true
 	rm -rf $(WORK)
 	mkdir -p $(WORK)/SOURCES $(WORK)/SPECS
-	cp $(TARBALL)                          $(WORK)/SOURCES/
+	# Build the tarball straight into the rpmbuild sources dir.
+	$(MAKE) -f .copr/Makefile tarball TARBALL_DEST=$(WORK)/SOURCES/$(TARBALL)
 	cp packaging/rpm/$(NAME).env           $(WORK)/SOURCES/
 	cp packaging/rpm/$(NAME).service       $(WORK)/SOURCES/
 	cp packaging/rpm/$(NAME).1             $(WORK)/SOURCES/
@@ -43,21 +46,26 @@ srpm: tarball
 		$(WORK)/SPECS/$(notdir $(spec))
 	rm -rf $(WORK)
 
-# Produce the upstream source tarball with a single `<name>-<version>/` top
-# directory so `%setup -q` works. Prefer `git ls-files` (tracked files only);
-# fall back to archiving the whole checkout if git is unavailable in the
-# buildroot.
+# Produce a source tarball with a single `<name>-<version>/` top directory so
+# `%setup -q` works. The archive is first written to a scratch dir outside the
+# tree, then moved to its destination, so `tar` never sees its own output
+# (otherwise it aborts with "file changed as we read it").
 tarball:
-	@if command -v git >/dev/null 2>&1 && [ -d .git ]; then \
+	@set -e; \
+	scratch="$$(mktemp -d)"; \
+	trap 'rm -rf "$$scratch"' EXIT; \
+	if command -v git >/dev/null 2>&1 && [ -d .git ]; then \
 		git ls-files -z | tar --null --files-from=- \
 			--transform="s|^|$(NAME)-$(VERSION)/|" \
-			--create --gzip --file $(TARBALL); \
+			--create --gzip --file "$$scratch/$(TARBALL)"; \
 	else \
 		tar --exclude=$(WORK) --exclude=.git --exclude=target \
 			--exclude=$(TARBALL) -C $(CURDIR) \
 			--transform="s|^\./||" --transform="s|^|$(NAME)-$(VERSION)/|" \
-			--create --gzip --file $(TARBALL) .; \
-	fi
+			--create --gzip --file "$$scratch/$(TARBALL)" .; \
+	fi; \
+	dest="$(if $(TARBALL_DEST),$(TARBALL_DEST),$(CURDIR)/$(TARBALL))"; \
+	mv "$$scratch/$(TARBALL)" "$$dest"
 
 clean:
 	rm -f $(TARBALL) *.src.rpm
