@@ -15,11 +15,13 @@ Source3:        huncho.1
 Source4:        huncho-sysusers.conf
 
 # Rust toolchain + C compiler. `pkgconf-pkg-config` and OpenSSL are needed by
-# the `hf` TLS provider and the ONNX Runtime build (ort).
+# the `hf` TLS provider (`reqwest` native-tls -> openssl-sys) and the ONNX
+# Runtime build (ort).
 BuildRequires:  cargo >= 1.80
 BuildRequires:  rust >= 1.80
 BuildRequires:  gcc
 BuildRequires:  gcc-c++
+BuildRequires:  openssl-devel
 BuildRequires:  pkgconf-pkg-config
 BuildRequires:  systemd-rpm-macros
 
