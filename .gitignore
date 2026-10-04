@@ -1,5 +1,9 @@
 /target/
 
+# Generated RPM packaging artifacts (from `make srpm` / `make tarball`)
+/*.tar.gz
+/*.src.rpm
+
 # Local environment configuration
 .env
 .env.*

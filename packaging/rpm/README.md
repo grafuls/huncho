@@ -49,6 +49,38 @@ The service defaults to `HUNCHO_BACKEND=auto` and selects a compatible runtime
 for each model. Set it explicitly in `/etc/huncho/huncho.env` only to override
 that selection.
 
+## Publish to Fedora COPR
+
+COPR (Cool Other Package Repository) is the standard place to publish a
+third-party RPM for Fedora/RHEL users. It builds the package on Fedora builders
+from the git source and serves a dnf repository, so users can install and
+automatically update `huncho` with `dnf`.
+
+The repo is already wired for COPR's SCM build method, which clones the git repo
+and runs `make srpm` from the checkout root (see the root `Makefile`).
+
+1. **Create a project** at <https://copr.fedorainfracloud.org> (sign in with
+   your Fedora account), e.g. `grafuls/huncho`.
+2. **Add a package** with the **SCM** source type: point it at this repo's git
+   URL and the `main` branch. COPR runs `make srpm` to build the source RPM.
+3. **Enable chroots**, e.g. `fedora-rawhide-x86_64`, `fedora-42-x86_64`, and
+   optionally `epel-9-x86_64`.
+4. **Build**: trigger a build in the web UI, via `copr-cli build`, or enable the
+   GitHub webhook so a push to `main` rebuilds automatically.
+
+Verify locally that the COPR entry point works:
+
+```sh
+make srpm   # writes huncho-<version>.src.rpm into the repo root
+```
+
+Then point users at the repo:
+
+```sh
+sudo dnf copr enable <owner>/huncho
+sudo dnf install huncho
+```
+
 ## Files
 
 | Path | Purpose |
@@ -58,7 +90,8 @@ that selection.
 | `huncho.service` | Packaged systemd unit (`/usr/bin/huncho`). |
 | `huncho-sysusers.conf` | systemd-sysusers definition for the `huncho` service user. |
 | `huncho.1` | Roff man page. |
-| `build-rpm.sh` | Assembles `~/rpmbuild` and runs `rpmbuild -ba`. |
+| `build-rpm.sh` | Assembles `~/rpmbuild` and runs `rpmbuild -ba` (binary + source RPM). |
+| `build-srpm.sh` | Assembles a source RPM into the repo root for COPR / `make srpm`. |
 
 ## Service user
 
