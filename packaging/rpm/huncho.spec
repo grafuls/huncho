@@ -30,9 +30,12 @@ BuildRequires:  systemd-rpm-macros
 # resolution needs at runtime and is not a linked library.
 Requires:       ca-certificates
 
-# The sysusers.d file below (Source4) makes rpm auto-generate both
-# `Provides: user(huncho), group(huncho)` (so dnf can resolve the package
-# before the user exists) and `Requires(pre): /usr/bin/systemd-sysusers`.
+# The sysusers.d file below (Source4) makes rpm auto-generate
+# `Provides: user(huncho), group(huncho)`, so dnf can resolve the package
+# before the user exists. The `%pre` scriptlet calls systemd-sysusers to create
+# the user; we declare the binary as a requirement so it is installed first
+# (it lives in a separate systemd-standalone-sysusers package).
+Requires(pre):  /usr/bin/systemd-sysusers
 
 %description
 Huncho is a portable serving engine for Jev-style System One decision models.
