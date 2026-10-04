@@ -184,7 +184,13 @@ impl Engine {
                 probabilities.len()
             )));
         }
-        let conf = confidence(probabilities, &self.calibration.confidence);
+        let conf = if self.manifest.prompt_contract.template == "kev-v1"
+            && matches!(question, Question::Score { .. })
+        {
+            calibration::confidence_score(probabilities)
+        } else {
+            confidence(probabilities, &self.calibration.confidence)
+        };
         match question {
             Question::Choice { .. } => {
                 let mut best = 0usize;

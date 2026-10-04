@@ -1,0 +1,8 @@
+{
+  "base_model_name_or_path": "fixture/qwen3.5",
+  "task_type": "FEATURE_EXTRACTION",
+  "peft_type": "LORA",
+  "r": 2,
+  "lora_alpha": 4,
+  "bias": "none"
+}

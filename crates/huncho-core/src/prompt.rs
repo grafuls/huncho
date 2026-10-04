@@ -11,6 +11,9 @@ use crate::error::{Error, Result};
 use crate::manifest::{F3Config, Family, ModelManifest};
 use crate::tokenizer::Tokenizer;
 
+mod kev;
+pub use kev::KevFormatter;
+
 /// The mask/special-token string used by ModernBERT-based decision models (Laya).
 const LAYA_MASK_STR: &str = "[MASK]";
 /// Laya caps each option description at this many tokens.
@@ -88,6 +91,10 @@ pub fn default_formatter(family: Family) -> Box<dyn PromptFormatter> {
 pub fn formatter_for(manifest: &ModelManifest) -> Box<dyn PromptFormatter> {
     let pc = &manifest.prompt_contract;
     match pc.template.as_str() {
+        "kev-v1" => Box::new(KevFormatter {
+            max_state: pc.state_budget,
+            max_row: manifest.backbone.max_context,
+        }),
         "laya-v1" => Box::new(LayaFormatter {
             max_len: pc.max_len,
             head_max_len: pc.head_max_len,
@@ -1227,4 +1234,3 @@ mod tests {
         }
     }
 }
-

@@ -88,6 +88,20 @@ cargo run --release -p huncho-cli --features hf -- serve --model my-org/laya --b
 The manifest and every artifact it references are fetched into the HF cache,
 pinned to the resolved commit, so `serve --model` is deterministic across runs.
 
+Serve Kev-4B natively on CPU with Candle:
+
+```bash
+cargo build --release -p huncho-cli --features hf,candle,tokenizers
+./target/release/huncho serve --model jaredpalmer/kev-4b --backend candle --bind 127.0.0.1:8080
+```
+
+The first load downloads the adapter, tokenizer, pointer head, and the base
+checkpoint pinned by `head.pt`. Requests use `"model": "kev-4b"`. The default
+is fp32; add `--dtype fp16` to reduce memory use. This path supports Qwen3.5 Kev
+LoRA checkpoints with up to 8,192 tokens per state-plus-question row. See
+[native Kev support](docs/backends.md#kev-f2-on-candle) for the loading contract
+and current limits.
+
 Serve a real ONNX artifact (`examples/mock-model` ships a 512-dim encoder and
 its conformance golden). Build with `--features onnx` (fetches a prebuilt ONNX
 Runtime at build time):

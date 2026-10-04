@@ -18,11 +18,12 @@ ort = { version = "2.0.0-rc.13", optional = true, default-features = false, feat
 candle = { package = "candle-core", version = "0.11", optional = true, default-features = false }
 candle-nn = { version = "0.11", optional = true, default-features = false }
 candle-transformers = { version = "0.11", optional = true, default-features = false }
+zip = { version = "8.6", optional = true, default-features = false }
 
 [features]
 default = []
 onnx = ["dep:ort"]
-candle = ["dep:candle", "dep:candle-nn", "dep:candle-transformers"]
+candle = ["dep:candle", "dep:candle-nn", "dep:candle-transformers", "dep:zip"]
 
 [dev-dependencies]
 tempfile = "3"

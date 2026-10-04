@@ -7,11 +7,15 @@ description = "Hugging Face Hub resolution for Huncho model packages"
 
 [dependencies]
 huncho-core = { path = "../huncho-core" }
+huncho-backend = { path = "../huncho-backend", optional = true, features = ["candle"] }
 thiserror.workspace = true
 log.workspace = true
 hf-hub = { version = "1.0.0", features = ["blocking"] }
 reqwest = { version = "0.13", features = ["blocking"] }
 serde_json.workspace = true
+
+[features]
+candle = ["dep:huncho-backend"]
 
 [dev-dependencies]
 tempfile = "3"

@@ -1,4 +1,4 @@
-//! Qwen3.5 + LoRA candle backend — the F3 (candidate-logit) real-model path.
+//! Qwen3.5 + LoRA Candle backend for Nimble (F3) and Kev (F2).
 //!
 //! Bespoke-Nimble packages are PEFT LoRA adapters over a **Qwen3.5-style
 //! hybrid** backbone: a stack of `linear_attention` (Gated DeltaNet) layers
@@ -15,13 +15,15 @@
 //! * standard PEFT LoRA merge (`W' = W + alpha/r * (lora_B @ lora_A)`)
 //!
 //! The backend returns `ForwardOutput::Logits` at the requested positions so
-//! `head::candidate_logits` can read the one-token candidate codes.
+//! `head::candidate_logits` can read the one-token candidate codes. Kev uses its
+//! trained pointer projections and returns one raw score per option instead.
 //!
 //! Reference: `transformers` `modeling_qwen3_5.py` (`Qwen3_5ForConditionalGeneration`).
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
+use crate::kev::PointerHead;
 use candle::{D, Device, DType, Result, Tensor};
 use candle_nn::{embedding, linear_b, Activation, Embedding, Linear, Module, VarBuilder};
 
@@ -440,6 +442,9 @@ impl LinearAttn {
         let mut out = Tensor::zeros((b, conv_dim, seq), DType::F32, x.device())?;
         for kk in 0..k {
             let shift = (k - 1) - kk;
+            if shift >= seq {
+                continue;
+            }
             let w = self.conv1d_w.narrow(2, kk, 1)?.squeeze(1)?.unsqueeze(0)?; // [1, conv_dim, 1]
             let contrib = w.broadcast_mul(&x.to_dtype(DType::F32)?)?; // [B, conv_dim, seq]
             if shift == 0 {
@@ -606,8 +611,8 @@ impl DecoderLayer {
             candle::bail!("decoder layer has neither linear nor full attention")
         };
         let h = h.broadcast_add(&residual)?;
-        let h = rms_norm_zero(&h, &self.post_attention_layernorm, self.eps)?;
-        let x = self.mlp.forward(&h)?.broadcast_add(&h)?;
+        let normalized = rms_norm_zero(&h, &self.post_attention_layernorm, self.eps)?;
+        let x = self.mlp.forward(&normalized)?.broadcast_add(&h)?;
         Ok(x)
     }
 }
@@ -698,10 +703,12 @@ fn merge_lora_into_map(
     for target in &targets {
         let a_key = format!("base_model.model.{target}.lora_A.weight");
         let b_key = format!("base_model.model.{target}.lora_B.weight");
-        let (Some(a), Some(b)) = (lora.get(&a_key), lora.get(&b_key)) else {
-            continue;
-        };
-        let base_key = format!("{target}.weight");
+        let a = &lora[&a_key];
+        let b = lora
+            .get(&b_key)
+            .ok_or_else(|| candle::Error::Msg(format!("missing LoRA weight `{b_key}`")))?;
+        let base_key = canonical_weight_name(&format!("{target}.weight"))
+            .ok_or_else(|| candle::Error::Msg(format!("unsupported LoRA target `{target}`")))?;
         let base = map.get_mut(&base_key).ok_or_else(|| {
             candle::Error::Msg(format!("missing base weight `{base_key}` required for LoRA merge"))
         })?;
@@ -732,11 +739,16 @@ pub enum QwenError {
 
 pub struct Qwen3_5Backend {
     model: Model,
-    lm_head: Linear,
+    head: Readout,
     vocab_size: usize,
     max_context: usize,
     dtype: String,
     device: Device,
+}
+
+enum Readout {
+    LanguageModel(Linear),
+    Pointer(PointerHead),
 }
 
 impl Qwen3_5Backend {
@@ -753,11 +765,50 @@ impl Qwen3_5Backend {
         max_context: usize,
         dtype: impl Into<String>,
     ) -> CoreResult<Qwen3_5Backend> {
-        let dtype_str = dtype.into();
+        Self::load_with_head(base_dir, adapter_dir, None, max_context, dtype.into())
+    }
+
+    /// Load Kev's backbone and trained pointer head without materializing an
+    /// unused vocabulary projection. Each forward is one isolated question row.
+    pub fn load_kev(
+        base_dir: &Path,
+        adapter_dir: &Path,
+        head_path: &Path,
+        max_context: usize,
+        dtype: impl Into<String>,
+    ) -> CoreResult<Self> {
+        let dtype = dtype.into();
+        if !matches!(dtype.as_str(), "fp32" | "fp16" | "f16") {
+            return Err(Error::Unsupported(format!(
+                "Kev's Candle CPU backend supports fp32 or fp16, not `{dtype}`"
+            )));
+        }
+        Self::load_with_head(
+            base_dir,
+            Some(adapter_dir),
+            Some(head_path),
+            max_context,
+            dtype,
+        )
+    }
+
+    fn load_with_head(
+        base_dir: &Path,
+        adapter_dir: Option<&Path>,
+        pointer_path: Option<&Path>,
+        max_context: usize,
+        dtype: String,
+    ) -> CoreResult<Self> {
+        let dtype_str = dtype;
         let dtype = match dtype_str.as_str() {
             "fp16" | "f16" => DType::F16,
             "bf16" | "bfloat16" => DType::BF16,
-            _ => DType::F32,
+            "fp32" => DType::F32,
+            other => {
+                return Err(Error::Unsupported(format!(
+                    "unsupported Qwen3.5 dtype `{other}`"
+                )))
+            }
         };
         let device = Device::Cpu;
 
@@ -767,7 +818,7 @@ impl Qwen3_5Backend {
         let mut tensors = load_base_tensors(base_dir, &device, dtype)?;
         if tensors.is_empty() {
             return Err(Error::Backend(format!(
-                "no base-weight `*.safetensors` found in `{}`; the F3 Qwen3.5 backend needs the \
+                "no base-weight `*.safetensors` found in `{}`; the Qwen3.5 backend needs the \
                  full base weights (fetch the `{}` repo) in this directory",
                 base_dir.display(),
                 base_repo_hint(&config)
@@ -791,11 +842,23 @@ impl Qwen3_5Backend {
         // `VarBuilder`. The backbone does not reference `lm_head.*`, so this
         // avoids holding a second full copy of every weight in memory during
         // construction (relevant for 9B+ backbones).
-        let lm_head_w = tensors.remove("lm_head.weight").ok_or_else(|| {
-            Error::Backend("base weights are missing `lm_head.weight`".into())
-        })?;
-        let lm_head_b = tensors.remove("lm_head.bias");
-        let lm_head = Linear::new(lm_head_w, lm_head_b);
+        let head = match pointer_path {
+            Some(path) => {
+                tensors.remove("lm_head.weight");
+                Readout::Pointer(PointerHead::load(path, config.hidden_size)?)
+            }
+            None => {
+                let lm_head_w = tensors.remove("lm_head.weight").ok_or_else(|| {
+                    Error::Backend("base weights are missing `lm_head.weight`".into())
+                })?;
+                Readout::LanguageModel(Linear::new(lm_head_w, tensors.remove("lm_head.bias")))
+            }
+        };
+        let vocab_size = if pointer_path.is_some() {
+            1
+        } else {
+            config.vocab_size
+        };
 
         let vb = VarBuilder::from_tensors(tensors, dtype, &device);
         let model = Model::new(&config, vb, &device, dtype)
@@ -803,8 +866,8 @@ impl Qwen3_5Backend {
 
         Ok(Qwen3_5Backend {
             model,
-            lm_head,
-            vocab_size: config.vocab_size,
+            head,
+            vocab_size,
             max_context,
             dtype: dtype_str,
             device,
@@ -855,14 +918,14 @@ fn load_base_tensors(dir: &Path, device: &Device, dtype: DType) -> CoreResult<Ha
     for p in entries {
         let raw = candle::safetensors::load(&p, device)
             .map_err(|e| Error::Backend(QwenError::Load(p.display().to_string(), e.to_string()).to_string()))?;
-        for (k, v) in raw {
+        for (name, v) in raw {
             // The Qwen3.5 base is a multimodal conditional-generation model; the
             // F3 adapter and this text backend only need the text backbone and
             // the LM head. Drop the vision tower and MTP tensors so we do not
             // hold the whole ~19 GB checkpoint in memory.
-            if k != "lm_head.weight" && !k.starts_with("model.language_model.") {
+            let Some(k) = canonical_weight_name(&name) else {
                 continue;
-            }
+            };
             let v = v.to_dtype(dtype).map_err(|e| {
                 Error::Backend(QwenError::Load(k.clone(), e.to_string()).to_string())
             })?;
@@ -870,6 +933,26 @@ fn load_base_tensors(dir: &Path, device: &Device, dtype: DType) -> CoreResult<Ha
         }
     }
     Ok(map)
+}
+
+/// HF conditional-generation, text-only and PEFT feature-extraction saves
+/// use different prefixes for the same text backbone.
+fn canonical_weight_name(name: &str) -> Option<String> {
+    if name.starts_with("model.language_model.") || name.starts_with("lm_head.") {
+        return Some(name.to_string());
+    }
+    let text = name
+        .strip_prefix("language_model.")
+        .or_else(|| name.strip_prefix("model."))
+        .unwrap_or(name);
+    if ["layers.", "embed_tokens.", "norm."]
+        .iter()
+        .any(|p| text.starts_with(p))
+    {
+        Some(format!("model.language_model.{text}"))
+    } else {
+        None
+    }
 }
 
 impl Backend for Qwen3_5Backend {
@@ -884,12 +967,24 @@ impl Backend for Qwen3_5Backend {
             max_context: self.max_context,
             supports_fork: false,
             supports_lora: true,
-            families: vec![Family::F3],
+            families: vec![match self.head {
+                Readout::Pointer(_) => Family::F2,
+                _ => Family::F3,
+            }],
             extra: BTreeMap::new(),
         }
     }
 
     fn forward(&mut self, input: ForwardInput) -> CoreResult<ForwardOutput> {
+        if input
+            .positions
+            .iter()
+            .any(|&position| position >= input.tokens.len())
+        {
+            return Err(Error::Backend(
+                "Qwen3.5 readout position is outside the token sequence".into(),
+            ));
+        }
         if input.tokens.len() > self.max_context {
             return Err(Error::Backend(format!(
                 "sequence length {} exceeds candle max_context {}",
@@ -923,7 +1018,16 @@ impl Backend for Qwen3_5Backend {
             .map_err(&candle)?
             .squeeze(0)
             .map_err(&candle)?; // [n_positions, hidden]
-        let logits = self.lm_head.forward(&selected).map_err(&candle)?;
+        let logits = match &self.head {
+            Readout::LanguageModel(head) => head.forward(&selected).map_err(&candle)?,
+            Readout::Pointer(head) => {
+                let decide = hidden
+                    .narrow(1, input.tokens.len() - 1, 1)
+                    .and_then(|t| t.squeeze(0))
+                    .map_err(&candle)?;
+                head.forward(&decide, &selected).map_err(&candle)?
+            }
+        };
         let values = core_from_tensor(&logits.to_dtype(DType::F32).map_err(&candle)?)?;
         Ok(ForwardOutput::Logits {
             positions: input.positions,
@@ -1073,7 +1177,7 @@ mod tests {
 
         let mut backend = Qwen3_5Backend {
             model,
-            lm_head,
+            head: Readout::LanguageModel(lm_head),
             vocab_size: cfg.vocab_size,
             max_context: 32,
             dtype: "fp32".into(),

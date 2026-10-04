@@ -1547,6 +1547,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
+ "zip",
 ]
 
 [[package]]
@@ -1586,6 +1587,7 @@ name = "huncho-hub"
 version = "0.1.0"
 dependencies = [
  "hf-hub",
+ "huncho-backend",
  "huncho-core",
  "log",
  "reqwest",

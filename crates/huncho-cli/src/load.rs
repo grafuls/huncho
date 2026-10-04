@@ -190,6 +190,16 @@ fn load_backend(
 
 #[cfg(feature = "candle")]
 fn load_candle(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<dyn Backend>> {
+    if manifest.family == Family::F2 && manifest.prompt_contract.template == "kev-v1" {
+        let backend = Qwen3_5Backend::load_kev(
+            &adapter_base_dir(manifest, dir),
+            dir,
+            &dir.join(&manifest.head.weights),
+            manifest.backbone.max_context,
+            dtype,
+        )?;
+        return Ok(Box::new(backend));
+    }
     // F3 (Bespoke-Nimble) packages are candidate-logit PEFT adapters over a
     // Qwen3.5 hybrid backbone. Build the from-scratch Qwen3.5+LoRA candle
     // backend from the package directory (which holds `config.json`, the
@@ -199,7 +209,7 @@ fn load_candle(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<
         // The adapter lives in the package dir; the (large) base weights are
         // downloaded into the base repo's own snapshot dir (same cache).
         let adapter_dir = dir;
-        let base_dir = f3_base_dir(manifest, adapter_dir);
+        let base_dir = adapter_base_dir(manifest, adapter_dir);
         let backend = Qwen3_5Backend::load(
             &base_dir,
             Some(adapter_dir),
@@ -230,7 +240,7 @@ fn load_candle(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<
     Ok(Box::new(backend) as Box<dyn Backend>)
 }
 
-/// Locate the base-language-model directory for an F3 manifest from the
+/// Locate the base-language-model directory for a Kev or Nimble manifest from the
 /// adapter's resolved snapshot dir.
 ///
 /// The adapter `dir` lives at `<cache>/models--<adapter>/snapshots/<commit>`.
@@ -238,10 +248,14 @@ fn load_candle(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<
 /// same cache, so we walk up to the cache root and rebuild the base path from
 /// `backbone.source`. Falls back to `adapter_dir` when the layout does not match
 /// the HF cache (e.g. a locally-authored manifest).
-fn f3_base_dir(manifest: &ModelManifest, adapter_dir: &Path) -> PathBuf {
+#[cfg(feature = "candle")]
+fn adapter_base_dir(manifest: &ModelManifest, adapter_dir: &Path) -> PathBuf {
     let BackboneSource::Hf { repo, revision } = &manifest.backbone.source else {
         return adapter_dir.to_path_buf();
     };
+    if adapter_dir.parent().and_then(|p| p.file_name()) != Some(std::ffi::OsStr::new("snapshots")) {
+        return adapter_dir.to_path_buf();
+    }
     let Some(cache) = adapter_dir
         .parent()
         .and_then(|p| p.parent())
@@ -385,6 +399,117 @@ mod candle_tests {
 
     // Relative to `crates/huncho-cli` (the unit-test cwd).
     const FIXTURE: &str = "../huncho-backend/tests/fixtures/tiny_modernbert";
+
+    #[cfg(feature = "tokenizers")]
+    #[test]
+    fn kev_prompts_and_answers_match_upstream() {
+        use huncho_core::prompt::{formatter_for, PromptFormatter};
+        let fixture = Path::new("../huncho-backend/tests/fixtures/tiny_kev");
+        let dir = tempdir().unwrap();
+        for file in [
+            "config.json",
+            "model.safetensors",
+            "adapter_config.json",
+            "adapter_model.safetensors",
+            "head.pt",
+            "tokenizer.json",
+        ] {
+            fs::copy(fixture.join(file), dir.path().join(file)).unwrap();
+        }
+        let mut manifest = mock_manifest("tiny-kev", Family::F2, "fp32", 2.4060501).unwrap();
+        manifest.backbone.source = BackboneSource::Hf { repo: "fixture/qwen3.5".into(), revision: "1111111111111111111111111111111111111111".into() };
+        manifest.backbone.hidden_size = 16;
+        manifest.backbone.max_context = 512;
+        manifest.backbone.tokenizer = Some("tokenizer.json".into());
+        manifest.head.weights = "head.pt".into();
+        manifest.head.width = 4;
+        manifest.prompt_contract.template = "kev-v1".into();
+        manifest.prompt_contract.state_budget = 512;
+        let path = dir.path().join("huncho-model.json");
+        fs::write(&path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
+        let engine = engine_from_manifest(&path, BackendId::Candle, Some("fp32")).unwrap();
+        let formatter = formatter_for(&manifest);
+        let tokenizer = load_tokenizer(&manifest, dir.path()).unwrap();
+        let golden: serde_json::Value =
+            serde_json::from_slice(&fs::read(fixture.join("golden.json")).unwrap()).unwrap();
+        for case in golden["cases"].as_array().unwrap() {
+            let req: huncho_core::contract::SystemOneRequest =
+                serde_json::from_value(case["request"].clone()).unwrap();
+            for ((id, _), row) in case["request"]["questions"]
+                .as_object()
+                .unwrap()
+                .iter()
+                .zip(case["rows"].as_array().unwrap())
+            {
+                let prompt = formatter
+                    .build(&req.state, &req.questions[id], tokenizer.as_ref())
+                    .unwrap();
+                assert_eq!(
+                    serde_json::to_value(&prompt.tokens).unwrap(),
+                    row["tokens"],
+                    "{id}: tokens"
+                );
+                assert_eq!(
+                    serde_json::to_value(
+                        prompt
+                            .candidates
+                            .iter()
+                            .map(|c| c.position)
+                            .collect::<Vec<_>>()
+                    )
+                    .unwrap(),
+                    row["positions"],
+                    "{id}: readout positions"
+                );
+                assert_eq!(
+                    prompt.prefix_len,
+                    row["prefix_len"].as_u64().unwrap() as usize
+                );
+            }
+            let response = engine.eval(&req, &Default::default()).unwrap();
+            for (id, expected) in case["answers"].as_object().unwrap() {
+                let actual = serde_json::to_value(&response.answers[id]).unwrap();
+                for (key, value) in expected.as_object().unwrap() {
+                    if let Some(n) = value.as_f64() {
+                        assert!(
+                            (actual[key].as_f64().unwrap() - n).abs() < 0.0001,
+                            "{id} {key}: {actual} vs {expected}"
+                        );
+                    } else if key == "probabilities" {
+                        for (label, p) in value.as_object().unwrap() {
+                            assert!(
+                                (actual[key][label].as_f64().unwrap() - p.as_f64().unwrap()).abs()
+                                    < 0.0001,
+                                "{id}/{label}: {actual} vs {expected}"
+                            );
+                        }
+                    } else {
+                        assert_eq!(actual[key], *value, "{id}/{key}");
+                    }
+                }
+            }
+        }
+        let req: huncho_core::contract::SystemOneRequest =
+            serde_json::from_value(golden["cases"][0]["request"].clone()).unwrap();
+        let limited = huncho_core::prompt::KevFormatter {
+            max_state: 1,
+            max_row: 512,
+        };
+        assert!(limited
+            .build(&req.state, &req.questions["team"], tokenizer.as_ref())
+            .unwrap_err()
+            .to_string()
+            .contains("state requires"));
+        let limited = huncho_core::prompt::KevFormatter {
+            max_state: 512,
+            max_row: 2,
+        };
+        assert!(limited
+            .build(&req.state, &req.questions["team"], tokenizer.as_ref())
+            .unwrap_err()
+            .to_string()
+            .contains("question row requires"));
+    }
 
     #[test]
     fn load_candle_from_manifest_builds_backend() {

@@ -110,6 +110,24 @@ pub fn confidence_peak(probs: &[f32]) -> f32 {
     ((p_max - uniform) / denom).clamp(0.0, 1.0)
 }
 
+/// TypeSafe/Kev score confidence: concentration around the most likely level,
+/// relative to the mean absolute deviation of a uniform distribution.
+pub fn confidence_score(probs: &[f32]) -> f32 {
+    if probs.len() <= 1 {
+        return 1.0;
+    }
+    let n = probs.len();
+    let center = (n - 1) as f32 / 2.0;
+    let uniform_deviation = (0..n).map(|i| (i as f32 - center).abs()).sum::<f32>() / n as f32;
+    let mode = argmax(probs) as f32;
+    let deviation = probs
+        .iter()
+        .enumerate()
+        .map(|(i, p)| p * (i as f32 - mode).abs())
+        .sum::<f32>();
+    (1.0 - deviation / uniform_deviation).clamp(0.0, 1.0)
+}
+
 /// Normalized entropy-based confidence: `1 - H(p) / log2(n)`.
 ///
 /// This is the Laya definition; a uniform distribution gives 0 and a single

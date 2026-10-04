@@ -8,6 +8,10 @@ license.workspace = true
 name = "huncho"
 path = "src/main.rs"
 
+[[example]]
+name = "laya_check"
+required-features = ["candle", "tokenizers"]
+
 [dependencies]
 huncho-core = { path = "../huncho-core" }
 huncho-backend = { path = "../huncho-backend" }
@@ -25,7 +29,7 @@ log.workspace = true
 [features]
 default = []
 onnx = ["huncho-backend/onnx"]
-candle = ["huncho-backend/candle"]
+candle = ["huncho-backend/candle", "huncho-hub?/candle"]
 hf = ["dep:huncho-hub"]
 tokenizers = ["huncho-core/tokenizers"]
 

@@ -128,9 +128,11 @@ pub enum Question {
 pub struct NoulCriteria {
     #[serde(default)]
     #[serde(alias = "True")]
+    #[serde(alias = "true")]
     pub yes: Option<serde_json::Value>,
     #[serde(default)]
     #[serde(alias = "False")]
+    #[serde(alias = "false")]
     pub no: Option<serde_json::Value>,
 }
 

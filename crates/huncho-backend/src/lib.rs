@@ -7,26 +7,29 @@
 //! * [`candle::CandleBackend`] — loads HF `safetensors` ModernBERT directly with
 //!   candle (no ONNX/Python), behind the `candle` feature. The primary
 //!   real-model path for F1.
-//! * [`qwen3_5::Qwen3_5Backend`] — the F3 (candidate-logit) path: a from-scratch
+//! * [`qwen3_5::Qwen3_5Backend`] — the F3 (candidate-logit) and Kev F2 paths: a
 //!   candle port of the Qwen3.5 hybrid Gated DeltaNet / full-attention backbone
 //!   with a PEFT LoRA merge, behind the `candle` feature.
+//! * [`kev`] — Kev checkpoint metadata and trained pointer-head loading.
 //! * [`null::NullBackend`] — a backend that always raises an error, used as a
 //!   placeholder when a model is not yet loaded.
 
-pub mod mock;
-#[cfg(feature = "onnx")]
-pub mod onnx;
 #[cfg(feature = "candle")]
 pub mod candle;
 #[cfg(feature = "candle")]
-pub mod qwen3_5;
+pub mod kev;
+pub mod mock;
 pub mod null;
+#[cfg(feature = "onnx")]
+pub mod onnx;
+#[cfg(feature = "candle")]
+pub mod qwen3_5;
 
+#[cfg(feature = "candle")]
+pub use candle::CandleBackend;
 pub use mock::MockBackend;
+pub use null::NullBackend;
 #[cfg(feature = "onnx")]
 pub use onnx::OnnxBackend;
 #[cfg(feature = "candle")]
-pub use candle::CandleBackend;
-#[cfg(feature = "candle")]
 pub use qwen3_5::Qwen3_5Backend;
-pub use null::NullBackend;

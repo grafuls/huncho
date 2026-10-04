@@ -275,11 +275,18 @@ fn synthesize_checkpoint(
         )));
     }
 
-    // Probe for the F3 (Nimble) PEFT signature before falling through to the
-    // ModernBERT synthesis. Bespoke-Nimble repos carry an `adapter_config.json`
-    // (a LoRA adapter over a base model) but no `config.json`, so a ModernBERT
-    // probe would 404 on both candidates and produce a misleading error.
-    if let Some(adapter_path) = probe_f3(repo, revision, opts)? {
+    // PEFT is shared by multiple decision families. Kev extracts features for
+    // its pointer head; Nimble uses the causal LM's candidate-token logits.
+    if let Some(adapter_path) = probe_adapter(repo, revision, opts)? {
+        let adapter = read_json(&adapter_path)?;
+        if adapter.get("task_type").and_then(|v| v.as_str()) == Some("FEATURE_EXTRACTION") {
+            if !matches!(dtype, "fp32" | "fp16" | "f16") {
+                return Err(HubError::Package(format!(
+                    "Kev's Candle CPU backend supports fp32 or fp16, not `{dtype}`"
+                )));
+            }
+            return synthesize_kev(repo, opts, &adapter_path, &adapter);
+        }
         return synthesize_f3(repo, revision, opts, &adapter_path);
     }
 
@@ -424,12 +431,12 @@ fn read_json(path: &Path) -> Result<serde_json::Value> {
     Ok(serde_json::from_slice(&bytes)?)
 }
 
-/// Probe a raw checkpoint repo for the F3 (Nimble) PEFT signature.
+/// Probe a raw checkpoint repo for a PEFT adapter (not a decision family).
 ///
 /// Returns `Ok(Some(adapter_config_path))` when `adapter_config.json` is
 /// present, `Ok(None)` when the file is genuinely missing (404), and propagates
 /// any other (e.g. network) error.
-fn probe_f3(
+fn probe_adapter(
     repo: &str,
     revision: Option<&str>,
     opts: &ResolveOptions,
@@ -441,7 +448,193 @@ fn probe_f3(
     }
 }
 
-/// Download the base-language-model weights for an F3 (Nimble) adapter into the
+#[cfg(not(feature = "candle"))]
+fn synthesize_kev(
+    repo: &str,
+    _opts: &ResolveOptions,
+    _adapter_path: &Path,
+    _adapter: &serde_json::Value,
+) -> Result<ResolvedPackage> {
+    Err(HubError::Package(format!("`{repo}` is a feature-extraction adapter; Kev/F2 loading requires rebuilding with `--features hf,candle,tokenizers`")))
+}
+
+#[cfg(feature = "candle")]
+fn synthesize_kev(
+    repo: &str,
+    opts: &ResolveOptions,
+    adapter_path: &Path,
+    adapter: &serde_json::Value,
+) -> Result<ResolvedPackage> {
+    use huncho_backend::kev::KevMetadata;
+
+    let package_root = snapshot_root(adapter_path)
+        .ok_or_else(|| HubError::Package("could not locate the Kev snapshot".into()))?;
+    let commit = package_root
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| HubError::Package("invalid Kev snapshot path".into()))?;
+    let pinned = Some(commit.to_string());
+    // Read the head metadata before downloading any base weights: it pins the
+    // trained base revision and temperature, which adapter_config alone cannot.
+    let head_path = http::download_file(repo, "head.pt", pinned.clone(), opts)?;
+    let metadata = KevMetadata::load(&head_path).map_err(|e| HubError::Package(e.to_string()))?;
+    if adapter.get("peft_type").and_then(|v| v.as_str()) != Some("LORA")
+        || adapter.get("r").and_then(|v| v.as_u64()) != Some(metadata.lora_rank as u64)
+        || adapter
+            .get("base_model_name_or_path")
+            .and_then(|v| v.as_str())
+            != Some(metadata.base.as_str())
+    {
+        return Err(HubError::Package(
+            "Kev head.pt and adapter_config.json disagree about the base model or LoRA rank".into(),
+        ));
+    }
+    for flag in ["use_dora", "use_rslora", "fan_in_fan_out"] {
+        if adapter.get(flag).and_then(|v| v.as_bool()) == Some(true) {
+            return Err(HubError::Package(format!(
+                "Kev adapter option `{flag}=true` is not supported"
+            )));
+        }
+    }
+    for key in [
+        "rank_pattern",
+        "alpha_pattern",
+        "modules_to_save",
+        "trainable_token_indices",
+    ] {
+        if let Some(v) = adapter.get(key) {
+            let configured = match v {
+                serde_json::Value::Null => false,
+                serde_json::Value::Object(fields) => !fields.is_empty(),
+                serde_json::Value::Array(items) => !items.is_empty(),
+                _ => true,
+            };
+            if configured {
+                return Err(HubError::Package(format!(
+                    "Kev adapter option `{key}` is not supported"
+                )));
+            }
+        }
+    }
+    if adapter
+        .get("bias")
+        .and_then(|v| v.as_str())
+        .unwrap_or("none")
+        != "none"
+    {
+        return Err(HubError::Package(
+            "Kev adapter bias updates are not supported".into(),
+        ));
+    }
+    let base_config_path = http::download_file(
+        &metadata.base,
+        "config.json",
+        metadata.base_revision.clone(),
+        opts,
+    )?;
+    let base_config = read_json(&base_config_path)?;
+    let text = base_config.get("text_config").unwrap_or(&base_config);
+    if !matches!(
+        text.get("model_type").and_then(|v| v.as_str()),
+        Some("qwen3_5_text" | "qwen3_5")
+    ) {
+        return Err(HubError::Package(
+            "native Kev Candle loading currently requires a Qwen3.5 backbone".into(),
+        ));
+    }
+    let hidden_size = text
+        .get("hidden_size")
+        .and_then(|v| v.as_u64())
+        .filter(|n| *n > 0)
+        .ok_or_else(|| HubError::Package("Kev base config has no hidden_size".into()))?
+        as usize;
+    // CPU attention materializes the causal mask. Use an 8k
+    // window, rather than claiming the upstream GPU server's 64k state limit.
+    let max_context = text
+        .get("max_position_embeddings")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(8192)
+        .min(8192) as usize;
+    let base_root = snapshot_root(&base_config_path)
+        .ok_or_else(|| HubError::Package("could not locate Kev base snapshot".into()))?;
+    let base_commit = base_root
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| HubError::Package("invalid Kev base snapshot".into()))?;
+    let manifest = ModelManifest {
+        schema_version: manifest::MANIFEST_SCHEMA_VERSION.into(),
+        name: repo.rsplit('/').next().unwrap_or("kev").into(),
+        family: Family::F2,
+        backbone: Backbone {
+            source: BackboneSource::Hf {
+                repo: metadata.base.clone(),
+                revision: base_commit.into(),
+            },
+            artifacts: [(
+                BackendId::Candle,
+                ["fp32", "fp16", "f16"]
+                    .into_iter()
+                    .map(|dtype| ArtifactRef {
+                        path: "adapter_model.safetensors".into(),
+                        dtype: dtype.into(),
+                        quantization: None,
+                    })
+                    .collect(),
+            )]
+            .into(),
+            hidden_size,
+            max_context,
+            tokenizer: Some("tokenizer.json".into()),
+        },
+        adapter: Some(Adapter {
+            repo: repo.into(),
+            revision: commit.into(),
+            rank: metadata.lora_rank,
+        }),
+        f3: None,
+        head: HeadConfig {
+            kind: manifest::family_kind(Family::F2),
+            weights: "head.pt".into(),
+            width: metadata.head_dim,
+            pointer_offset: None,
+        },
+        prompt_contract: PromptContract {
+            template: "kev-v1".into(),
+            option_marker_tokens: vec!["<|box_end|>".into()],
+            state_budget: max_context,
+            head_budget: max_context,
+            max_options: 255,
+            contract_hash: fnv1a("kev-v1", commit),
+            max_len: max_context,
+            head_max_len: max_context,
+        },
+        calibration: CalibrationConfig {
+            default: CalibrationEntry {
+                temperature: metadata.temperature,
+                per_type_temperatures: None,
+                temperature_by_options: None,
+                confidence: ConfidenceDef::Peak,
+                status: CalibrationStatus::Fit,
+            },
+            entries: Default::default(),
+            eval_set_hash: None,
+        },
+        reference: None,
+        capabilities: ModelCapabilities::default(),
+    };
+    manifest
+        .validate()
+        .map_err(|e| HubError::Package(e.to_string()))?;
+    for file in required_files(&manifest, Some(BackendId::Candle), "fp32", false)? {
+        http::download_file(repo, &file, pinned.clone(), opts)?;
+    }
+    download_base_weights(&metadata.base, base_commit, opts)?;
+    let manifest_path = package_root.join("huncho-model.json");
+    std::fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest)?)?;
+    Ok(ResolvedPackage { manifest_path })
+}
+
+/// Download the base-language-model weights for a Kev or Nimble adapter into the
 /// base repo's snapshot directory (pinned to `rev`), so the Qwen3.5 candle
 /// backend can build the model at serve time.
 ///
@@ -450,7 +643,7 @@ fn probe_f3(
 /// already-downloaded shards are skipped. A repo with no reachable weights is
 /// not an error here (the backend reports a clear error later); genuine
 /// transport failures are surfaced.
-fn download_f3_base_weights(repo: &str, rev: &str, opts: &ResolveOptions) -> Result<()> {
+fn download_base_weights(repo: &str, rev: &str, opts: &ResolveOptions) -> Result<()> {
     let rev_opt = Some(rev.to_string());
 
     let shards = match http::download_file(repo, "model.safetensors.index.json", rev_opt.clone(), opts)
@@ -483,7 +676,7 @@ fn download_f3_base_weights(repo: &str, rev: &str, opts: &ResolveOptions) -> Res
             Ok(_) => {}
             Err(HubError::NotFound { .. }) => {
                 log::warn!(
-                    "no base weights found for F3 fleet `{repo}`; the Qwen3.5 candle backend \
+                    "no base weights found for `{repo}`; the Qwen3.5 candle backend \
                      will fail at serve time until the base weights are available"
                 );
             }
@@ -571,7 +764,7 @@ fn synthesize_f3(
     // the Qwen3.5 candle backend can build the model at serve time. Only when
     // the base config was reachable (the repo exists).
     if base_config.is_some() {
-        download_f3_base_weights(&base_repo, &base_pin, opts)?;
+        download_base_weights(&base_repo, &base_pin, opts)?;
     }
 
     let manifest = build_f3_manifest(
@@ -1039,6 +1232,68 @@ mod tests {
         let files = required_files(&m, None, "fp32", false).unwrap();
         assert!(!files.contains(&"model.onnx".to_string()));
         assert!(files.contains(&"head.safetensors".to_string()));
+    }
+
+    #[cfg(feature = "candle")]
+    #[test]
+    fn kev_adapter_is_not_treated_as_nimble() {
+        // The real raw-checkpoint dispatcher, using a tiny upstream-generated
+        // PEFT + head.pt snapshot with no Nimble schema/serving configs.
+        let dir = tempfile::tempdir().unwrap();
+        let fixture = Path::new("../huncho-backend/tests/fixtures/tiny_kev");
+        let revision = "2222222222222222222222222222222222222222";
+        let snapshot = dir
+            .path()
+            .join("models--fixture--kev/snapshots")
+            .join(revision);
+        let base = dir
+            .path()
+            .join("models--fixture--qwen3.5/snapshots/1111111111111111111111111111111111111111");
+        std::fs::create_dir_all(&snapshot).unwrap();
+        std::fs::create_dir_all(&base).unwrap();
+        for file in [
+            "adapter_config.json",
+            "adapter_model.safetensors",
+            "head.pt",
+            "tokenizer.json",
+        ] {
+            std::fs::copy(fixture.join(file), snapshot.join(file)).unwrap();
+        }
+        for file in ["config.json", "model.safetensors"] {
+            std::fs::copy(fixture.join(file), base.join(file)).unwrap();
+        }
+        std::fs::write(
+            base.join("model.safetensors.index.json"),
+            r#"{"weight_map":{"x":"model.safetensors"}}"#,
+        )
+        .unwrap();
+        let opts = ResolveOptions {
+            cache_dir: Some(dir.path().to_path_buf()),
+            local_files_only: true,
+            show_progress: false,
+            ..Default::default()
+        };
+        let resolved = synthesize_checkpoint(
+            "fixture/kev",
+            Some(revision),
+            Some(BackendId::Candle),
+            "fp32",
+            &opts,
+        )
+        .unwrap();
+        let manifest = ModelManifest::load(resolved.manifest_path).unwrap();
+        assert_eq!(manifest.family, Family::F2);
+        assert_eq!(manifest.prompt_contract.template, "kev-v1");
+        assert_eq!(manifest.head.weights, "head.pt");
+        assert_eq!(manifest.backbone.hidden_size, 16);
+        assert_eq!(manifest.backbone.max_context, 512);
+        assert_eq!(manifest.adapter.unwrap().revision, revision);
+        assert!((manifest.calibration.default.temperature - 2.40605).abs() < 1e-5);
+        assert!(
+            matches!(manifest.backbone.source, BackboneSource::Hf { ref repo, ref revision }
+            if repo == "fixture/qwen3.5" && revision == "1111111111111111111111111111111111111111")
+        );
+        assert!(!snapshot.join("schema_config.json").exists());
     }
 
     #[test]

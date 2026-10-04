@@ -149,6 +149,34 @@ hf download convaiinnovations/laya --local-dir ./laya-checkout
 
 `--source` is only valid for the `candle` backend.
 
+### Kev (F2) on Candle
+
+With `--features hf,candle,tokenizers`, `serve --model jaredpalmer/kev-4b
+--backend candle` loads Kev directly. The Hub resolver distinguishes Kev's
+PEFT `FEATURE_EXTRACTION` adapter from Nimble's candidate-logit adapter.
+`schema_config.json` is a Nimble file and is not required for Kev.
+
+The loader reads `head.pt` with Candle's restricted pickle reader, loads its
+trained query/key projections in fp32, and applies its fitted temperature once
+in the core calibration layer. The base model and revision come from that
+checkpoint's metadata. All adapter files are pinned to the adapter snapshot;
+base weights are pinned independently to the resolved base commit.
+
+The `kev-v1` prompt contract uses Kev's state/question/option/decision tokens,
+JSON rendering, caller-text escaping, option order, and yes/no descriptions.
+Each question runs as an independent causal row, preserving question isolation.
+The backend returns one raw pointer logit per option. Score confidence follows
+Kev's ordered-level formula; choice confidence uses the existing peak formula.
+
+Current support is CPU inference for Qwen3.5 LoRA checkpoints in fp32 (default)
+or fp16, with 8,192 tokens per complete row. KV/recurrent prefix caching is not
+implemented, so the state is recomputed for each question. Qwen3 checkpoints,
+full-weight Kev releases, option isolation, and trained special embeddings are
+rejected explicitly. This CPU path does not claim the upstream GPU server's
+64k state window. Offline reference fixtures test prompt tokens and calibrated
+probabilities against PyTorch; see
+[`tiny_kev`](../crates/huncho-backend/tests/fixtures/tiny_kev/README.md).
+
 ## Backend selection in the CLI
 
 - `huncho serve --mock` — serves a built-in deterministic mock model (no weights).
