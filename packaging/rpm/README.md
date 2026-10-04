@@ -72,6 +72,14 @@ The root `Makefile`'s `srpm` target just delegates to the same file.
    optionally `epel-9-x86_64`.
 4. **Build**: trigger a build in the web UI, via `copr-cli build`, or enable the
    GitHub webhook so a push to `main` rebuilds automatically.
+5. **Configure auto-rebuild** (optional but recommended): in the COPR web UI go
+   to the project's **Settings → Integrations** and copy the webhook URL
+   (`https://copr.fedorainfracloud.org/webhooks/<forge>/<project-id>/<secret>/`).
+   Then, in the GitHub repo, add a **Webhook** (Settings → Webhooks → Add
+   webhook) with that Payload URL, content type **application/json**, and event
+   **Push**. Every push to `main` now triggers a COPR rebuild of the `huncho`
+   package. Equivalently, this repo has a `push` webhook registered against the
+   `huncho` package already.
 
 Verify locally that the COPR entry point works:
 
