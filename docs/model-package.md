@@ -40,7 +40,7 @@ and the reference conformance vectors.
 
 ### `family`
 
-`F1 | F2 | F3 | F4` — selects the prompt builder and the expected head kind.
+`F1 | F2 | F3 | F4 | F5` — selects the prompt builder and the expected head kind.
 
 - **F1** (Encoder) — scores candidates at option-marker positions. Head kind:
   `option-marker`.
@@ -49,6 +49,11 @@ and the reference conformance vectors.
 - **F3** (Candidate-logit) — softmax over one-token answer codes using the LM
   head. Head kind: `candidate-logit`.
 - **F4** (Slot head) — fixed-width decision head. Head kind: `slot`.
+- **F5** (Joint schema) — one shared forward for all questions. Head kind:
+  `joint-schema`. Clef packages are generated from the reference release; see
+  [Clef](clef.md). Their `clef-native-v1` template and contract identifier select
+  the native encoder; the source revision pins model weights. No repository
+  Python code is executed.
 
 The manifest is validated so `head.kind` matches `family`; a mismatch is
 rejected at load time.

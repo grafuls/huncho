@@ -16,9 +16,13 @@ cache per question, and prefill each branch.
 
 ## Available backends
 
+Clef uses a whole-request backend (`forward_request`) because its joint head
+scores all questions together. See [Clef setup](clef.md).
+
 | Backend | Crate | Status | Notes |
 |---|---|---|---|
 | `MockBackend` | `huncho-backend` | ✅ built-in | Deterministic, dependency-free. The **offline reference** for the conformance harness and demos. |
+| `ClefBackend` | `huncho-backend` | `clef` | Native Rust/Candle Qwen3.5 and trained F5 joint schema head; CPU, optional CUDA. No Python runtime. |
 | `NullBackend` | `huncho-backend` | ✅ built-in | Always-empty output, useful for tests / shelling out. |
 | `OnnxBackend` | `huncho-backend` | ⚙️ feature-gated | ONNX Runtime (CPU/CUDA via EPs). Built with the `onnx` feature (off by default). |
 | `CandleBackend` | `huncho-backend` | ⚙️ feature-gated | Loads Hugging Face **safetensors** directly via `candle` (CPU). Built with the `candle` feature (off by default). The primary path for real `convaiinnovations/laya`. |

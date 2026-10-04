@@ -96,6 +96,9 @@ pub fn resolve(
     dtype: &str,
     opts: &ResolveOptions,
 ) -> Result<ResolvedPackage> {
+    if backend == Some(BackendId::Clef) {
+        return crate::clef::resolve(model, dtype, opts);
+    }
     let mref = ModelRef::parse(model, opts.revision.clone());
     match mref {
         ModelRef::Local(path) => resolve_local(&path),

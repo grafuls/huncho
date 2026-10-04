@@ -13,6 +13,7 @@ use crate::tokenizer::Tokenizer;
 
 mod kev;
 pub use kev::KevFormatter;
+pub mod clef;
 
 /// The mask/special-token string used by ModernBERT-based decision models (Laya).
 const LAYA_MASK_STR: &str = "[MASK]";
@@ -180,6 +181,9 @@ impl PromptFormatter for DefaultFormatter {
             Family::F2 => self.build_f2(state, question, tokenizer),
             Family::F3 => self.build_f3(state, question, tokenizer),
             Family::F4 => self.build_f4(state, question, tokenizer),
+            Family::F5 => Err(Error::Unsupported(
+                "joint-schema models require a whole-request forward".into(),
+            )),
         }
     }
 }

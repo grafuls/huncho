@@ -10,7 +10,7 @@ use crate::contract::{Answer, Question, SystemOneRequest, SystemOneResponse, Usa
 use crate::error::{Error, Result};
 use crate::head::{self, HeadParams};
 use crate::manifest::{BackendId, CalibrationEntry, Family, ModelManifest};
-use crate::prompt::{Candidate, PromptFormatter, formatter_for};
+use crate::prompt::{Candidate, CandidateKind, PromptFormatter, formatter_for};
 #[cfg(test)]
 use crate::tensor::Tensor;
 use crate::tokenizer::Tokenizer;
@@ -88,6 +88,10 @@ impl Engine {
     pub fn eval(&self, req: &SystemOneRequest, opts: &EvalOptions) -> Result<SystemOneResponse> {
         req.validate()?;
 
+        if self.family() == Family::F5 {
+            return self.eval_joint(req, opts);
+        }
+
         let max_context = opts.max_context.unwrap_or(self.manifest.backbone.max_context);
         let max_options = self.manifest.prompt_contract.max_options;
 
@@ -146,6 +150,90 @@ impl Engine {
         }
 
         let mut response = SystemOneResponse::new(req.model.clone(), answers, Usage::new(total_tokens));
+        if opts.extensions {
+            response.extensions = Some(self.extensions(raw_logits));
+        }
+        Ok(response)
+    }
+
+    /// Joint-schema models own tokenization and score every question together.
+    fn eval_joint(&self, req: &SystemOneRequest, opts: &EvalOptions) -> Result<SystemOneResponse> {
+        let max_context = opts
+            .max_context
+            .unwrap_or(self.manifest.backbone.max_context)
+            .min(self.manifest.backbone.max_context);
+        let candidates: BTreeMap<_, _> = req
+            .questions
+            .iter()
+            .map(|(id, question)| {
+                let values = joint_candidates(question);
+                if values.is_empty() || values.len() > self.manifest.prompt_contract.max_options {
+                    return Err(Error::Request(format!(
+                        "question `{id}` has an unsupported number of options"
+                    )));
+                }
+                Ok((id.clone(), values))
+            })
+            .collect::<Result<_>>()?;
+        let output = self
+            .backend
+            .lock()
+            .map_err(|_| Error::Backend("backend lock poisoned".into()))?
+            .forward_request(req, max_context)?;
+        if output.input_tokens == 0 || output.input_tokens > max_context as u64 {
+            return Err(Error::Backend(
+                "joint backend returned invalid token usage".into(),
+            ));
+        }
+        if output.logits.len() != req.questions.len() {
+            return Err(Error::Backend(
+                "joint backend returned the wrong number of questions".into(),
+            ));
+        }
+        let mut answers = BTreeMap::new();
+        let mut raw_logits = BTreeMap::new();
+        for (id, question) in &req.questions {
+            let options = &candidates[id];
+            let scores = output
+                .logits
+                .get(id)
+                .ok_or_else(|| Error::Backend(format!("joint backend omitted question `{id}`")))?;
+            if scores.len() != options.len() {
+                return Err(Error::Backend(format!(
+                    "joint backend returned the wrong options for `{id}`"
+                )));
+            }
+            let logits = options
+                .iter()
+                .map(|c| {
+                    let label = match (question, c.label.as_str()) {
+                        (Question::Noul { .. }, "yes") => "true",
+                        (Question::Noul { .. }, "no") => "false",
+                        _ => &c.label,
+                    };
+                    let value = scores.get(label).copied().ok_or_else(|| {
+                        Error::Backend(format!("joint backend omitted option `{label}` for `{id}`"))
+                    })?;
+                    if !value.is_finite() {
+                        return Err(Error::Backend(format!(
+                            "joint backend returned non-finite logits for `{id}`"
+                        )));
+                    }
+                    Ok(value)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let probabilities =
+                calibration::calibrate(&logits, self.temperature_for(question, options.len()))?;
+            answers.insert(
+                id.clone(),
+                self.build_answer(question, options, &probabilities)?,
+            );
+            if opts.extensions {
+                raw_logits.insert(id.clone(), logits);
+            }
+        }
+        let mut response =
+            SystemOneResponse::new(req.model.clone(), answers, Usage::new(output.input_tokens));
         if opts.extensions {
             response.extensions = Some(self.extensions(raw_logits));
         }
@@ -255,6 +343,47 @@ impl Engine {
             },
         }
     }
+}
+
+fn joint_candidates(question: &Question) -> Vec<Candidate> {
+    let labels: Vec<(String, Option<String>, CandidateKind)> = match question {
+        Question::Choice { criteria, .. } => criteria
+            .keys()
+            .map(|label| (label.clone(), None, CandidateKind::Option))
+            .collect(),
+        Question::Score { criteria, .. } => criteria
+            .iter()
+            .enumerate()
+            .map(|(index, level)| {
+                (
+                    index.to_string(),
+                    Some(
+                        level
+                            .as_str()
+                            .map(str::to_owned)
+                            .unwrap_or_else(|| level.to_string()),
+                    ),
+                    CandidateKind::Level,
+                )
+            })
+            .collect(),
+        Question::Noul { .. } => vec![
+            ("yes".into(), None, CandidateKind::YesNo),
+            ("no".into(), None, CandidateKind::YesNo),
+        ],
+    };
+    labels
+        .into_iter()
+        .enumerate()
+        .map(|(index, (label, description, kind))| Candidate {
+            kind,
+            position: 0,
+            code_id: 0,
+            label,
+            description,
+            index,
+        })
+        .collect()
 }
 
 #[cfg(test)]

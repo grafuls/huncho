@@ -11,6 +11,7 @@
 //! when the `hf` feature is enabled so the default build stays lightweight.
 
 pub mod error;
+mod clef;
 pub mod http;
 pub mod progress;
 pub mod resolver;

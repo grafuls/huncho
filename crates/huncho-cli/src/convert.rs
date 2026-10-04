@@ -72,6 +72,7 @@ pub fn artifact_name_for(backend: BackendId) -> String {
         BackendId::Mlx => "model.safetensors".to_string(),
         BackendId::Vllm => "model.safetensors".to_string(),
         BackendId::Candle => "model.safetensors".to_string(),
+        BackendId::Clef => "config.json".to_string(),
     }
 }
 
@@ -80,6 +81,9 @@ pub fn artifact_name_for(backend: BackendId) -> String {
 pub fn build_manifest(args: &ConvertArgs) -> anyhow::Result<ModelManifest> {
     let family = Family::parse(&args.family)?;
     let backend = BackendId::parse(&args.backend)?;
+    if backend == BackendId::Clef || family == Family::F5 {
+        anyhow::bail!("Clef uses its reference release directly; use `serve --backend clef --model Cloudflare/clef` or a local release directory");
+    }
     let artifact_name = artifact_name_for(backend);
 
     let name = args

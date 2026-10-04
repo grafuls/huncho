@@ -8,7 +8,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use huncho_core::contract::SystemOneRequest;
 use huncho_core::engine::EvalOptions;
@@ -30,14 +30,33 @@ pub fn router() -> Router<Arc<AppState>> {
 // POST /v1/systemone
 // ---------------------------------------------------------------------------
 
+/// The current serving contract is text/JSON only. Detect media explicitly so
+/// a multimodal model request never silently loses its images or video.
+#[derive(Deserialize)]
+struct InferenceRequest {
+    #[serde(flatten)]
+    request: SystemOneRequest,
+    images: Option<serde_json::Value>,
+    videos: Option<serde_json::Value>,
+}
+
 async fn systemone(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    Json(req): Json<SystemOneRequest>,
+    Json(body): Json<InferenceRequest>,
 ) -> Response {
     if let Err(status) = check_auth(&headers, &state.config) {
         return error_response(status, "unauthorized", "invalid or missing Authorization header");
     }
+
+    if body.images.is_some() || body.videos.is_some() {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "unsupported_media",
+            "Huncho currently accepts text/JSON state only; images and videos are not supported",
+        );
+    }
+    let req = body.request;
 
     let model = req.model.clone();
     state.metrics.queue_depth.inc();

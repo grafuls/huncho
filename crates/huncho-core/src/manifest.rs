@@ -18,7 +18,7 @@ pub const MANIFEST_SCHEMA_VERSION: &str = "1.0";
 // Enumerated types
 // ---------------------------------------------------------------------------
 
-/// The four decision-model families (PRD §4).
+/// The decision-model families.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum Family {
@@ -30,6 +30,8 @@ pub enum Family {
     F3,
     /// F4 Slot head — fixed-width decision head.
     F4,
+    /// F5 Joint schema — scores every question in one shared forward pass.
+    F5,
 }
 
 impl fmt::Display for Family {
@@ -45,6 +47,7 @@ impl Family {
             "F2" => Ok(Family::F2),
             "F3" => Ok(Family::F3),
             "F4" => Ok(Family::F4),
+            "F5" => Ok(Family::F5),
             other => Err(Error::Package(format!("unknown family `{other}`"))),
         }
     }
@@ -61,6 +64,7 @@ pub enum BackendId {
     Mlx,
     Vllm,
     Candle,
+    Clef,
 }
 
 impl BackendId {
@@ -71,6 +75,7 @@ impl BackendId {
             "mlx" => Ok(BackendId::Mlx),
             "vllm" => Ok(BackendId::Vllm),
             "candle" => Ok(BackendId::Candle),
+            "clef" => Ok(BackendId::Clef),
             other => Err(Error::Package(format!("unknown backend `{other}`"))),
         }
     }
@@ -87,6 +92,7 @@ impl fmt::Display for BackendId {
                 BackendId::Mlx => "mlx",
                 BackendId::Vllm => "vllm",
                 BackendId::Candle => "candle",
+                BackendId::Clef => "clef",
             }
         )
     }
@@ -104,6 +110,8 @@ pub enum HeadKind {
     CandidateLogit,
     /// F4 — fixed-width slot decision head.
     Slot,
+    /// F5 — joint schema head over the complete request.
+    JointSchema,
 }
 
 impl HeadKind {
@@ -113,6 +121,7 @@ impl HeadKind {
             "pointer" => Ok(HeadKind::Pointer),
             "candidate-logit" | "candidatelogit" => Ok(HeadKind::CandidateLogit),
             "slot" | "slot-head" => Ok(HeadKind::Slot),
+            "joint-schema" => Ok(HeadKind::JointSchema),
             other => Err(Error::Package(format!("unknown head kind `{other}`"))),
         }
     }
@@ -127,6 +136,9 @@ pub enum ConfidenceDef {
     /// Normalized entropy-based confidence (used by Laya).
     #[serde(rename = "entropy")]
     Entropy,
+    /// Maximum option probability (Clef's reference definition).
+    #[serde(rename = "max-probability")]
+    MaxProbability,
     /// A named, model-specific definition.
     #[serde(rename = "custom")]
     Custom(String),
@@ -143,6 +155,7 @@ impl fmt::Display for ConfidenceDef {
         match self {
             ConfidenceDef::Peak => write!(f, "peak"),
             ConfidenceDef::Entropy => write!(f, "entropy"),
+            ConfidenceDef::MaxProbability => write!(f, "max-probability"),
             ConfidenceDef::Custom(s) => write!(f, "custom:{s}"),
         }
     }
@@ -234,7 +247,7 @@ pub struct F3Config {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HeadConfig {
     pub kind: HeadKind,
-    /// Path (relative) to head weights in safetensors. Always fp32.
+    /// Path (relative) to head weights. Runtime precision is backend-specific.
     pub weights: String,
     /// Output width of the head's logits.
     #[serde(default = "default_head_width")]
@@ -474,6 +487,7 @@ pub fn family_kind(family: Family) -> HeadKind {
         Family::F2 => HeadKind::Pointer,
         Family::F3 => HeadKind::CandidateLogit,
         Family::F4 => HeadKind::Slot,
+        Family::F5 => HeadKind::JointSchema,
     }
 }
 

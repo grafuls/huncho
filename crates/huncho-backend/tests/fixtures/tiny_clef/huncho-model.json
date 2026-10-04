@@ -1,0 +1,51 @@
+{
+  "schema_version": "1.0",
+  "name": "tiny-clef",
+  "family": "F5",
+  "backbone": {
+    "source": {
+      "kind": "local",
+      "path": "."
+    },
+    "hidden_size": 16,
+    "max_context": 4096,
+    "tokenizer": "tokenizer.json",
+    "artifacts": {
+      "clef": [
+        {
+          "path": "config.json",
+          "dtype": "fp32"
+        },
+        {
+          "path": "config.json",
+          "dtype": "fp16"
+        },
+        {
+          "path": "config.json",
+          "dtype": "bf16"
+        }
+      ]
+    }
+  },
+  "head": {
+    "kind": "joint-schema",
+    "weights": "joint_head.safetensors",
+    "width": 1
+  },
+  "prompt_contract": {
+    "template": "clef-native-v1",
+    "contract_hash": "clef-text-json-sorted-v1",
+    "state_budget": 4096,
+    "head_budget": 4096,
+    "max_len": 4096,
+    "head_max_len": 4096,
+    "max_options": 255
+  },
+  "calibration": {
+    "default": {
+      "temperature": 1.0,
+      "confidence": "max-probability",
+      "status": "pending"
+    }
+  }
+}

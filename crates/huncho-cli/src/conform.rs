@@ -40,7 +40,7 @@ pub struct ConformArgs {
     #[arg(long)]
     pub golden: Option<String>,
 
-    /// Backend to use (onnx|mock|candle).
+    /// Backend to use (onnx|mock|candle|clef).
     #[arg(long, default_value = "mock")]
     pub backend: String,
 

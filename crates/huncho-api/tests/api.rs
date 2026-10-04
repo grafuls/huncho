@@ -175,6 +175,17 @@ fn choice_request() -> Value {
 }
 
 #[tokio::test]
+async fn rejects_media_instead_of_silently_discarding_it() {
+    for field in ["images", "videos"] {
+        let mut request = choice_request();
+        request[field] = json!(["media"]);
+        let (status, body) = send(state(None), Method::POST, "/v1/systemone", Some(request), None, false).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"]["code"], "unsupported_media");
+    }
+}
+
+#[tokio::test]
 async fn metrics_exposes_prometheus_registry() {
     // Issue a request first so the metrics counters are non-empty.
     let s = state(None);

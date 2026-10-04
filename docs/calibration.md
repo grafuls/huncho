@@ -34,7 +34,12 @@ manifest.
 
 ## Confidence
 
-Two definitions are supported, selectable per model via `calibration.default.confidence`:
+Three definitions are supported, selectable per model via `calibration.default.confidence`:
+
+### Clef maximum probability (`max-probability`)
+
+Confidence is the largest calibrated option probability, including for score
+questions. A uniform two-option distribution has confidence `0.5`.
 
 ### Jev peak-based confidence (`peak`)
 

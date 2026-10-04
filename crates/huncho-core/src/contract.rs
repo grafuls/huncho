@@ -30,8 +30,9 @@ pub struct SystemOneRequest {
     pub state: StateValue,
     /// The model that handles the request.
     pub model: String,
-    /// A map of question-id -> question. Answers come back under the same ids.
-    pub questions: BTreeMap<String, Question>,
+    /// Question-id -> question, preserving caller order for joint-schema prompts.
+    /// Answers come back under the same ids.
+    pub questions: indexmap::IndexMap<String, Question>,
 }
 
 /// The `state` field: plain string, or structured JSON (object/array).

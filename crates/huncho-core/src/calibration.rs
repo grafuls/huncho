@@ -150,6 +150,7 @@ pub fn confidence(probs: &[f32], def: &ConfidenceDef) -> f32 {
     match def {
         ConfidenceDef::Peak => confidence_peak(probs),
         ConfidenceDef::Entropy => confidence_entropy(probs),
+        ConfidenceDef::MaxProbability => probs.iter().copied().fold(0.0, f32::max),
         ConfidenceDef::Custom(_) => confidence_peak(probs),
     }
 }

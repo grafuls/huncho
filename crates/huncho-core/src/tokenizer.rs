@@ -153,6 +153,16 @@ pub struct HfTokenizer {
 
 #[cfg(feature = "tokenizers")]
 impl HfTokenizer {
+    /// Joint-schema encoders enforce their own total budget. Disable tokenizer
+    /// padding/truncation so individual schema fragments cannot be shortened.
+    pub fn from_file_unbounded(path: impl AsRef<std::path::Path>) -> Result<HfTokenizer> {
+        let mut result = Self::from_file(path)?;
+        result.tokenizer.with_truncation(None)
+            .map_err(|e| crate::error::Error::Package(e.to_string()))?;
+        result.tokenizer.with_padding(None);
+        Ok(result)
+    }
+
     /// Load a `tokenizer.json` from disk.
     pub fn from_file(path: impl AsRef<std::path::Path>) -> Result<HfTokenizer> {
         let tokenizer = tokenizers::Tokenizer::from_file(path.as_ref())

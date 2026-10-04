@@ -7,6 +7,7 @@
 use std::collections::BTreeMap;
 
 use crate::error::Result;
+use crate::contract::SystemOneRequest;
 use crate::manifest::{BackendId, Family};
 use crate::tensor::Tensor;
 
@@ -14,6 +15,15 @@ use crate::tensor::Tensor;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CacheHandle {
     pub id: u64,
+}
+
+/// Raw option logits from a model that encodes and scores a whole request.
+/// Question and option ids are explicit so backend ordering cannot change answers.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RequestOutput {
+    pub logits: BTreeMap<String, BTreeMap<String, f32>>,
+    /// Tokens in the shared prompt, counted once per request.
+    pub input_tokens: u64,
 }
 
 /// The input to a single [`Backend::forward`] call.
@@ -116,6 +126,17 @@ pub trait Backend: Send + Sync {
     /// positions. Callers must not assume arbitrary attention masks are
     /// supported; fan-out is expressed via `fork_from`.
     fn forward(&mut self, input: ForwardInput) -> Result<ForwardOutput>;
+
+    /// Encode and score all questions jointly (F5). Calibration stays in core.
+    fn forward_request(
+        &mut self,
+        _request: &SystemOneRequest,
+        _max_context: usize,
+    ) -> Result<RequestOutput> {
+        Err(crate::error::Error::Unsupported(
+            "backend does not support whole-request inference".into(),
+        ))
+    }
 
     /// Fork a prefilled cache, isolating it for one question branch (required
     /// for F2). Backends that do not support forking return

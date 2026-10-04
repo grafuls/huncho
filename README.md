@@ -16,8 +16,8 @@ TypeSafe Python SDK works against Huncho with only a base-URL change.
 
 ## Highlights
 
-- **Four decision-head families** behind one contract: F1 (option-marker), F2
-  (pointer), F3 (candidate-logit), F4 (slot head).
+- **Five decision-head families** behind one contract: F1 (option-marker), F2
+  (pointer), F3 (candidate-logit), F4 (slot head), F5 (joint schema).
 - **Calibration as a first-class guarantee**: per-backend × dtype temperatures,
   softmax, and confidence (Jev peak-based, or per-model definitions).
 - **Conformance gating**: an offline harness (`huncho conform`) compares any backend
@@ -144,6 +144,18 @@ cargo run --release -p huncho-cli -- conform \
 ```
 
 ## Model package
+
+Cloudflare Clef has a native Rust/Candle backend for text and JSON:
+
+```bash
+cargo build --release -p huncho-cli --features clef
+./target/release/huncho serve --backend clef --model Cloudflare/clef
+```
+
+No Python, pip dependencies, or model conversion is required. The command above
+builds for CPU; `--features cuda` enables NVIDIA support. Both score all
+questions jointly. See [Clef setup and limits](docs/clef.md), including the
+current validation scope and full-model memory requirements.
 
 A single `huncho-model.json` manifest pins the family, backbone, head, prompt
 contract, and per-backend calibration. See [docs/model-package.md](docs/model-package.md).

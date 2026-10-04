@@ -36,7 +36,7 @@ pub struct BenchArgs {
     #[arg(long)]
     pub cache_dir: Option<String>,
 
-    /// Backend to use (onnx|mock|candle).
+    /// Backend to use (onnx|mock|candle|clef).
     #[arg(long, default_value = "mock")]
     pub backend: String,
 
@@ -84,7 +84,7 @@ pub fn run(args: BenchArgs) -> anyhow::Result<()> {
         if is_mock {
             mock_engine_from_manifest(path)?
         } else {
-            engine_from_manifest(path, backend_id.expect("non-mock backend"), None)?
+            engine_from_manifest(path, backend_id.expect("non-mock backend"), dtype)?
         }
     } else {
         mock_engine(&args.mock_model, Family::F1, BackendId::Onnx, "fp32", 1.0)?
@@ -176,7 +176,7 @@ fn make_request(questions: usize, long_state: bool) -> SystemOneRequest {
     SystemOneRequest {
         state,
         model: "mock".into(),
-        questions: qs,
+        questions: qs.into_iter().collect(),
     }
 }
 

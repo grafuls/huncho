@@ -36,7 +36,7 @@ pub struct ServeArgs {
     pub manifest: Vec<String>,
 
     /// Model reference(s) to serve: a local package dir/path or an HF repo id
-    /// (`owner/repo`). Requires building with `--features hf`.
+    /// (`owner/repo`). Hub references require `hf` (included by `clef`).
     #[arg(long)]
     pub model: Vec<String>,
 
@@ -48,7 +48,7 @@ pub struct ServeArgs {
     #[arg(long)]
     pub token: Option<String>,
 
-    /// Backend to use for manifest/models (onnx|candle|mock). Also read from `HUNCHO_BACKEND`.
+    /// Backend to use for manifest/models (onnx|candle|clef|mock). Also read from `HUNCHO_BACKEND`.
     #[arg(long, default_value = "mock", env = "HUNCHO_BACKEND")]
     pub backend: String,
 

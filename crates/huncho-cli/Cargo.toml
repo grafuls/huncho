@@ -32,6 +32,8 @@ onnx = ["huncho-backend/onnx"]
 candle = ["huncho-backend/candle", "huncho-hub?/candle"]
 hf = ["dep:huncho-hub"]
 tokenizers = ["huncho-core/tokenizers"]
+clef = ["candle", "hf", "tokenizers", "huncho-backend/clef"]
+cuda = ["clef", "huncho-backend/cuda"]
 
 [dev-dependencies]
 tempfile = "3"

@@ -155,10 +155,20 @@ pub fn engine_from_manifest(
     // checkpoint in fp32. Candle's CPU matmul supports fp16 (but not bf16), so
     // fp16 is the right reduced-precision default here. Explicit `--dtype`
     // always wins.
+    #[cfg(feature = "clef")]
+    let clef_dtype = if backend_id == BackendId::Clef && dtype.is_none() {
+        Some(huncho_backend::clef::default_dtype()?)
+    } else {
+        None
+    };
+    #[cfg(not(feature = "clef"))]
+    let clef_dtype: Option<&str> = None;
     let dtype = dtype
         .map(|s| s.to_string())
         .unwrap_or_else(|| {
-            if manifest.family == Family::F3 {
+            if backend_id == BackendId::Clef {
+                clef_dtype.unwrap_or("fp16").to_string()
+            } else if manifest.family == Family::F3 {
                 "fp16".to_string()
             } else {
                 "fp32".to_string()
@@ -167,8 +177,15 @@ pub fn engine_from_manifest(
 
     // Artifacts and the tokenizer are declared relative to the manifest's
     // directory, not the manifest file itself.
-    let dir = path.as_ref().parent().unwrap_or_else(|| Path::new("."));
-    let tokenizer = load_tokenizer(&manifest, dir)?;
+    let dir = path.as_ref().parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    // The native Clef backend owns tokenization of the complete schema.
+    let tokenizer: Box<dyn Tokenizer> = if backend_id == BackendId::Clef {
+        Box::new(SimpleTokenizer::new(32768))
+    } else {
+        load_tokenizer(&manifest, dir)?
+    };
     let backend = load_backend(&manifest, backend_id, &dtype, dir)?;
     Engine::new(manifest, backend, tokenizer, HeadParams::default(), backend_id, dtype)
 }
@@ -182,10 +199,23 @@ fn load_backend(
     match backend_id {
         BackendId::Onnx => load_onnx(manifest, dtype, dir),
         BackendId::Candle => load_candle(manifest, dtype, dir),
+        BackendId::Clef => load_clef(manifest, dtype, dir),
         other => Err(Error::Unsupported(format!(
             "backend `{other}` is not available in this build"
         ))),
     }
+}
+
+#[cfg(feature = "clef")]
+fn load_clef(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<dyn Backend>> {
+    Ok(Box::new(huncho_backend::ClefBackend::load(
+        dir, manifest, dtype, huncho_backend::clef::device_from_env()?,
+    )?))
+}
+
+#[cfg(not(feature = "clef"))]
+fn load_clef(_manifest: &ModelManifest, _dtype: &str, _dir: &Path) -> Result<Box<dyn Backend>> {
+    Err(Error::Unsupported("native Clef requires building huncho with --features clef".into()))
 }
 
 #[cfg(feature = "candle")]
@@ -321,8 +351,37 @@ pub fn engine_from_resolved_manifest(
 
 /// Resolve a model reference (local path or `owner/repo`) to a local package
 /// manifest path, fetching missing artifacts from the Hub.
-#[cfg(feature = "hf")]
 pub fn resolve_model(
+    model: &str,
+    backend: Option<BackendId>,
+    dtype: Option<&str>,
+    revision: Option<String>,
+    token: Option<String>,
+    cache_dir: Option<String>,
+    fetch_golden: bool,
+) -> Result<PathBuf> {
+    if backend == Some(BackendId::Clef) {
+        #[cfg(not(feature = "clef"))]
+        return Err(Error::Unsupported("native Clef requires building huncho with --features clef".into()));
+        #[cfg(feature = "clef")]
+        return resolve_hub_model(model, backend, dtype, revision, token, cache_dir, fetch_golden);
+    }
+    // Local manifests do not need either Hub client.
+    let path = Path::new(model);
+    if path.exists() {
+        let manifest = if path.is_dir() {
+            path.join("huncho-model.json")
+        } else {
+            path.to_path_buf()
+        };
+        ModelManifest::load(&manifest)?;
+        return Ok(manifest);
+    }
+    resolve_hub_model(model, backend, dtype, revision, token, cache_dir, fetch_golden)
+}
+
+#[cfg(feature = "hf")]
+fn resolve_hub_model(
     model: &str,
     backend: Option<BackendId>,
     dtype: Option<&str>,
@@ -346,7 +405,7 @@ pub fn resolve_model(
 }
 
 #[cfg(not(feature = "hf"))]
-pub fn resolve_model(
+fn resolve_hub_model(
     _model: &str,
     _backend: Option<BackendId>,
     _dtype: Option<&str>,
@@ -362,7 +421,6 @@ pub fn resolve_model(
 
 /// Build a serving [`Engine`] from a model reference that resolves against the
 /// Hub (or a local package). `backend = None` selects the offline mock backend.
-#[cfg(feature = "hf")]
 pub fn engine_from_ref(
     model: &str,
     backend: Option<BackendId>,
@@ -373,20 +431,6 @@ pub fn engine_from_ref(
 ) -> Result<Engine> {
     let manifest_path = resolve_model(model, backend, dtype, revision, token, cache_dir, false)?;
     engine_from_resolved_manifest(&manifest_path, backend, dtype)
-}
-
-#[cfg(not(feature = "hf"))]
-pub fn engine_from_ref(
-    _model: &str,
-    _backend: Option<BackendId>,
-    _dtype: Option<&str>,
-    _revision: Option<String>,
-    _token: Option<String>,
-    _cache_dir: Option<String>,
-) -> Result<Engine> {
-    Err(Error::Unsupported(
-        "Hugging Face Hub resolution requires building huncho with `--features hf`".into(),
-    ))
 }
 
 #[cfg(all(test, feature = "candle"))]

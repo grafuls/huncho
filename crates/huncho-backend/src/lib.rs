@@ -11,6 +11,7 @@
 //!   candle port of the Qwen3.5 hybrid Gated DeltaNet / full-attention backbone
 //!   with a PEFT LoRA merge, behind the `candle` feature.
 //! * [`kev`] — Kev checkpoint metadata and trained pointer-head loading.
+//! * [`clef::ClefBackend`] — native whole-request Clef inference, behind `clef`.
 //! * [`null::NullBackend`] — a backend that always raises an error, used as a
 //!   placeholder when a model is not yet loaded.
 
@@ -18,6 +19,8 @@
 pub mod candle;
 #[cfg(feature = "candle")]
 pub mod kev;
+#[cfg(feature = "clef")]
+pub mod clef;
 pub mod mock;
 pub mod null;
 #[cfg(feature = "onnx")]
@@ -28,6 +31,8 @@ pub mod qwen3_5;
 #[cfg(feature = "candle")]
 pub use candle::CandleBackend;
 pub use mock::MockBackend;
+#[cfg(feature = "clef")]
+pub use clef::ClefBackend;
 pub use null::NullBackend;
 #[cfg(feature = "onnx")]
 pub use onnx::OnnxBackend;

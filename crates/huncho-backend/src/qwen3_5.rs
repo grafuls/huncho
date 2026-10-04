@@ -656,7 +656,7 @@ impl Model {
     pub fn forward(&self, ids: &Tensor) -> Result<Tensor> {
         let seq = ids.dims().last().copied().unwrap_or(0);
         let (cos, sin) = self.rotary.cos_sin(seq, &self.device)?;
-        let mask = causal_mask(seq)?;
+        let mask = causal_mask(seq)?.to_device(&self.device)?;
         let mut hidden = self.embed_tokens.forward(ids)?; // [B, seq, hidden]
         for layer in &self.layers {
             hidden = layer.forward(&hidden, &cos, &sin, &mask)?;
@@ -902,7 +902,7 @@ fn read_lora_hyperparams(path: &Path) -> CoreResult<(usize, f32)> {
 
 /// Load all `*.safetensors` files in a directory into a single tensor map,
 /// converting to the requested dtype.
-fn load_base_tensors(dir: &Path, device: &Device, dtype: DType) -> CoreResult<HashMap<String, Tensor>> {
+pub(crate) fn load_base_tensors(dir: &Path, device: &Device, dtype: DType) -> CoreResult<HashMap<String, Tensor>> {
     let mut map = HashMap::new();
     let entries: Vec<_> = std::fs::read_dir(dir)
         .map_err(|e| Error::Backend(QwenError::Load(dir.display().to_string(), e.to_string()).to_string()))?
@@ -912,13 +912,15 @@ fn load_base_tensors(dir: &Path, device: &Device, dtype: DType) -> CoreResult<Ha
         .filter(|p| {
             // The adapter sits next to the base weights in the package dir; do
             // not treat `adapter_model.safetensors` as a base shard.
-            p.file_name().map(|n| n != "adapter_model.safetensors").unwrap_or(true)
+            p.file_name().map(|n| n != "adapter_model.safetensors" && n != "joint_head.safetensors").unwrap_or(true)
         })
         .collect();
     for p in entries {
-        let raw = candle::safetensors::load(&p, device)
+        // Model files must remain unchanged while loading. Map the shard so
+        // excluded vision/MTP weights are never materialized on the device.
+        let raw = unsafe { candle::safetensors::MmapedSafetensors::new(&p) }
             .map_err(|e| Error::Backend(QwenError::Load(p.display().to_string(), e.to_string()).to_string()))?;
-        for (name, v) in raw {
+        for (name, _) in raw.tensors() {
             // The Qwen3.5 base is a multimodal conditional-generation model; the
             // F3 adapter and this text backend only need the text backbone and
             // the LM head. Drop the vision tower and MTP tensors so we do not
@@ -926,7 +928,7 @@ fn load_base_tensors(dir: &Path, device: &Device, dtype: DType) -> CoreResult<Ha
             let Some(k) = canonical_weight_name(&name) else {
                 continue;
             };
-            let v = v.to_dtype(dtype).map_err(|e| {
+            let v = raw.load(&name, device).and_then(|v| v.to_dtype(dtype)).map_err(|e| {
                 Error::Backend(QwenError::Load(k.clone(), e.to_string()).to_string())
             })?;
             map.insert(k, v);
