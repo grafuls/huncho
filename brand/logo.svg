@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">
+  <!-- Huncho mark: monoline H, crossbar rises as a smooth decision summit -->
+  <g fill="none" stroke="#1B2A4A" stroke-width="42" stroke-linecap="round" stroke-linejoin="round">
+    <!-- left pillar -->
+    <path d="M112 100 L112 300"/>
+    <!-- right pillar -->
+    <path d="M288 100 L288 300"/>
+    <!-- crossbar / summit arch -->
+    <path d="M112 208 C 152 150, 248 150, 288 208"/>
+  </g>
+</svg>
