@@ -263,10 +263,11 @@ binary + source RPM with ONNX and Candle (`onnx,hf,tokenizers,candle`) and ships
 systemd unit, an env file, a man page, and the mock model package. See
 [`packaging/rpm/README.md`](../packaging/rpm/README.md).
 
-Release builds are published to **Fedora COPR**. The repo exposes a
-`make srpm` target (COPR's SCM build entry point) that assembles the source RPM
-into the repo root; COPR then compiles the package on Fedora builders and
-serves a dnf repository. See the COPR section in
+Release builds are published to **Fedora COPR**. COPR's `make srpm` SCM build
+method invokes the `srpm` target of `.copr/Makefile`, which assembles the
+source RPM into COPR's `outdir`; the root `make srpm` just delegates to the same
+file and drops the source RPM into the repo root. COPR then compiles the
+package on Fedora builders and serves a dnf repository. See the COPR section in
 [`packaging/rpm/README.md`](../packaging/rpm/README.md).
 
 ## Release gates

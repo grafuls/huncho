@@ -56,13 +56,18 @@ third-party RPM for Fedora/RHEL users. It builds the package on Fedora builders
 from the git source and serves a dnf repository, so users can install and
 automatically update `huncho` with `dnf`.
 
-The repo is already wired for COPR's SCM build method, which clones the git repo
-and runs `make srpm` from the checkout root (see the root `Makefile`).
+The repo is already wired for COPR's **make srpm** SCM build method. COPR
+clones the git repo and invokes the `srpm` target of `.copr/Makefile` (in the
+repo root), passing `outdir` and `spec` as make variables. That file assembles
+the source tarball and auxiliary files and runs `rpmbuild -bs` into `outdir`.
+The root `Makefile`'s `srpm` target just delegates to the same file.
 
 1. **Create a project** at <https://copr.fedorainfracloud.org> (sign in with
    your Fedora account), e.g. `grafuls/huncho`.
-2. **Add a package** with the **SCM** source type: point it at this repo's git
-   URL and the `main` branch. COPR runs `make srpm` to build the source RPM.
+2. **Add a package** with the **SCM** source type and the **make srpm**
+   method: point it at this repo's git URL and the `main` branch, and set the
+   spec file to `packaging/rpm/huncho.spec`. COPR runs `.copr/Makefile`'s
+   `srpm` target to build the source RPM.
 3. **Enable chroots**, e.g. `fedora-rawhide-x86_64`, `fedora-42-x86_64`, and
    optionally `epel-9-x86_64`.
 4. **Build**: trigger a build in the web UI, via `copr-cli build`, or enable the
@@ -72,6 +77,8 @@ Verify locally that the COPR entry point works:
 
 ```sh
 make srpm   # writes huncho-<version>.src.rpm into the repo root
+# equivalently, exactly what COPR runs:
+make -f .copr/Makefile srpm outdir=. spec=packaging/rpm/huncho.spec
 ```
 
 Then point users at the repo:
@@ -91,7 +98,7 @@ sudo dnf install huncho
 | `huncho-sysusers.conf` | systemd-sysusers definition for the `huncho` service user. |
 | `huncho.1` | Roff man page. |
 | `build-rpm.sh` | Assembles `~/rpmbuild` and runs `rpmbuild -ba` (binary + source RPM). |
-| `build-srpm.sh` | Assembles a source RPM into the repo root for COPR / `make srpm`. |
+| `.copr/Makefile` | COPR `make srpm` entry point: builds the source RPM into COPR's `outdir`. |
 
 ## Service user
 

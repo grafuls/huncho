@@ -1,8 +1,8 @@
 # huncho packaging targets.
 #
-# Fedora COPR's SCM build method clones the repo and runs `make srpm` from the
-# checkout root, then picks up the produced `.src.rpm`. The `srpm` target below
-# is what COPR invokes; the others are local conveniences.
+# Fedora COPR's `make srpm` SCM build method actually consumes `.copr/Makefile`
+# in the repo root (see that file). The `srpm` target here is a thin local
+# wrapper that delegates to it, dropping the source RPM in the checkout root.
 
 NAME    := huncho
 VERSION := 0.1.0
@@ -10,16 +10,14 @@ TARBALL := $(NAME)-$(VERSION).tar.gz
 
 .PHONY: srpm tarball clean
 
-# Produce a source RPM in the current directory. Used by COPR.
+# Produce a source RPM in the current directory (local convenience; COPR runs
+# `.copr/Makefile` directly).
 srpm:
-	./packaging/rpm/build-srpm.sh
+	make -f .copr/Makefile srpm outdir=. spec=packaging/rpm/$(NAME).spec
 
 # Produce just the upstream source tarball.
 tarball:
-	git ls-files -z \
-		| tar --null --files-from=- \
-			--transform="s|^|$(NAME)-$(VERSION)/|" \
-			--create --gzip --file $(TARBALL)
+	make -f .copr/Makefile tarball
 
 clean:
 	rm -f $(TARBALL) *.src.rpm

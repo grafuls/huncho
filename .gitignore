@@ -4,6 +4,9 @@
 /*.tar.gz
 /*.src.rpm
 
+# Scratch tree used while assembling a source RPM (see `.copr/Makefile`)
+/.copr-work/
+
 # Local environment configuration
 .env
 .env.*
