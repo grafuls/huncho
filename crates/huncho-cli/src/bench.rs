@@ -8,10 +8,7 @@ use huncho_core::contract::{Instructions, Question, StateValue, SystemOneRequest
 use huncho_core::engine::{Engine, EvalOptions};
 use huncho_core::manifest::{BackendId, Family};
 
-use crate::load::{
-    engine_from_manifest, engine_from_resolved_manifest, mock_engine, mock_engine_from_manifest,
-    resolve_model,
-};
+use crate::load::{engine_from_resolved_manifest, mock_engine, resolve_model, BackendChoice};
 
 #[derive(Args)]
 pub struct BenchArgs {
@@ -36,8 +33,8 @@ pub struct BenchArgs {
     #[arg(long)]
     pub cache_dir: Option<String>,
 
-    /// Backend to use (onnx|mock|candle|clef).
-    #[arg(long, default_value = "mock")]
+    /// Backend override (auto|onnx|candle|clef|mock). Auto selects from model metadata.
+    #[arg(long, default_value = "auto")]
     pub backend: String,
 
     /// Override dtype for manifest/model-loaded runs.
@@ -62,30 +59,21 @@ pub struct BenchArgs {
 }
 
 pub fn run(args: BenchArgs) -> anyhow::Result<()> {
-    let is_mock = args.backend.eq_ignore_ascii_case("mock");
-    let backend_id = if is_mock {
-        None
-    } else {
-        Some(BackendId::parse(&args.backend)?)
-    };
+    let backend = BackendChoice::parse(&args.backend)?;
     let dtype = args.dtype.as_deref();
     let engine: Engine = if let Some(model) = &args.model {
         let manifest_path = resolve_model(
             model,
-            backend_id,
+            backend,
             dtype,
             args.revision.clone(),
             args.token.clone(),
             args.cache_dir.clone(),
             false,
         )?;
-        engine_from_resolved_manifest(&manifest_path, backend_id, dtype)?
+        engine_from_resolved_manifest(&manifest_path, backend, dtype)?
     } else if let Some(path) = &args.manifest {
-        if is_mock {
-            mock_engine_from_manifest(path)?
-        } else {
-            engine_from_manifest(path, backend_id.expect("non-mock backend"), dtype)?
-        }
+        engine_from_resolved_manifest(std::path::Path::new(path), backend, dtype)?
     } else {
         mock_engine(&args.mock_model, Family::F1, BackendId::Onnx, "fp32", 1.0)?
     };

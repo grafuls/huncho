@@ -66,9 +66,11 @@ rejected at load time.
 
 ### `backbone.artifacts`
 
-Per-backend artifacts, keyed by backend id (`onnx`, `llamacpp`, `mlx`,
-`vllm`). Each artifact has a relative `path` and the `dtype` it provides
-(`fp32`, `fp16`, `int8`, `q4`). `huncho convert` produces these.
+Per-backend artifacts, keyed by backend id (`onnx`, `candle`, `clef`,
+`llamacpp`, `mlx`, `vllm`). Each artifact has a relative `path` and the `dtype` it provides
+(`fp32`, `fp16`, `int8`, `q4`). `huncho convert` produces these. The CLI uses
+these entries and the decision family to select an available runtime
+automatically; users can override it with `--backend`.
 
 ### `head`
 

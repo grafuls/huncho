@@ -55,9 +55,9 @@ cargo build --release -p huncho-cli --features onnx
 ```
 
 With the feature enabled, `huncho serve --manifest ...` will load the ONNX artifact
-declared in the manifest for the requested dtype. Without the feature, manifest
-loads fall back to the mock backend, which is why `huncho serve --manifest ...`
-demos work without weights.
+declared in the manifest for the requested dtype. Without the feature, an
+ONNX-only package reports a build error. Use `--backend mock` explicitly for an
+offline demo.
 
 The ONNX feature also enables `ort`'s `download-binaries` and `tls-native`
 features, so a build with this feature:
@@ -122,7 +122,7 @@ At load time it:
 `model.safetensors`. The weights/config are fetched separately (e.g. `hf
 download convaiinnovations/laya model.safetensors` and copy
 `encoder/config.json` to `config.json`), then `huncho serve --manifest
-huncho-model.json --backend candle` serves it. Because Laya's checkpoint is
+huncho-model.json` serves it. Because Laya's checkpoint is
 ~842 MB, this is intentionally kept out of the automated test suite.
 
 ### Assembling a package from a local checkpoint
@@ -138,7 +138,7 @@ huncho convert --backend candle \
   --source ./laya-checkout \
   --out ./my-laya
 
-huncho serve --manifest ./my-laya/huncho-model.json --backend candle
+huncho serve --manifest ./my-laya/huncho-model.json
 ```
 
 `--source` copies `config.json` (or `encoder/config.json`) to `config.json`, the
@@ -155,8 +155,8 @@ hf download convaiinnovations/laya --local-dir ./laya-checkout
 
 ### Kev (F2) on Candle
 
-With `--features hf,candle,tokenizers`, `serve --model jaredpalmer/kev-4b
---backend candle` loads Kev directly. The Hub resolver distinguishes Kev's
+With `--features hf,candle,tokenizers`, `serve --model jaredpalmer/kev-4b` loads
+Kev directly. The Hub resolver distinguishes Kev's
 PEFT `FEATURE_EXTRACTION` adapter from Nimble's candidate-logit adapter.
 `schema_config.json` is a Nimble file and is not required for Kev.
 
@@ -183,13 +183,34 @@ probabilities against PyTorch; see
 
 ## Backend selection in the CLI
 
-- `huncho serve --mock` — serves a built-in deterministic mock model (no weights).
-- `huncho serve --manifest <path> --backend mock` — serves a manifest using the mock
-  backend (offline demo).
-- `huncho serve --manifest <path> --backend onnx` — serves a manifest using ONNX.
-- `huncho serve --manifest <path> --backend candle` — serves a manifest using the
-  candle CPU backend (real `.safetensors` checkpoints).
-- `huncho conform --backend mock` — runs conformance against the mock reference.
+`serve`, `bench`, and `conform` default to `--backend auto`. Each model is
+selected independently, so one server can load packages using different
+runtimes without per-model flags:
+
+```bash
+huncho serve --model convaiinnovations/laya --model Cloudflare/clef
+```
+
+The resolver reads package artifacts and the decision family. Raw Hub releases
+are recognized by their metadata, including Clef's joint-head configuration
+and Kev/Nimble's adapter configuration; repository names are not hard-coded.
+Raw local Clef directories are also recognized without a manifest.
+
+Selection prefers Clef for F5 and Candle for supported safetensors models, then
+ONNX for F1 exports. It considers the compiled runtimes and an explicit
+`--dtype`. When a package supports both Candle and ONNX, Candle wins if available.
+A missing runtime produces an error with build instructions. Automatic selection
+never falls back to mock inference. Startup logs report the selected backend
+and dtype for each model.
+
+`--backend onnx`, `--backend candle`, or `--backend clef` overrides selection
+for all supplied models. `HUNCHO_BACKEND` sets the same override for `serve`.
+`--backend auto` restores automatic selection. Use `serve --mock` for a built-in
+demo or `--backend mock` to run a package with the offline reference.
+`bench` and `conform` without a model continue to use the built-in mock.
+
+`convert --backend` still names an output artifact format, and
+`calibrate --backend` identifies the runtime that produced the supplied logits.
 
 ## Adding a backend
 

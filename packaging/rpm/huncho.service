@@ -2,8 +2,8 @@
 #
 # Serves the built-in mock model so the service comes up out of the box.
 # To serve a real model package, edit the ExecStart line to use `--manifest`
-# (absolute path to a huncho-model.json) or `--model owner/repo`, and set the
-# matching HUNCHO_BACKEND in /etc/huncho/huncho.env.
+# (absolute path to a huncho-model.json) or `--model owner/repo`. The runtime
+# is selected automatically from each model's metadata.
 #
 # A bundled reference package is installed at:
 #   /usr/share/huncho/examples/mock-model/huncho-model.json

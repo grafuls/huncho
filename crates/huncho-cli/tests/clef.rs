@@ -38,8 +38,6 @@ fn native_clef_resolves_benchmarks_and_conforms_without_python() {
     };
     let bench = run(&[
         "bench",
-        "--backend",
-        "clef",
         "--model",
         ".",
         "--dtype",
@@ -53,8 +51,6 @@ fn native_clef_resolves_benchmarks_and_conforms_without_python() {
     assert!(root.join("huncho-model.json").is_file());
     run(&[
         "bench",
-        "--backend",
-        "clef",
         "--manifest",
         "huncho-model.json",
         "--dtype",
@@ -89,8 +85,6 @@ fn native_clef_resolves_benchmarks_and_conforms_without_python() {
     .unwrap();
     let conform = run(&[
         "conform",
-        "--backend",
-        "clef",
         "--model",
         ".",
         "--dtype",

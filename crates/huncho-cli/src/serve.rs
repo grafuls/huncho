@@ -6,7 +6,7 @@ use clap::Args;
 use huncho_api::{AppState, Metrics, ModelRegistry, ServerConfig};
 use huncho_core::manifest::{BackendId, Family};
 
-use crate::load::{engine_from_manifest, engine_from_ref, mock_engine, mock_engine_from_manifest};
+use crate::load::{engine_from_ref, engine_from_resolved_manifest, mock_engine, BackendChoice};
 
 #[derive(Args)]
 pub struct ServeArgs {
@@ -48,8 +48,8 @@ pub struct ServeArgs {
     #[arg(long)]
     pub token: Option<String>,
 
-    /// Backend to use for manifest/models (onnx|candle|clef|mock). Also read from `HUNCHO_BACKEND`.
-    #[arg(long, default_value = "mock", env = "HUNCHO_BACKEND")]
+    /// Backend override (auto|onnx|candle|clef|mock). Auto selects a runtime per model.
+    #[arg(long, default_value = "auto", env = "HUNCHO_BACKEND")]
     pub backend: String,
 
     /// Override the dtype for manifest/manually-loaded models. Also read from `HUNCHO_DTYPE`.
@@ -65,7 +65,7 @@ pub struct ServeArgs {
     pub cache_dir: Option<String>,
 }
 
-pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
+fn load_models(args: &ServeArgs) -> anyhow::Result<ModelRegistry> {
     let mut registry = ModelRegistry::new();
 
     if args.mock {
@@ -81,20 +81,15 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
         }
     }
 
-    let is_mock = args.backend.eq_ignore_ascii_case("mock");
-    let backend_id = if is_mock {
-        None
-    } else {
-        Some(BackendId::parse(&args.backend)?)
-    };
+    let backend = BackendChoice::parse(&args.backend)?;
 
     for path in &args.manifest {
         tracing::info!("loading model manifest {path}");
-        let engine = if is_mock {
-            mock_engine_from_manifest(path)?
-        } else {
-            engine_from_manifest(path, backend_id.expect("non-mock backend"), args.dtype.as_deref())?
-        };
+        let engine = engine_from_resolved_manifest(
+            std::path::Path::new(path),
+            backend,
+            args.dtype.as_deref(),
+        )?;
         let name = engine.manifest().name.clone();
         registry.insert(name.clone(), engine);
         tracing::info!("registered model `{name}`");
@@ -115,7 +110,7 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
         );
         let engine = engine_from_ref(
             model,
-            backend_id,
+            backend,
             args.dtype.as_deref(),
             args.revision.clone(),
             args.token.clone(),
@@ -129,7 +124,11 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
     if registry.is_empty() {
         tracing::warn!("no models registered; /v1/systemone will return 422 for every model");
     }
+    Ok(registry)
+}
 
+pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
+    let registry = load_models(&args)?;
     let config = ServerConfig {
         bind: args.bind.clone(),
         auth_token: args.auth_token.clone(),
@@ -146,4 +145,70 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
 
     huncho_api::serve(Arc::new(state)).await?;
     Ok(())
+}
+
+#[cfg(all(test, feature = "clef", feature = "onnx"))]
+mod tests {
+    use super::*;
+    use clap::Parser;
+    use huncho_core::manifest::ArtifactRef;
+    use std::{fs, path::Path};
+
+    #[test]
+    fn one_server_selects_a_different_runtime_for_each_model() {
+        let root = tempfile::tempdir().unwrap();
+        let fixture = Path::new("../huncho-backend/tests/fixtures/tiny_modernbert");
+        for file in ["config.json", "model.safetensors"] {
+            fs::copy(fixture.join(file), root.path().join(file)).unwrap();
+        }
+        let mut manifest =
+            crate::load::mock_manifest("tiny-candle", Family::F1, "fp32", 1.0).unwrap();
+        manifest.backbone.hidden_size = 8;
+        manifest.backbone.artifacts.insert(
+            BackendId::Candle,
+            vec![ArtifactRef {
+                path: "model.safetensors".into(),
+                dtype: "fp32".into(),
+                quantization: None,
+            }],
+        );
+        fs::write(
+            root.path().join("huncho-model.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        let crate::Command::Serve(args) = crate::Cli::try_parse_from([
+            "huncho",
+            "serve",
+            "--backend",
+            "auto",
+            "--dtype",
+            "fp32",
+            "--model",
+            root.path().to_str().unwrap(),
+            "--manifest",
+            "../../examples/mock-model/huncho-model.json",
+            "--manifest",
+            "../huncho-backend/tests/fixtures/tiny_clef/huncho-model.json",
+        ])
+        .unwrap()
+        .command
+        else {
+            panic!("expected serve arguments")
+        };
+        let registry = load_models(&args).unwrap();
+        assert_eq!(registry.len(), 3);
+        assert_eq!(
+            registry.get("tiny-candle").unwrap().backend_id(),
+            BackendId::Candle
+        );
+        assert_eq!(
+            registry.get("mock-laya").unwrap().backend_id(),
+            BackendId::Onnx
+        );
+        assert_eq!(
+            registry.get("tiny-clef").unwrap().backend_id(),
+            BackendId::Clef
+        );
+    }
 }

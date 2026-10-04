@@ -18,4 +18,6 @@ pub mod resolver;
 
 pub use error::{HubError, Result};
 pub use progress::FileDownloadProgress;
-pub use resolver::{ModelRef, ResolveOptions, ResolvedPackage, resolve, resolve_manifest_path};
+pub use resolver::{
+    resolve, resolve_auto, resolve_manifest_path, ModelRef, ResolveOptions, ResolvedPackage,
+};

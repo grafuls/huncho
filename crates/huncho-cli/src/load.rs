@@ -21,6 +21,35 @@ use huncho_core::manifest::{
 use huncho_core::tokenizer::HfTokenizer;
 use huncho_core::tokenizer::{SimpleTokenizer, Tokenizer};
 
+/// User intent is separate from the runtime id used for inference/calibration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackendChoice {
+    Auto,
+    Mock,
+    Explicit(BackendId),
+}
+
+impl BackendChoice {
+    pub fn parse(value: &str) -> Result<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "auto" => Ok(Self::Auto),
+            "mock" => Ok(Self::Mock),
+            _ => BackendId::parse(value).map(Self::Explicit),
+        }
+    }
+}
+
+fn available_backends() -> Vec<BackendId> {
+    [
+        (BackendId::Clef, cfg!(feature = "clef")),
+        (BackendId::Candle, cfg!(feature = "candle")),
+        (BackendId::Onnx, cfg!(feature = "onnx")),
+    ]
+    .into_iter()
+    .filter_map(|(backend, enabled)| enabled.then_some(backend))
+    .collect()
+}
+
 /// Build the tokenizer for a manifest (CORE-02).
 ///
 /// When the manifest declares a bundled `backbone.tokenizer` and the
@@ -75,7 +104,7 @@ pub fn mock_engine(
 }
 
 /// Load a manifest and drive it with the mock backend (no weights required).
-/// Useful for `huncho serve --manifest ...` demos where no ONNX model is present.
+/// Useful for explicit `--backend mock` demos where no weights are present.
 pub fn mock_engine_from_manifest(path: impl AsRef<Path>) -> Result<Engine> {
     let manifest = ModelManifest::load(path.as_ref())?;
     let name = manifest.name.clone();
@@ -150,6 +179,7 @@ pub fn engine_from_manifest(
     dtype: Option<&str>,
 ) -> Result<Engine> {
     let manifest = ModelManifest::load(path.as_ref())?;
+    backend_id.require_available(&available_backends())?;
     // F3 (Qwen3.5+LoRA) backbones are large (9B+); default them to fp16 so a
     // plain `serve --backend candle` does not try to materialize a multi-GB
     // checkpoint in fp32. Candle's CPU matmul supports fp16 (but not bf16), so
@@ -163,17 +193,16 @@ pub fn engine_from_manifest(
     };
     #[cfg(not(feature = "clef"))]
     let clef_dtype: Option<&str> = None;
-    let dtype = dtype
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| {
-            if backend_id == BackendId::Clef {
-                clef_dtype.unwrap_or("fp16").to_string()
-            } else if manifest.family == Family::F3 {
-                "fp16".to_string()
-            } else {
-                "fp32".to_string()
-            }
-        });
+    let dtype = dtype.map(|s| s.to_string()).unwrap_or_else(|| {
+        if backend_id == BackendId::Clef {
+            clef_dtype.unwrap_or("fp16").to_string()
+        } else if manifest.family == Family::F3 {
+            "fp16".to_string()
+        } else {
+            manifest.default_dtype(backend_id).to_string()
+        }
+    });
+    tracing::info!(model = %manifest.name, backend = %backend_id, dtype = %dtype, "selected model runtime");
 
     // Artifacts and the tokenizer are declared relative to the manifest's
     // directory, not the manifest file itself.
@@ -336,16 +365,22 @@ fn load_onnx(_manifest: &ModelManifest, _dtype: &str, _dir: &Path) -> Result<Box
 // Hugging Face Hub resolution (feature-gated)
 // ---------------------------------------------------------------------------
 
-/// Build an [`Engine`] from a resolved manifest path, honoring the mock
-/// selection implied by `backend = None`.
+/// Build an [`Engine`] from a manifest, choosing a runtime per model by default.
 pub fn engine_from_resolved_manifest(
     manifest_path: &Path,
-    backend: Option<BackendId>,
+    backend: BackendChoice,
     dtype: Option<&str>,
 ) -> Result<Engine> {
     match backend {
-        None => mock_engine_from_manifest(manifest_path),
-        Some(backend_id) => engine_from_manifest(manifest_path, backend_id, dtype),
+        BackendChoice::Mock => mock_engine_from_manifest(manifest_path),
+        BackendChoice::Explicit(backend_id) => {
+            engine_from_manifest(manifest_path, backend_id, dtype)
+        }
+        BackendChoice::Auto => {
+            let manifest = ModelManifest::load(manifest_path)?;
+            let backend_id = manifest.select_backend(&available_backends(), dtype)?;
+            engine_from_manifest(manifest_path, backend_id, dtype)
+        }
     }
 }
 
@@ -353,22 +388,46 @@ pub fn engine_from_resolved_manifest(
 /// manifest path, fetching missing artifacts from the Hub.
 pub fn resolve_model(
     model: &str,
-    backend: Option<BackendId>,
+    backend: BackendChoice,
     dtype: Option<&str>,
     revision: Option<String>,
     token: Option<String>,
     cache_dir: Option<String>,
     fetch_golden: bool,
 ) -> Result<PathBuf> {
-    if backend == Some(BackendId::Clef) {
-        #[cfg(not(feature = "clef"))]
-        return Err(Error::Unsupported("native Clef requires building huncho with --features clef".into()));
-        #[cfg(feature = "clef")]
-        return resolve_hub_model(model, backend, dtype, revision, token, cache_dir, fetch_golden);
+    if let BackendChoice::Explicit(id) = backend {
+        id.require_available(&available_backends())?;
+    }
+    if backend == BackendChoice::Explicit(BackendId::Clef) {
+        return resolve_hub_model(
+            model,
+            backend,
+            dtype,
+            revision,
+            token,
+            cache_dir,
+            fetch_golden,
+        );
     }
     // Local manifests do not need either Hub client.
     let path = Path::new(model);
     if path.exists() {
+        if backend == BackendChoice::Auto
+            && path.is_dir()
+            && !path.join("huncho-model.json").exists()
+            && path.join("joint_head_config.json").is_file()
+        {
+            BackendId::Clef.require_available(&available_backends())?;
+            return resolve_hub_model(
+                model,
+                backend,
+                dtype,
+                revision,
+                token,
+                cache_dir,
+                fetch_golden,
+            );
+        }
         let manifest = if path.is_dir() {
             path.join("huncho-model.json")
         } else {
@@ -383,7 +442,7 @@ pub fn resolve_model(
 #[cfg(feature = "hf")]
 fn resolve_hub_model(
     model: &str,
-    backend: Option<BackendId>,
+    backend: BackendChoice,
     dtype: Option<&str>,
     revision: Option<String>,
     token: Option<String>,
@@ -400,14 +459,21 @@ fn resolve_hub_model(
         fetch_golden,
         show_progress: true,
     };
-    resolve_manifest_path(model, backend, dtype.unwrap_or("fp32"), &opts)
-        .map_err(|e| Error::Package(e.to_string()))
+    match backend {
+        BackendChoice::Auto => huncho_hub::resolve_auto(model, dtype, &available_backends(), &opts)
+            .map(|package| package.manifest_path),
+        BackendChoice::Mock => resolve_manifest_path(model, None, dtype.unwrap_or("fp32"), &opts),
+        BackendChoice::Explicit(id) => {
+            resolve_manifest_path(model, Some(id), dtype.unwrap_or("fp32"), &opts)
+        }
+    }
+    .map_err(|e| Error::Package(e.to_string()))
 }
 
 #[cfg(not(feature = "hf"))]
 fn resolve_hub_model(
     _model: &str,
-    _backend: Option<BackendId>,
+    _backend: BackendChoice,
     _dtype: Option<&str>,
     _revision: Option<String>,
     _token: Option<String>,
@@ -420,10 +486,10 @@ fn resolve_hub_model(
 }
 
 /// Build a serving [`Engine`] from a model reference that resolves against the
-/// Hub (or a local package). `backend = None` selects the offline mock backend.
+/// Hub (or a local package).
 pub fn engine_from_ref(
     model: &str,
-    backend: Option<BackendId>,
+    backend: BackendChoice,
     dtype: Option<&str>,
     revision: Option<String>,
     token: Option<String>,
@@ -463,6 +529,14 @@ mod candle_tests {
         let mut manifest = mock_manifest("tiny-kev", Family::F2, "fp32", 2.4060501).unwrap();
         manifest.backbone.source = BackboneSource::Hf { repo: "fixture/qwen3.5".into(), revision: "1111111111111111111111111111111111111111".into() };
         manifest.backbone.hidden_size = 16;
+        manifest.backbone.artifacts.insert(
+            BackendId::Candle,
+            vec![huncho_core::manifest::ArtifactRef {
+                path: "adapter_model.safetensors".into(),
+                dtype: "fp32".into(),
+                quantization: None,
+            }],
+        );
         manifest.backbone.max_context = 512;
         manifest.backbone.tokenizer = Some("tokenizer.json".into());
         manifest.head.weights = "head.pt".into();
@@ -471,7 +545,8 @@ mod candle_tests {
         manifest.prompt_contract.state_budget = 512;
         let path = dir.path().join("huncho-model.json");
         fs::write(&path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
-        let engine = engine_from_manifest(&path, BackendId::Candle, Some("fp32")).unwrap();
+        let engine = engine_from_resolved_manifest(&path, BackendChoice::Auto, None).unwrap();
+        assert_eq!(engine.backend_id(), BackendId::Candle);
         let formatter = formatter_for(&manifest);
         let tokenizer = load_tokenizer(&manifest, dir.path()).unwrap();
         let golden: serde_json::Value =
@@ -661,7 +736,9 @@ mod candle_tests {
 
         // Full serving pipeline: manifest -> tokenizer -> candle backend -> F1
         // head -> calibration -> response.
-        let engine = engine_from_manifest(&manifest_path, BackendId::Candle, Some("fp32")).unwrap();
+        let engine =
+            engine_from_resolved_manifest(&manifest_path, BackendChoice::Auto, None).unwrap();
+        assert_eq!(engine.backend_id(), BackendId::Candle);
         let req: huncho_core::contract::SystemOneRequest = serde_json::from_value(serde_json::json!({
             "model": "tiny",
             "state": "short state text",

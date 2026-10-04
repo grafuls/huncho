@@ -72,27 +72,32 @@ curl -s -X POST http://127.0.0.1:8080/v1/systemone \
   }'
 ```
 
-Registering a model package from a manifest:
+Registering a model package with the offline mock backend:
 
 ```bash
-cargo run --release -p huncho-cli -- serve --manifest examples/mock-model/huncho-model.json
+cargo run --release -p huncho-cli -- serve --manifest examples/mock-model/huncho-model.json --backend mock
 ```
 
 Registering a model package from the Hugging Face Hub by repo id (build with
-`--features hf`):
+`--features onnx,hf,tokenizers` for an ONNX package):
 
 ```bash
-cargo run --release -p huncho-cli --features hf -- serve --model my-org/laya --backend onnx
+cargo run --release -p huncho-cli --features onnx,hf,tokenizers -- serve --model my-org/laya
 ```
 
-The manifest and every artifact it references are fetched into the HF cache,
+`serve`, `bench`, and `conform` select a backend for each model automatically.
+Clef uses its native runtime; supported safetensors packages use Candle; ONNX
+packages use ONNX Runtime. `--backend` is an optional override. The required
+runtime must be included in the build; a missing runtime produces a build hint.
+
+The manifest and the selected backend's artifacts are fetched into the HF cache,
 pinned to the resolved commit, so `serve --model` is deterministic across runs.
 
 Serve Kev-4B natively on CPU with Candle:
 
 ```bash
 cargo build --release -p huncho-cli --features hf,candle,tokenizers
-./target/release/huncho serve --model jaredpalmer/kev-4b --backend candle --bind 127.0.0.1:8080
+./target/release/huncho serve --model jaredpalmer/kev-4b --bind 127.0.0.1:8080
 ```
 
 The first load downloads the adapter, tokenizer, pointer head, and the base
@@ -108,11 +113,11 @@ Runtime at build time):
 
 ```bash
 cargo run --release -p huncho-cli --features onnx -- \
-  serve --manifest examples/mock-model/huncho-model.json --backend onnx
+  serve --manifest examples/mock-model/huncho-model.json
 
 cargo run --release -p huncho-cli --features onnx -- conform \
   --manifest examples/mock-model/huncho-model.json \
-  --backend onnx --golden examples/mock-model/golden.json
+  --golden examples/mock-model/golden.json
 ```
 
 The same commands with `--backend mock` drive the in-process reference and need
@@ -126,7 +131,7 @@ the `.safetensors` directly with `candle` (HF's Rust framework). Build with
 
 ```bash
 cargo run --release -p huncho-cli --features candle -- \
-  serve --manifest my-laya/huncho-model.json --backend candle
+  serve --manifest my-laya/huncho-model.json
 ```
 
 `CandleBackend` loads `convaiinnovations/laya`'s ModernBERT encoder (remapping
@@ -149,7 +154,7 @@ Cloudflare Clef has a native Rust/Candle backend for text and JSON:
 
 ```bash
 cargo build --release -p huncho-cli --features clef
-./target/release/huncho serve --backend clef --model Cloudflare/clef
+./target/release/huncho serve --model Cloudflare/clef
 ```
 
 No Python, pip dependencies, or model conversion is required. The command above

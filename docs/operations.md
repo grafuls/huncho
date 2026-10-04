@@ -26,15 +26,16 @@ resolved by `owner/repo`. The `tokenizers` feature loads a manifest-declared
 `backbone.tokenizer` with the official Hugging Face `tokenizers` crate, so
 prompt encoding is byte-identical to the reference implementation (CORE-02).
 
-Enable everything for real models:
+Enable all supported CPU runtimes for real models:
 
 ```bash
-cargo build --release -p huncho-cli --features onnx,hf,tokenizers,candle
+cargo build --release -p huncho-cli --features onnx,clef
 ```
 
 > `onnx` fetches a prebuilt ONNX Runtime at build time (needs network), and
-> `hf`'s TLS provider needs system OpenSSL (`libssl-dev`/`pkg-config`). The
-> `candle` backend loads Hugging Face `safetensors` weights directly with
+> `hf`'s TLS provider needs system OpenSSL (`libssl-dev`/`pkg-config`).
+> The `clef` feature includes Candle, Hub resolution, and tokenizers. The `candle` backend
+> loads Hugging Face `safetensors` weights directly with
 > `candle-core` (no ONNX export, no extra system libs) and is the primary
 > real-model path for F1/ModernBERT packages such as `convaiinnovations/laya`.
 
@@ -49,13 +50,13 @@ huncho serve --mock --bind 127.0.0.1:8080
 Serve one or more model manifests:
 
 ```bash
-huncho serve --manifest ./models/laya/huncho-model.json --backend candle \
-  --manifest ./models/kev/huncho-model.json --backend onnx
+huncho serve --manifest ./models/laya/huncho-model.json \
+  --manifest ./models/kev/huncho-model.json
 ```
 
-> The backend must be a backend the package actually declares. An F1 package
-> such as `convaiinnovations/laya` ships a `candle` artifact (`model.safetensors`)
-> but no ONNX artifact, so it needs `--backend candle`.
+Huncho chooses a compatible backend for each model from its metadata and the
+runtimes included in the build. `--backend` is an optional override for all
+models in the command. A missing runtime produces a build hint.
 
 Serve a manifest using the mock backend (offline demo, no weights):
 
@@ -64,11 +65,11 @@ huncho serve --manifest ./examples/mock-model/huncho-model.json --backend mock
 ```
 
 Serve a model package by Hugging Face repo id. The manifest
-(`huncho-model.json`) and every artifact it references are pulled into the HF
+(`huncho-model.json`) and the selected backend's artifacts are pulled into the HF
 cache, and all artifacts are pinned to the exact resolved commit:
 
 ```bash
-huncho serve --model convaiinnovations/laya --backend candle --dtype fp32 --bind 127.0.0.1:8080
+huncho serve --model convaiinnovations/laya --bind 127.0.0.1:8080
 ```
 
 While the repo is being resolved, a per-file progress bar is drawn to stderr
@@ -89,7 +90,7 @@ You can also reference a local package path or a manifest file through
 `--model`; it is resolved without any network access:
 
 ```bash
-huncho serve --model ./models/laya --backend onnx
+huncho serve --model ./models/laya
 ```
 
 > Requires building with `--features hf`. A local package is resolved whether or
@@ -107,8 +108,8 @@ huncho serve --model ./models/laya --backend onnx
 | `--model` | Resolve a model reference: a local package dir/path or an HF repo id (`owner/repo`); repeatable. Requires `hf`. |
 | `--revision` | Git revision to resolve HF `--model` refs at (default: repo default branch). |
 | `--token` | HF access token (defaults to `HF_TOKEN` / login cache). |
-| `--backend` | Backend for models: `mock` (default) or `onnx`. |
-| `--dtype` | Override dtype for models (default `fp32`). |
+| `--backend` | Optional override: `auto` (default), `onnx`, `candle`, `clef`, or `mock`. |
+| `--dtype` | Override the model-specific default precision. |
 | `--extensions` | Enable engine extensions by default (API-05). |
 | `--cache-dir` | Model cache directory; also seeds HF resolution (OPS-04). |
 
@@ -186,7 +187,6 @@ To compare a real manifest-backed backend:
 ```bash
 huncho conform \
   --manifest ./models/laya/huncho-model.json \
-  --backend onnx --dtype fp32 \
   --golden ./models/laya/golden.json --json
 ```
 
@@ -194,7 +194,7 @@ Conform against a package resolved from the Hub; the golden suite is taken from
 the manifest's `reference.golden` automatically:
 
 ```bash
-huncho conform --model my-org/laya --backend onnx --dtype fp32 --json
+huncho conform --model my-org/laya --json
 ```
 
 Exit code is non-zero when the suite fails (probability delta, argmax
@@ -209,8 +209,10 @@ huncho bench --questions 5 --iterations 200 --long-state
 - `--questions` — number of questions per request (`1`, `5`, or `20`).
 - `--iterations` — number of timed iterations (default `50`).
 - `--long-state` — use a ~1500-char state instead of a short one.
-- `--manifest` / `--backend` — run against a local manifest; defaults to `mock`.
-- `--model` / `--backend` — resolve and run against an HF repo id or local package.
+- `--manifest` — run against a local manifest with automatic backend selection.
+- `--model` — resolve and run against an HF repo id or local package.
+- `--backend` — optionally override the selected runtime. Without a model, the
+  benchmark uses the built-in mock.
 
 (CONF-04) reports mean/p50/p95/p99 latency and requests/sec per backend.
 
@@ -257,7 +259,7 @@ rootless-friendly; for SELinux hosts use the `:Z` volume label.
 ## RPM package
 
 For RPM distros (Fedora, RHEL, Rocky), `packaging/rpm/build-rpm.sh` builds a
-binary + source RPM with the full feature set (`onnx,hf,tokenizers,candle`) and ships a
+binary + source RPM with ONNX and Candle (`onnx,hf,tokenizers,candle`) and ships a
 systemd unit, an env file, a man page, and the mock model package. See
 [`packaging/rpm/README.md`](../packaging/rpm/README.md).
 

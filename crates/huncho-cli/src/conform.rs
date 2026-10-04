@@ -7,10 +7,7 @@ use huncho_core::conformance::{self, ConformanceReport, ConformanceThresholds};
 use huncho_core::engine::Engine;
 use huncho_core::manifest::{BackendId, Family, ModelManifest};
 
-use crate::load::{
-    engine_from_manifest, engine_from_resolved_manifest, mock_engine, mock_engine_from_manifest,
-    resolve_model,
-};
+use crate::load::{engine_from_resolved_manifest, mock_engine, resolve_model, BackendChoice};
 
 #[derive(Args)]
 pub struct ConformArgs {
@@ -40,8 +37,8 @@ pub struct ConformArgs {
     #[arg(long)]
     pub golden: Option<String>,
 
-    /// Backend to use (onnx|mock|candle|clef).
-    #[arg(long, default_value = "mock")]
+    /// Backend override (auto|onnx|candle|clef|mock). Auto selects from model metadata.
+    #[arg(long, default_value = "auto")]
     pub backend: String,
 
     /// Override dtype for manifest/model-loaded runs.
@@ -62,12 +59,7 @@ pub struct ConformArgs {
 }
 
 pub fn run(args: ConformArgs) -> anyhow::Result<()> {
-    let is_mock = args.backend.eq_ignore_ascii_case("mock");
-    let backend_id = if is_mock {
-        None
-    } else {
-        Some(BackendId::parse(&args.backend)?)
-    };
+    let backend = BackendChoice::parse(&args.backend)?;
     let dtype = args.dtype.as_deref();
 
     let engine: Engine;
@@ -76,7 +68,7 @@ pub fn run(args: ConformArgs) -> anyhow::Result<()> {
     if let Some(model) = &args.model {
         let manifest_path = resolve_model(
             model,
-            backend_id,
+            backend,
             dtype,
             args.revision.clone(),
             args.token.clone(),
@@ -99,17 +91,13 @@ pub fn run(args: ConformArgs) -> anyhow::Result<()> {
                     })?
             }
         };
-        engine = engine_from_resolved_manifest(&manifest_path, backend_id, dtype)?;
+        engine = engine_from_resolved_manifest(&manifest_path, backend, dtype)?;
     } else if let Some(path) = &args.manifest {
         golden_path = args
             .golden
             .clone()
             .ok_or_else(|| anyhow::anyhow!("`--golden` is required when using `--manifest`"))?;
-        engine = if is_mock {
-            mock_engine_from_manifest(path)?
-        } else {
-            engine_from_manifest(path, backend_id.expect("non-mock backend"), dtype)?
-        };
+        engine = engine_from_resolved_manifest(std::path::Path::new(path), backend, dtype)?;
     } else {
         golden_path = args
             .golden

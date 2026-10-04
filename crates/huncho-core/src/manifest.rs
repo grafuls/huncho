@@ -68,6 +68,22 @@ pub enum BackendId {
 }
 
 impl BackendId {
+    /// Check a runtime selected from model metadata against the serving build.
+    pub fn require_available(self, available: &[BackendId]) -> Result<Self> {
+        if available.contains(&self) {
+            return Ok(self);
+        }
+        let hint = match self {
+            Self::Onnx => "rebuild with `--features onnx,hf,tokenizers`",
+            Self::Candle => "rebuild with `--features candle,hf,tokenizers`",
+            Self::Clef => "rebuild with `--features clef`",
+            _ => "use a build that supports this backend",
+        };
+        Err(Error::Unsupported(format!(
+            "model requires backend `{self}`, which is not available in this build; {hint}"
+        )))
+    }
+
     pub fn parse(s: &str) -> Result<BackendId> {
         match s.trim().to_lowercase().as_str() {
             "onnx" => Ok(BackendId::Onnx),
@@ -478,6 +494,79 @@ impl ModelManifest {
             .get(&backend)
             .and_then(|list| list.iter().find(|a| a.dtype == dtype))
     }
+
+    /// Select a real runtime from the package, preferring native Candle over
+    /// an ONNX export when both are available. Never selects a mock runtime.
+    pub fn select_backend(
+        &self,
+        available: &[BackendId],
+        dtype: Option<&str>,
+    ) -> Result<BackendId> {
+        let candidates: Vec<_> = [
+            BackendId::Clef,
+            BackendId::Candle,
+            BackendId::Onnx,
+            BackendId::LlamaCpp,
+            BackendId::Mlx,
+            BackendId::Vllm,
+        ]
+        .into_iter()
+        .filter(|backend| {
+            let compatible = match backend {
+                BackendId::Clef => self.family == Family::F5,
+                BackendId::Candle => {
+                    matches!(self.family, Family::F1 | Family::F3)
+                        || (self.family == Family::F2 && self.prompt_contract.template == "kev-v1")
+                }
+                BackendId::Onnx => self.family == Family::F1,
+                _ => self.family != Family::F5,
+            };
+            if !compatible {
+                return false;
+            }
+            self.backbone
+                .artifacts
+                .get(backend)
+                .is_some_and(|artifacts| {
+                    artifacts
+                        .iter()
+                        .any(|a| dtype.map_or(true, |d| a.dtype == d))
+                })
+        })
+        .collect();
+        if let Some(backend) = candidates.iter().find(|b| available.contains(b)) {
+            return Ok(*backend);
+        }
+        if let Some(backend) = candidates.first() {
+            return backend.require_available(available);
+        }
+        let requested = dtype
+            .map(|d| format!(" for dtype `{d}`"))
+            .unwrap_or_default();
+        Err(Error::Package(format!(
+            "model `{}` declares no compatible backend artifacts{requested}; check its huncho-model.json",
+            self.name
+        )))
+    }
+
+    /// Default precision for artifact selection. Clef's device-specific runtime
+    /// precision is chosen by its loader; all Clef dtypes use the same files.
+    pub fn default_dtype(&self, backend: BackendId) -> &str {
+        let preferred = if self.family == Family::F3 {
+            "fp16"
+        } else {
+            "fp32"
+        };
+        if self.find_artifact(backend, preferred).is_some() {
+            return preferred;
+        }
+        self.backbone
+            .artifacts
+            .get(&backend)
+            .and_then(|artifacts| artifacts.first())
+            .map(|a| a.dtype.as_str())
+            .unwrap_or(preferred)
+    }
 }
 
 /// The head kind expected for each family.
@@ -551,5 +640,71 @@ mod tests {
         let d = m.calibration.resolve("mlx", "fp16");
         assert!((d.temperature - 1.0).abs() < 1e-6);
         assert_eq!(d.status, CalibrationStatus::Fit);
+    }
+
+    #[test]
+    fn automatic_backend_uses_available_artifacts_and_requested_dtype() {
+        let mut m = minimal_manifest();
+        m.backbone.artifacts.insert(
+            BackendId::Candle,
+            vec![ArtifactRef {
+                path: "model.safetensors".into(),
+                dtype: "fp16".into(),
+                quantization: None,
+            }],
+        );
+        let both = [BackendId::Onnx, BackendId::Candle];
+        assert_eq!(m.select_backend(&both, None).unwrap(), BackendId::Candle);
+        assert_eq!(m.default_dtype(BackendId::Candle), "fp16");
+        assert_eq!(
+            m.select_backend(&both, Some("fp32")).unwrap(),
+            BackendId::Onnx
+        );
+        assert_eq!(
+            m.select_backend(&[BackendId::Onnx], None).unwrap(),
+            BackendId::Onnx
+        );
+        assert!(m
+            .select_backend(&both, Some("q4"))
+            .unwrap_err()
+            .to_string()
+            .contains("dtype `q4`"));
+        assert!(m
+            .select_backend(&[], None)
+            .unwrap_err()
+            .to_string()
+            .contains("--features candle"));
+    }
+
+    #[test]
+    fn automatic_backend_does_not_fall_back_for_missing_or_incompatible_artifacts() {
+        let mut m = minimal_manifest();
+        m.family = Family::F5;
+        assert!(m
+            .select_backend(&[BackendId::Onnx, BackendId::Candle], None)
+            .is_err());
+        m.backbone.artifacts.insert(
+            BackendId::Clef,
+            vec![ArtifactRef {
+                path: "config.json".into(),
+                dtype: "fp32".into(),
+                quantization: None,
+            }],
+        );
+        assert_eq!(
+            m.select_backend(&[BackendId::Clef], None).unwrap(),
+            BackendId::Clef
+        );
+        assert!(m
+            .select_backend(&[BackendId::Candle], None)
+            .unwrap_err()
+            .to_string()
+            .contains("--features clef"));
+        m.backbone.artifacts.clear();
+        assert!(m
+            .select_backend(&[BackendId::Clef], None)
+            .unwrap_err()
+            .to_string()
+            .contains("no compatible backend artifacts"));
     }
 }

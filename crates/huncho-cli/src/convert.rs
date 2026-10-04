@@ -82,7 +82,7 @@ pub fn build_manifest(args: &ConvertArgs) -> anyhow::Result<ModelManifest> {
     let family = Family::parse(&args.family)?;
     let backend = BackendId::parse(&args.backend)?;
     if backend == BackendId::Clef || family == Family::F5 {
-        anyhow::bail!("Clef uses its reference release directly; use `serve --backend clef --model Cloudflare/clef` or a local release directory");
+        anyhow::bail!("Clef uses its reference release directly; use `serve --model Cloudflare/clef` or a local release directory");
     }
     let artifact_name = artifact_name_for(backend);
 

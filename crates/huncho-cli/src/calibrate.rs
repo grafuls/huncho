@@ -7,7 +7,7 @@ use serde::Deserialize;
 use huncho_core::calibration::fit_temperature;
 use huncho_core::manifest::{BackendId, CalibrationEntry, CalibrationStatus, ModelManifest};
 
-use crate::load::resolve_model;
+use crate::load::{resolve_model, BackendChoice};
 
 #[derive(Args)]
 pub struct CalibrateArgs {
@@ -60,7 +60,7 @@ pub fn run(args: CalibrateArgs) -> anyhow::Result<()> {
     let manifest_path: PathBuf = match (&args.model, &args.manifest) {
         (Some(model), None) => resolve_model(
             model,
-            None,
+            BackendChoice::Mock,
             Some(&args.dtype),
             args.revision.clone(),
             args.token.clone(),

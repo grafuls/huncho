@@ -228,10 +228,10 @@ mod tests {
             show_progress: false,
             ..Default::default()
         };
-        let package = crate::resolve(
+        let package = crate::resolve_auto(
             "fixture/clef",
-            Some(huncho_core::manifest::BackendId::Clef),
-            "fp16",
+            Some("fp16"),
+            &[huncho_core::manifest::BackendId::Clef],
             &opts,
         )
         .unwrap();
@@ -240,8 +240,21 @@ mod tests {
             matches!(m.backbone.source, huncho_core::manifest::BackboneSource::Hf { revision, .. } if revision == commit)
         );
         assert!(!snapshot.join("joint_schema_model.py").exists());
+        crate::resolve_auto(
+            "fixture/clef",
+            None,
+            &[huncho_core::manifest::BackendId::Clef],
+            &opts,
+        )
+        .unwrap();
         std::fs::remove_file(snapshot.join(shard)).unwrap();
-        assert!(resolve("fixture/clef", "fp16", &opts).is_err());
+        assert!(crate::resolve_auto(
+            "fixture/clef",
+            None,
+            &[huncho_core::manifest::BackendId::Clef],
+            &opts
+        )
+        .is_err());
     }
 
     #[test]

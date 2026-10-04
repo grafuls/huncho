@@ -47,11 +47,11 @@ Listener address (host:port), default \fI127.0.0.1:8080\fR.
 Optional bearer token required on requests.
 .TP
 .B HUNCHO_BACKEND
-Backend for manifests/models: \fImock\fR, \fIONNX\fR (ONNX Runtime), or
-\fIcandle\fR (HF safetensors, e.g. F1/ModernBERT).
+Backend override for manifests/models: \fIauto\fR (default, selected per model),
+\fIonnx\fR, \fIcandle\fR, \fIclef\fR, or \fImock\fR.
 .TP
 .B HUNCHO_DTYPE
-Override the model dtype (default \fIfp32\fR).
+Override the model-specific default dtype.
 .TP
 .B HUNCHO_CACHE_DIR
 Model cache directory, also used by Hugging Face resolution.

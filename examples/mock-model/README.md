@@ -24,13 +24,13 @@ cargo build --release -p huncho-cli --features onnx
 
 # Serve on ONNX Runtime
 cargo run -p huncho-cli --features onnx -- \
-  serve --manifest examples/mock-model/huncho-model.json --backend onnx
+  serve --manifest examples/mock-model/huncho-model.json
 # POST /v1/systemone with model="mock-laya"
 
 # Conformance: ONNX engine vs. reference golden
 cargo run -p huncho-cli --features onnx -- \
   conform --manifest examples/mock-model/huncho-model.json \
-          --backend onnx --golden examples/mock-model/golden.json
+          --golden examples/mock-model/golden.json
 ```
 
 The same commands with `--backend mock` drive the in-process mock backend instead,

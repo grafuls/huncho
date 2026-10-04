@@ -1,7 +1,7 @@
 # Native Clef backend
 
-`--backend clef` runs the Qwen3.5 text backbone and Clef's trained joint schema
-head directly in Rust with Candle. It reads the published safetensors and
+Huncho automatically selects the native Clef backend, which runs the Qwen3.5
+text backbone and Clef's trained joint schema head directly in Rust with Candle. It reads the published safetensors and
 tokenizer files. Users do not need Python, PyTorch, pip, model conversion, or a
 second server. All questions in a request share one backbone pass.
 
@@ -11,14 +11,14 @@ For CPU:
 
 ```bash
 cargo build --release -p huncho-cli --features clef
-./target/release/huncho serve --backend clef --model Cloudflare/clef
+./target/release/huncho serve --model Cloudflare/clef
 ```
 
 For NVIDIA GPUs, build with a CUDA toolkit installed:
 
 ```bash
 cargo build --release -p huncho-cli --features cuda
-./target/release/huncho serve --backend clef --model Cloudflare/clef
+./target/release/huncho serve --model Cloudflare/clef
 ```
 
 `clef` includes the Rust Hub client, tokenizer, and Candle. `cuda` includes
@@ -50,8 +50,8 @@ existing calibration when the package is loaded again.
 An already downloaded release works without network access:
 
 ```bash
-./target/release/huncho serve --backend clef --model ./models/clef
-./target/release/huncho serve --backend clef --manifest ./models/clef/huncho-model.json
+./target/release/huncho serve --model ./models/clef
+./target/release/huncho serve --manifest ./models/clef/huncho-model.json
 ```
 
 Required files: `config.json`, `tokenizer.json`, `joint_head_config.json`,
@@ -80,7 +80,7 @@ template `clef-native-v1`.
 
 ```bash
 cargo test --workspace --features huncho-cli/clef --offline
-./target/release/huncho conform --backend clef --model Cloudflare/clef \
+./target/release/huncho conform --model Cloudflare/clef \
   --golden ./clef-golden.json
 ```
 

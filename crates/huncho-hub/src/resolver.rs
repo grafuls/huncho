@@ -103,8 +103,46 @@ pub fn resolve(
     match mref {
         ModelRef::Local(path) => resolve_local(&path),
         ModelRef::HuggingFace { repo, revision } => {
-            resolve_hf(&repo, revision.as_deref(), backend, dtype, opts)
+            resolve_hf(&repo, revision.as_deref(), backend, Some(dtype), None, opts)
         }
+    }
+}
+
+/// Resolve a model and fetch artifacts for an automatically selected runtime.
+/// `available` describes the caller's compiled runtimes, not the Hub client's.
+pub fn resolve_auto(
+    model: &str,
+    dtype: Option<&str>,
+    available: &[BackendId],
+    opts: &ResolveOptions,
+) -> Result<ResolvedPackage> {
+    match ModelRef::parse(model, opts.revision.clone()) {
+        ModelRef::Local(path) => {
+            if path.is_dir()
+                && !path.join("huncho-model.json").exists()
+                && path.join("joint_head_config.json").is_file()
+            {
+                BackendId::Clef
+                    .require_available(available)
+                    .map_err(|e| HubError::Package(e.to_string()))?;
+                return crate::clef::resolve(model, dtype.unwrap_or("fp32"), opts);
+            }
+            let package = resolve_local(&path)?;
+            let manifest = ModelManifest::load(&package.manifest_path)
+                .map_err(|e| HubError::Package(e.to_string()))?;
+            manifest
+                .select_backend(available, dtype)
+                .map_err(|e| HubError::Package(e.to_string()))?;
+            Ok(package)
+        }
+        ModelRef::HuggingFace { repo, revision } => resolve_hf(
+            &repo,
+            revision.as_deref(),
+            None,
+            dtype,
+            Some(available),
+            opts,
+        ),
     }
 }
 
@@ -154,7 +192,8 @@ fn resolve_hf(
     repo: &str,
     revision: Option<&str>,
     backend: Option<BackendId>,
-    dtype: &str,
+    dtype: Option<&str>,
+    auto_available: Option<&[BackendId]>,
     opts: &ResolveOptions,
 ) -> Result<ResolvedPackage> {
     let rev: Option<String> = revision.map(|s| s.to_string());
@@ -162,19 +201,59 @@ fn resolve_hf(
     // Fetch the manifest first so we know which artifacts it references. If the
     // repo has no `huncho-model.json`, fall back to synthesizing a servable
     // package from a raw decision-model checkpoint (e.g. Laya's ModernBERT).
-    // Only a genuine 404 triggers synthesis; transient network errors are
-    // surfaced to the user.
+    // Only a genuine 404 (or a cache miss in offline mode) triggers synthesis;
+    // transient network errors are surfaced to the user.
     let manifest_path = match http::download_file(repo, "huncho-model.json", rev.clone(), opts) {
         Ok(p) => p,
-        Err(HubError::NotFound { .. }) => {
-            return synthesize_checkpoint(repo, rev.as_deref(), backend, dtype, opts);
+        Err(e) if matches!(e, HubError::NotFound { .. }) || opts.local_files_only => {
+            let backend = if let Some(available) = auto_available {
+                // Detect release layout rather than hard-coding repository names,
+                // so forks and private releases use the same routing.
+                match http::download_file(repo, "joint_head_config.json", rev.clone(), opts) {
+                    Ok(head) => {
+                        BackendId::Clef
+                            .require_available(available)
+                            .map_err(|e| HubError::Package(e.to_string()))?;
+                        let mut pinned = opts.clone();
+                        pinned.revision = head
+                            .parent()
+                            .and_then(|p| p.file_name())
+                            .map(|s| s.to_string_lossy().into_owned());
+                        return crate::clef::resolve(repo, dtype.unwrap_or("fp32"), &pinned);
+                    }
+                    Err(e) if matches!(e, HubError::NotFound { .. }) || opts.local_files_only => {}
+                    Err(e) => return Err(e),
+                }
+                Some(
+                    BackendId::Candle
+                        .require_available(available)
+                        .map_err(|e| HubError::Package(e.to_string()))?,
+                )
+            } else {
+                backend
+            };
+            return synthesize_checkpoint(
+                repo,
+                rev.as_deref(),
+                backend,
+                dtype.unwrap_or("fp32"),
+                opts,
+            );
         }
         Err(e) => return Err(e),
     };
 
-    let manifest = ModelManifest::load(&manifest_path).map_err(|e| {
-        HubError::Package(format!("`{repo}` is not a Huncho model package: {e}"))
-    })?;
+    let manifest = ModelManifest::load(&manifest_path)
+        .map_err(|e| HubError::Package(format!("`{repo}` is not a Huncho model package: {e}")))?;
+    let backend = match auto_available {
+        Some(available) => Some(
+            manifest
+                .select_backend(available, dtype)
+                .map_err(|e| HubError::Package(e.to_string()))?,
+        ),
+        None => backend,
+    };
+    let dtype = dtype.unwrap_or_else(|| manifest.default_dtype(backend.unwrap_or_default()));
 
     // Resolve the snapshot directory (the manifest's parent) and pin all
     // artifact downloads to the same resolved commit so a moving branch cannot
@@ -192,7 +271,43 @@ fn resolve_hf(
         .file_name()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_default();
-    let pinned: Option<String> = if commit.is_empty() { rev.clone() } else { Some(commit) };
+    let pinned: Option<String> = if commit.is_empty() {
+        rev.clone()
+    } else {
+        Some(commit)
+    };
+
+    if backend == Some(BackendId::Clef) {
+        let mut pinned_opts = opts.clone();
+        pinned_opts.revision = pinned.clone();
+        let package = crate::clef::resolve(repo, dtype, &pinned_opts)?;
+        if opts.fetch_golden {
+            if let Some(reference) = &manifest.reference {
+                http::download_file(repo, &reference.golden, pinned, opts)?;
+            }
+        }
+        return Ok(package);
+    }
+
+    if backend == Some(BackendId::Candle) {
+        if manifest.adapter.is_some() {
+            http::download_file(repo, "adapter_config.json", pinned.clone(), opts)?;
+            if let BackboneSource::Hf {
+                repo: base,
+                revision,
+            } = &manifest.backbone.source
+            {
+                http::download_file(base, "config.json", Some(revision.clone()), opts)?;
+                download_base_weights(base, revision, opts)?;
+            }
+        } else {
+            let config = download_config(repo, pinned.as_deref(), opts)?;
+            let target = package_root.join("config.json");
+            if config != target {
+                std::fs::copy(config, target)?;
+            }
+        }
+    }
 
     for file in required_files(&manifest, backend, dtype, opts.fetch_golden)? {
         http::download_file(repo, &file, pinned.clone(), opts)?;
@@ -446,7 +561,7 @@ fn probe_adapter(
 ) -> Result<Option<PathBuf>> {
     match http::download_file(repo, "adapter_config.json", revision.map(|s| s.to_string()), opts) {
         Ok(path) => Ok(Some(path)),
-        Err(HubError::NotFound { .. }) => Ok(None),
+        Err(e) if matches!(e, HubError::NotFound { .. }) || opts.local_files_only => Ok(None),
         Err(e) => Err(e),
     }
 }
@@ -894,11 +1009,14 @@ fn build_f3_manifest(
     let mut artifacts = std::collections::BTreeMap::new();
     artifacts.insert(
         BackendId::Candle,
-        vec![ArtifactRef {
-            path: "adapter_model.safetensors".to_string(),
-            dtype: "fp32".to_string(),
-            quantization: None,
-        }],
+        ["fp32", "fp16", "f16"]
+            .into_iter()
+            .map(|dtype| ArtifactRef {
+                path: "adapter_model.safetensors".to_string(),
+                dtype: dtype.to_string(),
+                quantization: None,
+            })
+            .collect(),
     );
 
     let manifest = ModelManifest {
@@ -1237,6 +1355,90 @@ mod tests {
         assert!(files.contains(&"head.safetensors".to_string()));
     }
 
+    #[test]
+    fn auto_hub_resolution_fetches_only_the_selected_backend_and_dtype() {
+        let cache = tempfile::tempdir().unwrap();
+        let commit = "4444444444444444444444444444444444444444";
+        let snapshot = cache
+            .path()
+            .join("models--fixture--package/snapshots")
+            .join(commit);
+        std::fs::create_dir_all(&snapshot).unwrap();
+        let mut value = minimal_manifest_json("auto-package");
+        value["backbone"]["artifacts"]["candle"] = serde_json::json!([
+            {"path":"model.safetensors", "dtype":"fp16"}
+        ]);
+        std::fs::write(
+            snapshot.join("huncho-model.json"),
+            serde_json::to_vec(&value).unwrap(),
+        )
+        .unwrap();
+        // No Candle files in the cache: requesting fp32 must select ONNX.
+        for file in [
+            "model.onnx",
+            "tokenizer.json",
+            "head.safetensors",
+            "golden.json",
+        ] {
+            std::fs::write(snapshot.join(file), []).unwrap();
+        }
+        let opts = ResolveOptions {
+            revision: Some(commit.into()),
+            cache_dir: Some(cache.path().into()),
+            local_files_only: true,
+            fetch_golden: true,
+            show_progress: false,
+            ..Default::default()
+        };
+        let available = [BackendId::Candle, BackendId::Onnx];
+        let resolved = resolve_auto("fixture/package", Some("fp32"), &available, &opts).unwrap();
+        assert_eq!(resolved.manifest_path, snapshot.join("huncho-model.json"));
+        assert!(
+            resolve_auto("fixture/package", Some("fp16"), &[BackendId::Onnx], &opts)
+                .unwrap_err()
+                .to_string()
+                .contains("--features candle")
+        );
+        std::fs::remove_file(snapshot.join("model.onnx")).unwrap();
+        assert!(resolve_auto("fixture/package", Some("fp32"), &available, &opts).is_err());
+    }
+
+    #[test]
+    fn auto_raw_modernbert_resolves_and_reopens_from_cache() {
+        let cache = tempfile::tempdir().unwrap();
+        let commit = "5555555555555555555555555555555555555555";
+        let snapshot = cache
+            .path()
+            .join("models--fixture--modernbert/snapshots")
+            .join(commit);
+        std::fs::create_dir_all(&snapshot).unwrap();
+        let fixture = Path::new("../huncho-backend/tests/fixtures/tiny_modernbert");
+        for file in ["config.json", "model.safetensors"] {
+            std::fs::copy(fixture.join(file), snapshot.join(file)).unwrap();
+        }
+        let opts = ResolveOptions {
+            revision: Some(commit.into()),
+            cache_dir: Some(cache.path().into()),
+            local_files_only: true,
+            show_progress: false,
+            ..Default::default()
+        };
+        assert!(resolve_auto("fixture/modernbert", None, &[], &opts)
+            .unwrap_err()
+            .to_string()
+            .contains("--features candle"));
+        for _ in 0..2 {
+            let package =
+                resolve_auto("fixture/modernbert", None, &[BackendId::Candle], &opts).unwrap();
+            let manifest = ModelManifest::load(package.manifest_path).unwrap();
+            assert_eq!(manifest.family, Family::F1);
+            assert_eq!(
+                manifest.select_backend(&[BackendId::Candle], None).unwrap(),
+                BackendId::Candle
+            );
+        }
+    }
+
     #[cfg(feature = "candle")]
     #[test]
     fn kev_adapter_is_not_treated_as_nimble() {
@@ -1271,19 +1473,15 @@ mod tests {
         )
         .unwrap();
         let opts = ResolveOptions {
+            revision: Some(revision.into()),
             cache_dir: Some(dir.path().to_path_buf()),
             local_files_only: true,
             show_progress: false,
             ..Default::default()
         };
-        let resolved = synthesize_checkpoint(
-            "fixture/kev",
-            Some(revision),
-            Some(BackendId::Candle),
-            "fp32",
-            &opts,
-        )
-        .unwrap();
+        let resolved = resolve_auto("fixture/kev", None, &[BackendId::Candle], &opts).unwrap();
+        // A second resolution must fetch the adapter and pinned base package too.
+        resolve_auto("fixture/kev", None, &[BackendId::Candle], &opts).unwrap();
         let manifest = ModelManifest::load(resolved.manifest_path).unwrap();
         assert_eq!(manifest.family, Family::F2);
         assert_eq!(manifest.prompt_contract.template, "kev-v1");
@@ -1416,6 +1614,11 @@ mod tests {
         .unwrap();
 
         assert_eq!(m.family, Family::F3);
+        assert_eq!(m.default_dtype(BackendId::Candle), "fp16");
+        assert_eq!(
+            m.select_backend(&[BackendId::Candle], Some("fp16")).unwrap(),
+            BackendId::Candle
+        );
         assert_eq!(m.name, "Bespoke-Nimble-9B");
         assert_eq!(m.backbone.hidden_size, 4096);
         assert_eq!(m.backbone.max_context, 8192);

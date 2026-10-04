@@ -42,9 +42,12 @@ curl -s http://127.0.0.1:8080/v1/models
 
 To serve a real model package, edit `ExecStart` in
 `/usr/lib/systemd/system/huncho.service` to use `--manifest <path>` or
-`--model owner/repo`, set a backend in `/etc/huncho/huncho.env` (e.g.
-`HUNCHO_BACKEND=candle` for an F1 `safetensors` model), and
+`--model owner/repo`, then run
 `sudo systemctl daemon-reload && sudo systemctl restart huncho`.
+
+The service defaults to `HUNCHO_BACKEND=auto` and selects a compatible runtime
+for each model. Set it explicitly in `/etc/huncho/huncho.env` only to override
+that selection.
 
 ## Files
 
