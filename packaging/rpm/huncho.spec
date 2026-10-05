@@ -3,7 +3,7 @@
 
 Name:           huncho
 Version:        0.1.0
-Release:        4%{?dist}
+Release:        5%{?dist}
 Summary:        Portable serving engine for System One decision models
 
 License:        Apache-2.0
@@ -64,7 +64,8 @@ built-in mock model package so the service runs out of the box.
 %build
 # Full feature set: ONNX Runtime (fetches a prebuilt runtime at build time, needs
 # network), the Candle backend (primary F1/ModernBERT path, loads HF safetensors
-# directly, no extra system libs — built with default-features=false), Hugging
+# directly, no extra system libs — built with default-features=false), the `clef`
+# model backend (Cloudflare/clef, pure Rust via Candle + tokenizers), Hugging
 # Face Hub resolution, and HF tokenizers.
 #
 # RHEL/EPEL 9 ships glibc 2.34 and GCC 11. The prebuilt ONNX Runtime that
@@ -82,7 +83,7 @@ export ORT_LIB_LOCATION=%{_builddir}/onnxruntime/onnxruntime-linux-x64-1.28.0/li
 export ORT_PREFER_DYNAMIC_LINK=1
 %endif
 
-cargo build --release --locked --features onnx,hf,tokenizers,candle --bin huncho
+cargo build --release --locked --features onnx,hf,tokenizers,candle,clef --bin huncho
 # Cargo's `strip = true` in [profile.release] should do this, but it was not
 # applied under the rpmbuild environment; strip deterministically here.
 strip --strip-unneeded target/release/huncho
@@ -163,11 +164,10 @@ mkdir -p %{buildroot}%{_localstatedir}/lib/huncho
 %endif
 
 %changelog
-* Mon Oct 05 2026 grafuls <grafuls@users.noreply.github.com> - 0.1.0-4
-- Enable EPEL 9 / RHEL 9 derivatives. The prebuilt ONNX Runtime `ort-sys`
-  downloads is built against glibc >= 2.38 and fails to link on el9's glibc
-  2.34 / GCC 11; use the official manylinux ONNX Runtime 1.28.0 release,
-  dynamic-link it, and ship libonnxruntime.so.1 in the package.
+* Mon Oct 05 2026 grafuls <grafuls@users.noreply.github.com> - 0.1.0-5
+- Enable the `clef` model backend (Cloudflare/clef, served via Candle) so
+  `huncho serve --model Cloudflare/clef` works out of the box. It is pure Rust
+  (Candle + tokenizers) and adds no new system build dependencies.
 * Thu Oct 01 2026 grafuls <grafuls@users.noreply.github.com> - 0.1.0-3
 - Correct the operations docs: `laya`-style F1 packages declare a `candle`
   artifact (no ONNX), so example commands use `--backend candle`.

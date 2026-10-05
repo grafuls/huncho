@@ -4,9 +4,10 @@ Build a redistributable RPM (binary + source) of the `huncho` serving engine on
 any RPM-based distro (Fedora, RHEL, Rocky, etc.).
 
 The packaged binary is built with the full feature set used by the project's
-Dockerfile: `onnx,hf,tokenizers,candle` — ONNX Runtime, the Candle backend
-(HF `safetensors` F1/ModernBERT models, the primary real-model path), Hugging
-Face Hub resolution, and the official HF tokenizer. The RPM also ships:
+Dockerfile: `onnx,hf,tokenizers,candle,clef` — ONNX Runtime, the Candle backend
+(HF `safetensors` F1/ModernBERT models, the primary real-model path), the
+`clef` model backend (e.g. `Cloudflare/clef`, served via Candle), Hugging Face
+Hub resolution, and the official HF tokenizer. The RPM also ships:
 
 - a **systemd unit** (`huncho.service`) that runs `huncho serve --mock` out of
   the box;
