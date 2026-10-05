@@ -82,9 +82,11 @@ On a host without a compatible NVIDIA driver+runtime the binary only falls back
 to CPU when `HUNCHO_CLEF_DEVICE=cpu` is set explicitly, so the host must have
 the NVIDIA CUDA driver and runtime installed.
 
-`packaging/rpm/huncho-cuda.spec` is a thin wrapper that enables `with_cuda` and
-`%include`s `huncho.spec`, so the two packages stay in sync from one canonical
-spec.
+`packaging/rpm/huncho-cuda.spec` is the self-contained CUDA variant: it bakes
+`%global with_cuda 1` on top of the canonical `huncho.spec` body so the COPR
+package only needs a single spec file (no `%include`, which cannot survive the
+SRPM -> binary two-stage build). It is generated from `huncho.spec` and kept in
+sync with it.
 
 ## Install
 

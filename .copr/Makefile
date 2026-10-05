@@ -38,8 +38,9 @@ srpm:
 	cp packaging/rpm/$(NAME).service       $(WORK)/SOURCES/
 	cp packaging/rpm/$(NAME).1             $(WORK)/SOURCES/
 	cp packaging/rpm/$(NAME)-sysusers.conf $(WORK)/SOURCES/
-	# Always stage the base spec so the `huncho-cuda.spec` wrapper can %include it.
-	cp packaging/rpm/huncho.spec            $(WORK)/SPECS/huncho.spec
+	# `huncho-cuda.spec` is self-contained (it bakes `with_cuda` for the whole
+	# body), so no %include is needed at binary-build time. Just copy whichever
+	# spec COPR asked for.
 	cp $(spec)                             $(WORK)/SPECS/
 	# Assemble the source RPM into $(outdir) so COPR can collect it.
 	rpmbuild -bs \
