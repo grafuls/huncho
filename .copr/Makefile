@@ -11,6 +11,7 @@
 # %dist empty for SRPM builds.
 #
 
+SHELL   := /bin/bash
 NAME    := huncho
 VERSION := 0.1.0
 TARBALL := $(NAME)-$(VERSION).tar.gz
@@ -38,9 +39,7 @@ srpm:
 	cp packaging/rpm/$(NAME).service       $(WORK)/SOURCES/
 	cp packaging/rpm/$(NAME).1             $(WORK)/SOURCES/
 	cp packaging/rpm/$(NAME)-sysusers.conf $(WORK)/SOURCES/
-	# `huncho-cuda.spec` is self-contained (it bakes `with_cuda` for the whole
-	# body), so no %include is needed at binary-build time. Just copy whichever
-	# spec COPR asked for.
+	cp packaging/rpm/$(NAME)-launcher.sh  $(WORK)/SOURCES/
 	cp $(spec)                             $(WORK)/SPECS/
 	# Assemble the source RPM into $(outdir) so COPR can collect it.
 	rpmbuild -bs \
@@ -58,7 +57,9 @@ tarball:
 	scratch="$$(mktemp -d)"; \
 	trap 'rm -rf "$$scratch"' EXIT; \
 	if command -v git >/dev/null 2>&1 && [ -d .git ]; then \
-		git ls-files -z | tar --null --files-from=- \
+		git ls-files --cached --others --exclude-standard -z | \
+			while IFS= read -r -d '' path; do [ ! -f "$$path" ] || printf '%s\0' "$$path"; done | \
+			tar --null --files-from=- \
 			--transform="s|^|$(NAME)-$(VERSION)/|" \
 			--create --gzip --file "$$scratch/$(TARBALL)"; \
 	else \

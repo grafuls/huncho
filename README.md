@@ -42,6 +42,11 @@ TypeSafe Python SDK works against Huncho with only a base-URL change.
 
 ## Quick start
 
+The [RPM package](packaging/rpm/README.md) bundles CPU and CUDA runtimes behind
+one `huncho` command. Clef automatically uses a compatible NVIDIA GPU when its
+driver and runtime are available, otherwise CPU. Set `HUNCHO_CLEF_DEVICE=cpu`
+to force CPU or `cuda` / `cuda:N` to require a GPU. See [GPU setup](docs/gpu-setup.md).
+
 Serve a built-in deterministic mock model (no weights required):
 
 ```bash

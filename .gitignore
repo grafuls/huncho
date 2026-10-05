@@ -1,4 +1,5 @@
 /target/
+__pycache__/
 
 # Generated RPM packaging artifacts (from `make srpm` / `make tarball`)
 /*.tar.gz

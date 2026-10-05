@@ -28,6 +28,9 @@ enum Command {
     Calibrate(calibrate::CalibrateArgs),
     Conform(conform::ConformArgs),
     Bench(bench::BenchArgs),
+    /// Packaging probe: initialize CUDA and run kernels without loading a model.
+    #[command(name = "__check-cuda", hide = true)]
+    CheckCuda,
 }
 
 #[tokio::main]
@@ -49,5 +52,12 @@ async fn main() -> anyhow::Result<()> {
         Command::Calibrate(a) => calibrate::run(a),
         Command::Conform(a) => conform::run(a),
         Command::Bench(a) => bench::run(a),
+        Command::CheckCuda => {
+            #[cfg(feature = "clef")]
+            if huncho_backend::clef::device_from_env()?.is_cuda() {
+                return Ok(());
+            }
+            anyhow::bail!("no usable Clef CUDA device")
+        }
     }
 }

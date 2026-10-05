@@ -22,14 +22,22 @@ cargo build --release -p huncho-cli --features cuda
 ```
 
 `clef` includes the Rust Hub client, tokenizer, and Candle. `cuda` includes
-`clef` and Candle's CUDA kernels. A distributed binary can include these at
-build time; its users only need the appropriate system GPU driver/libraries
-and downloaded weights. This change does not publish prebuilt binaries.
+`clef` and Candle's CUDA kernels. A source-built CUDA executable links NVIDIA
+libraries and needs those libraries even when forcing CPU. The unified RPM
+bundles separate CPU and CUDA executables behind the `huncho` command, allowing
+it to run on a CPU host without NVIDIA libraries.
 
-The CPU build defaults to FP16 backbone weights with an FP32 joint head. The
-CUDA build defaults to GPU 0 and BF16. Use `--dtype fp32`, `--dtype fp16`, or
-`--dtype bf16` to override; BF16 is rejected on CPU. `HUNCHO_CLEF_DEVICE` accepts
-`auto`, `cpu`, `cuda`, or `cuda:N`. A CUDA build's `auto` requires a working GPU.
+For the RPM install, driver/runtime requirements, and the shared systemd unit,
+see [GPU setup](gpu-setup.md).
+
+`HUNCHO_CLEF_DEVICE=auto` (the default) tries GPU 0 and falls back to CPU when
+initialization or a small kernel probe fails. Use `cpu` to force CPU, or `cuda`
+/ `cuda:N` to require a GPU and report errors if it is unavailable. Clef uses
+BF16 on CUDA and FP16 backbone weights with an FP32 joint head on CPU. Use
+`--dtype fp32`, `--dtype fp16`, or `--dtype bf16` to override; BF16 is rejected
+on CPU. Explicit dtype overrides are not changed on fallback. Once a device
+has been selected, model-loading and inference errors are reported, including
+insufficient GPU memory.
 
 The full model still needs substantial memory: 27 billion parameters at two
 bytes each is approximately 54 GB just for weights, plus working memory.

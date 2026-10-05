@@ -3,11 +3,17 @@
 Build a redistributable RPM (binary + source) of the `huncho` serving engine on
 any RPM-based distro (Fedora, RHEL, Rocky, etc.).
 
-The packaged binary is built with the full feature set used by the project's
-Dockerfile: `onnx,hf,tokenizers,candle,clef` — ONNX Runtime, the Candle backend
-(HF `safetensors` F1/ModernBERT models, the primary real-model path), the
-`clef` model backend (e.g. `Cloudflare/clef`, served via Candle), Hugging Face
-Hub resolution, and the official HF tokenizer. The RPM also ships:
+Install one package, `huncho`. Its `huncho` command automatically uses CUDA for
+Clef when a compatible NVIDIA GPU, driver, and runtime are usable; otherwise
+it runs on CPU. CPU machines need no NVIDIA packages.
+
+The package contains private CPU and CUDA executables, both built with
+`onnx,hf,tokenizers,candle,clef` (plus `cuda` for the GPU executable). The launcher
+runs a small CUDA kernel probe before selecting a runtime, so missing shared
+libraries, unavailable devices, and incompatible kernels can fall back safely.
+Model-loading and inference errors, including GPU out-of-memory errors, are
+reported without retrying the workload on CPU. Other backends keep their
+existing device support. The RPM also ships:
 
 - a **systemd unit** (`huncho.service`) that runs `huncho serve --mock` out of
   the box;
@@ -21,8 +27,10 @@ Hub resolution, and the official HF tokenizer. The RPM also ships:
 
 ## Build
 
-Requires `rpm-build`, `git`, and the Rust toolchain. The `onnx` feature fetches
-a prebuilt ONNX Runtime at build time, so network access is needed.
+Requires `rpm-build`, `git`, the Rust toolchain, Python 3 for packaging tests,
+and the NVIDIA CUDA toolkit. The toolkit is required on the builder, including
+builders with no GPU. The `onnx` feature fetches a prebuilt ONNX Runtime at
+build time, so network access is needed.
 
 ```sh
 packaging/rpm/build-rpm.sh
@@ -30,8 +38,8 @@ packaging/rpm/build-rpm.sh
 
 Output:
 
-- `~/rpmbuild/RPMS/x86_64/huncho-0.1.0-1.fc44.x86_64.rpm`
-- `~/rpmbuild/SRPMS/huncho-0.1.0-1.fc44.src.rpm`
+- `~/rpmbuild/RPMS/x86_64/huncho-0.1.0-7.fc44.x86_64.rpm`
+- `~/rpmbuild/SRPMS/huncho-0.1.0-7.fc44.src.rpm`
 
 ## RHEL / EPEL 9 derivatives
 
@@ -45,69 +53,56 @@ When building for a RHEL-derived distro (`%{?rhel}` is set, e.g. `el9`), the
 spec instead downloads the **official ONNX Runtime 1.28.0 Linux release**, which
 is built for manylinux (glibc 2.17 baseline, max GLIBC_2.27),
 **dynamically links** it (`ORT_PREFER_DYNAMIC_LINK=1`), and ships
-`libonnxruntime.so.1` in the package at `%{_libdir}` alongside the `huncho`
-binary. This keeps the build lightweight (no CMake/protobuf toolchain) while
+`libonnxruntime.so.1` in the package at `%{_libdir}` for both private runtime
+executables. This keeps the build lightweight (no CMake/protobuf toolchain) while
 producing a fully functional ONNX-capable binary on EL9.
 
-The `huncho` binary records a `DT_NEEDED` on `libonnxruntime.so.1`, so the
+Each runtime executable records a `DT_NEEDED` on `libonnxruntime.so.1`, so the
 license of that bundled runtime is MIT; the rest of the package is
 Apache-2.0.
 
-## CUDA build (`huncho-cuda`)
+## CUDA selection and CPU fallback
 
-The `cuda` feature adds Candle's CUDA backend so the `clef` backend
-(`Cloudflare/clef`) can run on an NVIDIA GPU. Because it requires the NVIDIA
-CUDA **toolkit at build time** (`cudarc` runs `nvcc` and links the CUDA dynamic
-libraries) and the **CUDA driver/runtime at run time**, it is not part of the
-portable `huncho` package. Instead the same spec builds a separate
-`huncho-cuda` package that ships a standalone `/usr/bin/huncho-cuda` binary
-(next to `/usr/bin/huncho`, no conflicts), gated by `--define 'with_cuda 1'`:
+Users run the same command on either kind of host:
 
 ```sh
-# portable (default)
-rpmbuild -ba packaging/rpm/huncho.spec
-
-# CUDA (needs nvcc + CUDA toolkit in the environment)
-rpmbuild -ba --define 'with_cuda 1' packaging/rpm/huncho.spec
+huncho serve --model Cloudflare/clef
+HUNCHO_CLEF_DEVICE=cpu huncho serve --model Cloudflare/clef
+HUNCHO_CLEF_DEVICE=cuda:1 huncho serve --model Cloudflare/clef
 ```
 
-The `huncho-cuda` binary uses the same CLI. Select the GPU with
-`HUNCHO_CLEF_DEVICE=cuda` (or `cuda:N` / `auto` on a CUDA-capable host):
+`auto` (the default) probes GPU 0. `cpu` skips CUDA entirely. `cuda` and
+`cuda:N` require the chosen GPU and report errors instead of falling back.
+On CUDA Clef defaults to BF16; on CPU it defaults to FP16
+backbone weights and an FP32 head. Explicit `--dtype` overrides are preserved.
+
+The CPU executable has no NVIDIA library dependencies. The CUDA executable
+links NVIDIA libraries, but those dependencies are excluded from RPM's hard
+requirements so installation on a CPU host works. Other ELF requirements are
+still generated normally. GPU users must install a compatible driver and CUDA
+runtime matching the toolkit used to build the RPM. See [GPU setup](../../docs/gpu-setup.md).
+
+Kernels are built for `sm_80` (Ampere) and require a driver capable of loading
+the toolkit's PTX. Older GPUs or drivers that fail the probe use CPU in auto
+mode. The probe runs without downloading or loading a model; sufficient VRAM
+for the chosen model is still required.
+
+The default spec builds both executables. For builders without NVIDIA's
+repository/toolkit, explicitly omit CUDA (the resulting `huncho` runs only on CPU):
 
 ```sh
-HUNCHO_CLEF_DEVICE=cuda huncho-cuda serve --model Cloudflare/clef
+packaging/rpm/build-rpm.sh --without cuda
 ```
 
-**Runtime requirements.** The binary dynamically links the NVIDIA driver and
-CUDA runtime: `libcuda.so.1` (driver), plus `libcublas.so.13` and
-`libcurand.so.10` (CUDA 13 runtime). Install the NVIDIA driver for your GPU
-**and** the CUDA 13 runtime libraries (e.g. from the NVIDIA CUDA repo), or the
-binary will fail to start. On a host without a compatible driver/runtime it
-only falls back to CPU when `HUNCHO_CLEF_DEVICE=cpu` is set explicitly, so the
-host must have the NVIDIA CUDA driver and runtime installed.
-
-**GPU compute capability.** The Candle CUDA kernels are compiled once, for
-`sm_80` (Ampere) via `CUDA_COMPUTE_CAP=80`. Because they are emitted as PTX and
-JIT-compiled by the driver, the package runs on Ampere, Ada, Hopper and
-Blackwell GPUs. CUDA 13 dropped Maxwell/Pascal/Volta (pre-Turing, < `sm_75`),
-so Turing and older are not covered by this build.
-
-`packaging/rpm/huncho-cuda.spec` is the self-contained CUDA variant: it bakes
-`%global with_cuda 1` on top of the canonical `huncho.spec` body so the COPR
-package only needs a single spec file (no `%include`, which cannot survive the
-SRPM -> binary two-stage build). It is generated from `huncho.spec` and kept in
-sync with it.
-
-**COPR.** The `huncho-cuda` package is built only for `fedora-44-x86_64`, the
-chroot that has the NVIDIA CUDA repo added as an extra repository. Running the
-CUDA build needs `--enable-net` (it downloads the ONNX Runtime) and the NVIDIA
-CUDA toolkit in the buildroot, so it is skipped on chroots without NVIDIA's
-repo.
+There is one canonical spec, `packaging/rpm/huncho.spec`. The unified package
+obsoletes older `huncho-cuda` RPMs. `huncho` is the only public command and
+package name; update existing scripts to use it. Set `HUNCHO_CLEF_DEVICE=cuda`
+to require CUDA. CPU-only builds do not replace the former CUDA package.
 
 ## Install
 
 ```sh
-sudo dnf install ~/rpmbuild/RPMS/x86_64/huncho-0.1.0-1.fc44.x86_64.rpm
+sudo dnf install ~/rpmbuild/RPMS/x86_64/huncho-0.1.0-7.fc44.x86_64.rpm
 sudo systemctl enable --now huncho
 curl -s http://127.0.0.1:8080/v1/models
 ```
@@ -140,11 +135,18 @@ The root `Makefile`'s `srpm` target just delegates to the same file.
    method: point it at this repo's git URL and the `main` branch, and set the
    spec file to `packaging/rpm/huncho.spec`. COPR runs `.copr/Makefile`'s
    `srpm` target to build the source RPM.
-3. **Enable chroots**, e.g. `fedora-rawhide-x86_64`, `fedora-42-x86_64`, and
-   optionally `epel-9-x86_64`.
-4. **Build**: trigger a build in the web UI, via `copr-cli build`, or enable the
+3. **Configure builders**: enable the desired chroots and add the NVIDIA CUDA
+   repository appropriate to each distro so `cuda-toolkit` is available. The
+   unified build needs that toolkit in every chroot; a GPU is not required.
+   Chroots without a supported toolkit must explicitly build `--without cuda`.
+   Enable network access for Cargo/ONNX Runtime downloads.
+4. **Migrate the old CUDA package entry**: disable the separate `huncho-cuda`
+   COPR build entry (which referenced the removed `huncho-cuda.spec`). Keep the
+   `huncho` entry pointing at the canonical spec. This repository change does
+   not change existing COPR configuration or publish an RPM.
+5. **Build**: trigger a build in the web UI, via `copr-cli build`, or enable the
    GitHub webhook so a push to `main` rebuilds automatically.
-5. **Configure auto-rebuild** (optional but recommended): in the COPR web UI go
+6. **Configure auto-rebuild** (optional but recommended): in the COPR web UI go
    to the project's **Settings → Integrations** and copy the webhook URL
    (`https://copr.fedorainfracloud.org/webhooks/<forge>/<project-id>/<secret>/`).
    Then, in the GitHub repo, add a **Webhook** (Settings → Webhooks → Add
@@ -173,7 +175,8 @@ sudo dnf install huncho
 | Path | Purpose |
 |------|---------|
 | `huncho.spec` | RPM spec (builds from source, defines the package). |
-| `huncho-cuda.spec` | Self-contained CUDA variant (bakes `with_cuda`), generated from `huncho.spec`. |
+| `huncho-launcher.sh` | Public command; probes CUDA and selects a private runtime. |
+| `tests/test_launcher.py` | Launcher regression tests, including missing-library fallback. |
 | `huncho.env` | Default service environment (local/dev-safe). |
 | `huncho.service` | Packaged systemd unit (`/usr/bin/huncho`). |
 | `huncho-sysusers.conf` | systemd-sysusers definition for the `huncho` service user. |
@@ -193,8 +196,11 @@ actually create the account, and `/var/lib/huncho` is owned by that user.
 
 ## Notes
 
-- `strip --strip-unneeded` is applied in `%build`: `cargo`'s `strip = true`
+- `strip --strip-unneeded` is applied to both executables in `%build`: `cargo`'s `strip = true`
   profile setting did not take effect under the `rpmbuild` environment, and
   without an explicit strip the ELF keeps its `.symtab`/debug sections.
 - `brp-compress` gzips the man page during packaging, so `%files` lists
   `%{_mandir}/man1/huncho.1*`.
+
+Source tarballs include tracked working-tree changes and non-ignored new files;
+tracked deletions are omitted. Review `git status` before building a release.

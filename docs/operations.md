@@ -41,6 +41,12 @@ cargo build --release -p huncho-cli --features onnx,clef
 
 ## Run
 
+The unified RPM supplies one `huncho` command with automatic CUDA/CPU selection
+for Clef. CPU hosts need no NVIDIA libraries. Set `HUNCHO_CLEF_DEVICE=cpu` to
+force CPU or `cuda` / `cuda:N` to require a GPU. The packaged systemd unit reads
+this setting from `/etc/huncho/huncho.env`. See [GPU setup](gpu-setup.md) for
+driver requirements and fallback behavior.
+
 Serve a built-in deterministic mock model:
 
 ```bash
