@@ -38,8 +38,18 @@ packaging/rpm/build-rpm.sh
 
 Output:
 
-- `~/rpmbuild/RPMS/x86_64/huncho-0.1.0-8.fc44.x86_64.rpm`
-- `~/rpmbuild/SRPMS/huncho-0.1.0-8.fc44.src.rpm`
+- `~/rpmbuild/RPMS/x86_64/huncho-0.1.0-9.fc44.x86_64.rpm`
+- `~/rpmbuild/SRPMS/huncho-0.1.0-9.fc44.src.rpm`
+
+Run the packaging regression tests on both Fedora and EL9 when editing the spec:
+
+```sh
+python3 -m unittest discover -s packaging/rpm/tests -v
+```
+
+The EL9 runtime test parses the actual spec with `rpmspec` and runs its check
+script against a dynamically linked executable. Use EL9's own RPM tools too;
+Fedora's newer parser does not expose all compatibility failures.
 
 ## RHEL / EPEL 9 derivatives
 
@@ -106,7 +116,7 @@ to require CUDA. CPU-only builds do not replace the former CUDA package.
 ## Install
 
 ```sh
-sudo dnf install ~/rpmbuild/RPMS/x86_64/huncho-0.1.0-8.fc44.x86_64.rpm
+sudo dnf install ~/rpmbuild/RPMS/x86_64/huncho-0.1.0-9.fc44.x86_64.rpm
 sudo systemctl enable --now huncho
 curl -s http://127.0.0.1:8080/v1/models
 ```

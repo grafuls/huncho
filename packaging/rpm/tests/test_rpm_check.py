@@ -32,6 +32,7 @@ class RpmCheckTests(unittest.TestCase):
             expanded = subprocess.check_output([
                 "rpmspec", "--parse", "--undefine", "fedora",
                 "--define", "rhel 9", "--define", "dist .el9",
+                "--define", f"_sourcedir {spec.parent}",
                 "--define", "_libdir /usr/lib64", str(spec),
             ], text=True)
             check_script = expanded.split("%check\n", 1)[1].split("\n%", 1)[0]
