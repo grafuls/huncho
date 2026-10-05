@@ -78,15 +78,31 @@ The `huncho-cuda` binary uses the same CLI. Select the GPU with
 HUNCHO_CLEF_DEVICE=cuda huncho-cuda serve --model Cloudflare/clef
 ```
 
-On a host without a compatible NVIDIA driver+runtime the binary only falls back
-to CPU when `HUNCHO_CLEF_DEVICE=cpu` is set explicitly, so the host must have
-the NVIDIA CUDA driver and runtime installed.
+**Runtime requirements.** The binary dynamically links the NVIDIA driver and
+CUDA runtime: `libcuda.so.1` (driver), plus `libcublas.so.13` and
+`libcurand.so.10` (CUDA 13 runtime). Install the NVIDIA driver for your GPU
+**and** the CUDA 13 runtime libraries (e.g. from the NVIDIA CUDA repo), or the
+binary will fail to start. On a host without a compatible driver/runtime it
+only falls back to CPU when `HUNCHO_CLEF_DEVICE=cpu` is set explicitly, so the
+host must have the NVIDIA CUDA driver and runtime installed.
+
+**GPU compute capability.** The Candle CUDA kernels are compiled once, for
+`sm_80` (Ampere) via `CUDA_COMPUTE_CAP=80`. Because they are emitted as PTX and
+JIT-compiled by the driver, the package runs on Ampere, Ada, Hopper and
+Blackwell GPUs. CUDA 13 dropped Maxwell/Pascal/Volta (pre-Turing, < `sm_75`),
+so Turing and older are not covered by this build.
 
 `packaging/rpm/huncho-cuda.spec` is the self-contained CUDA variant: it bakes
 `%global with_cuda 1` on top of the canonical `huncho.spec` body so the COPR
 package only needs a single spec file (no `%include`, which cannot survive the
 SRPM -> binary two-stage build). It is generated from `huncho.spec` and kept in
 sync with it.
+
+**COPR.** The `huncho-cuda` package is built only for `fedora-44-x86_64`, the
+chroot that has the NVIDIA CUDA repo added as an extra repository. Running the
+CUDA build needs `--enable-net` (it downloads the ONNX Runtime) and the NVIDIA
+CUDA toolkit in the buildroot, so it is skipped on chroots without NVIDIA's
+repo.
 
 ## Install
 
@@ -157,7 +173,7 @@ sudo dnf install huncho
 | Path | Purpose |
 |------|---------|
 | `huncho.spec` | RPM spec (builds from source, defines the package). |
-| `huncho-cuda.spec` | Thin wrapper enabling `with_cuda` for the standalone CUDA build. |
+| `huncho-cuda.spec` | Self-contained CUDA variant (bakes `with_cuda`), generated from `huncho.spec`. |
 | `huncho.env` | Default service environment (local/dev-safe). |
 | `huncho.service` | Packaged systemd unit (`/usr/bin/huncho`). |
 | `huncho-sysusers.conf` | systemd-sysusers definition for the `huncho` service user. |
