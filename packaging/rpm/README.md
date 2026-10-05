@@ -53,6 +53,39 @@ The `huncho` binary records a `DT_NEEDED` on `libonnxruntime.so.1`, so the
 license of that bundled runtime is MIT; the rest of the package is
 Apache-2.0.
 
+## CUDA build (`huncho-cuda`)
+
+The `cuda` feature adds Candle's CUDA backend so the `clef` backend
+(`Cloudflare/clef`) can run on an NVIDIA GPU. Because it requires the NVIDIA
+CUDA **toolkit at build time** (`cudarc` runs `nvcc` and links the CUDA dynamic
+libraries) and the **CUDA driver/runtime at run time**, it is not part of the
+portable `huncho` package. Instead the same spec builds a separate
+`huncho-cuda` package that ships a standalone `/usr/bin/huncho-cuda` binary
+(next to `/usr/bin/huncho`, no conflicts), gated by `--define 'with_cuda 1'`:
+
+```sh
+# portable (default)
+rpmbuild -ba packaging/rpm/huncho.spec
+
+# CUDA (needs nvcc + CUDA toolkit in the environment)
+rpmbuild -ba --define 'with_cuda 1' packaging/rpm/huncho.spec
+```
+
+The `huncho-cuda` binary uses the same CLI. Select the GPU with
+`HUNCHO_CLEF_DEVICE=cuda` (or `cuda:N` / `auto` on a CUDA-capable host):
+
+```sh
+HUNCHO_CLEF_DEVICE=cuda huncho-cuda serve --model Cloudflare/clef
+```
+
+On a host without a compatible NVIDIA driver+runtime the binary only falls back
+to CPU when `HUNCHO_CLEF_DEVICE=cpu` is set explicitly, so the host must have
+the NVIDIA CUDA driver and runtime installed.
+
+`packaging/rpm/huncho-cuda.spec` is a thin wrapper that enables `with_cuda` and
+`%include`s `huncho.spec`, so the two packages stay in sync from one canonical
+spec.
+
 ## Install
 
 ```sh
@@ -122,6 +155,7 @@ sudo dnf install huncho
 | Path | Purpose |
 |------|---------|
 | `huncho.spec` | RPM spec (builds from source, defines the package). |
+| `huncho-cuda.spec` | Thin wrapper enabling `with_cuda` for the standalone CUDA build. |
 | `huncho.env` | Default service environment (local/dev-safe). |
 | `huncho.service` | Packaged systemd unit (`/usr/bin/huncho`). |
 | `huncho-sysusers.conf` | systemd-sysusers definition for the `huncho` service user. |
