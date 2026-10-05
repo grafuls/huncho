@@ -127,6 +127,26 @@ export ORT_LIB_LOCATION=%{_builddir}/onnxruntime/onnxruntime-linux-x64-1.28.0/li
 export ORT_PREFER_DYNAMIC_LINK=1
 %endif
 
+%if 0%{_cuda_build}
+# cudarc's build script runs `nvcc` to detect the CUDA version (it panics if
+# `nvcc --version` fails) and links the CUDA dylibs (`-lcuda -lcudart -lcublas
+# -lcublasLt -lnvrtc -lcurand`). The toolkit installs under
+# `/usr/local/cuda-<ver>` (the `nvcc` is NOT on the default PATH), so prepend
+# its `bin/` to PATH and its `lib64/` to LIBRARY_PATH/LD_LIBRARY_PATH so both
+# the compile and link steps succeed.
+for d in /usr/local/cuda*; do
+  if [ -x "$d/bin/nvcc" ]; then
+    export PATH="$d/bin:$PATH"
+    for libdir in "$d/lib64" "$d/lib"; do
+      if [ -d "$libdir" ]; then
+        export LIBRARY_PATH="$libdir:$LIBRARY_PATH"
+        export LD_LIBRARY_PATH="$libdir:$LD_LIBRARY_PATH"
+      fi
+    done
+  fi
+done
+%endif
+
 cargo build --release --locked --features %{_features} --bin huncho
 # Cargo's `strip = true` in [profile.release] should do this, but it was not
 # applied under the rpmbuild environment; strip deterministically here.
