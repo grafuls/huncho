@@ -3,7 +3,7 @@
 
 Name:           huncho
 Version:        0.1.0
-Release:        3%{?dist}
+Release:        4%{?dist}
 Summary:        Portable serving engine for System One decision models
 
 License:        Apache-2.0
@@ -24,6 +24,15 @@ BuildRequires:  gcc-c++
 BuildRequires:  openssl-devel
 BuildRequires:  pkgconf-pkg-config
 BuildRequires:  systemd-rpm-macros
+
+# On RHEL/EPEL derivatives we build against the official ONNX Runtime Linux
+# release instead of `ort-sys`'s prebuilt binary, so we need a download/extract
+# toolchain in %build.
+%if 0%{?rhel}
+BuildRequires:  curl
+BuildRequires:  tar
+BuildRequires:  gzip
+%endif
 
 # rpm auto-detects the shared-library dependencies (libstdc++, libgcc_s, libm,
 # libc) from the ELF. ca-certificates provides the CA roots the HF Hub TLS
@@ -57,6 +66,22 @@ built-in mock model package so the service runs out of the box.
 # network), the Candle backend (primary F1/ModernBERT path, loads HF safetensors
 # directly, no extra system libs — built with default-features=false), Hugging
 # Face Hub resolution, and HF tokenizers.
+#
+# RHEL/EPEL 9 ships glibc 2.34 and GCC 11. The prebuilt ONNX Runtime that
+# `ort-sys` downloads by default is built against glibc >= 2.38 / GCC 13
+# libstdc++ (it references `__isoc23_strtol*` and `_M_replace_cold`), which is
+# ABI-incompatible with el9. Use the official ONNX Runtime 1.28.0 Linux release
+# instead — it is built for manylinux (glibc 2.17 baseline; max GLIBC_2.27,
+# GLIBCXX_3.4.21) — and dynamic-link it.
+%if 0%{?rhel}
+mkdir -p %{_builddir}/onnxruntime
+curl -sSL -o %{_builddir}/onnxruntime/onnxruntime.tgz \
+    https://github.com/microsoft/onnxruntime/releases/download/v1.28.0/onnxruntime-linux-x64-1.28.0.tgz
+tar -xzf %{_builddir}/onnxruntime/onnxruntime.tgz -C %{_builddir}/onnxruntime
+export ORT_LIB_LOCATION=%{_builddir}/onnxruntime/onnxruntime-linux-x64-1.28.0/lib
+export ORT_PREFER_DYNAMIC_LINK=1
+%endif
+
 cargo build --release --locked --features onnx,hf,tokenizers,candle --bin huncho
 # Cargo's `strip = true` in [profile.release] should do this, but it was not
 # applied under the rpmbuild environment; strip deterministically here.
@@ -79,6 +104,18 @@ install -Dm0644 examples/mock-model/huncho-model.json \
     %{buildroot}%{_datadir}/huncho/examples/mock-model/huncho-model.json
 install -Dm0644 examples/mock-model/mock-model.onnx \
     %{buildroot}%{_datadir}/huncho/examples/mock-model/mock-model.onnx
+
+# Ship the dynamically-linked ONNX Runtime shared library for el9. It is built
+# for manylinux and is el9-compatible; the `huncho` binary carries a DT_NEEDED
+# on libonnxruntime.so.1, which the loader resolves from %{_libdir}.
+%if 0%{?rhel}
+install -Dm0755 %{_builddir}/onnxruntime/onnxruntime-linux-x64-1.28.0/lib/libonnxruntime.so.1.28.0 \
+    %{buildroot}%{_libdir}/libonnxruntime.so.1.28.0
+ln -sf libonnxruntime.so.1.28.0 %{buildroot}%{_libdir}/libonnxruntime.so.1
+ln -sf libonnxruntime.so.1 %{buildroot}%{_libdir}/libonnxruntime.so
+install -Dm0755 %{_builddir}/onnxruntime/onnxruntime-linux-x64-1.28.0/lib/libonnxruntime_providers_shared.so \
+    %{buildroot}%{_libdir}/libonnxruntime_providers_shared.so
+%endif
 install -Dm0644 examples/mock-model/golden.json \
     %{buildroot}%{_datadir}/huncho/examples/mock-model/golden.json
 install -Dm0644 examples/mock-model/README.md \
@@ -117,7 +154,20 @@ mkdir -p %{buildroot}%{_localstatedir}/lib/huncho
 %{_datadir}/huncho/examples/mock-model/golden.json
 %{_datadir}/huncho/examples/mock-model/README.md
 
+# The el9 build dynamic-links ONNX Runtime; ship the shared library with it.
+%if 0%{?rhel}
+%{_libdir}/libonnxruntime.so.1.28.0
+%{_libdir}/libonnxruntime.so.1
+%{_libdir}/libonnxruntime.so
+%{_libdir}/libonnxruntime_providers_shared.so
+%endif
+
 %changelog
+* Mon Oct 05 2026 grafuls <grafuls@users.noreply.github.com> - 0.1.0-4
+- Enable EPEL 9 / RHEL 9 derivatives. The prebuilt ONNX Runtime `ort-sys`
+  downloads is built against glibc >= 2.38 and fails to link on el9's glibc
+  2.34 / GCC 11; use the official manylinux ONNX Runtime 1.28.0 release,
+  dynamic-link it, and ship libonnxruntime.so.1 in the package.
 * Thu Oct 01 2026 grafuls <grafuls@users.noreply.github.com> - 0.1.0-3
 - Correct the operations docs: `laya`-style F1 packages declare a `candle`
   artifact (no ONNX), so example commands use `--backend candle`.

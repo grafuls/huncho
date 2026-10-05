@@ -32,6 +32,26 @@ Output:
 - `~/rpmbuild/RPMS/x86_64/huncho-0.1.0-1.fc44.x86_64.rpm`
 - `~/rpmbuild/SRPMS/huncho-0.1.0-1.fc44.src.rpm`
 
+## RHEL / EPEL 9 derivatives
+
+On Fedora the `onnx` feature uses `ort-sys`'s prebuilt ONNX Runtime, which is
+statically linked and self-contained. That prebuilt is built against glibc
+>= 2.38 / GCC 13 libstdc++ and **cannot link on RHEL 9 / EPEL 9** (glibc 2.34,
+GCC 11) — it references `__isoc23_strtol*` and `_M_replace_cold`, which do not
+exist there.
+
+When building for a RHEL-derived distro (`%{?rhel}` is set, e.g. `el9`), the
+spec instead downloads the **official ONNX Runtime 1.28.0 Linux release**, which
+is built for manylinux (glibc 2.17 baseline, max GLIBC_2.27),
+**dynamically links** it (`ORT_PREFER_DYNAMIC_LINK=1`), and ships
+`libonnxruntime.so.1` in the package at `%{_libdir}` alongside the `huncho`
+binary. This keeps the build lightweight (no CMake/protobuf toolchain) while
+producing a fully functional ONNX-capable binary on EL9.
+
+The `huncho` binary records a `DT_NEEDED` on `libonnxruntime.so.1`, so the
+license of that bundled runtime is MIT; the rest of the package is
+Apache-2.0.
+
 ## Install
 
 ```sh
