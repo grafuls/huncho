@@ -7,6 +7,12 @@
 # Scratch tree used while assembling a source RPM (see `.copr/Makefile`)
 /.copr-work/
 
+# COPR / mock build-log downloads (from `copr-cli download-build`)
+fedora-*-x86_64/
+fedora-*-i686/
+epel-*-x86_64/
+epel-*-i686/
+
 # Local environment configuration
 .env
 .env.*
