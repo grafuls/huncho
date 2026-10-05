@@ -94,7 +94,7 @@ impl Backend for MockBackend {
             supports_fork: self.supports_fork,
             supports_lora: false,
             families: self.families.clone(),
-            extra: BTreeMap::new(),
+            extra: BTreeMap::from([("device".into(), "CPU".into())]),
         }
     }
 

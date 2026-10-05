@@ -197,7 +197,7 @@ impl Backend for CandleBackend {
             supports_fork: false,
             supports_lora: false,
             families: self.families.clone(),
-            extra: BTreeMap::new(),
+            extra: BTreeMap::from([("device".into(), crate::device_label(&self.device))]),
         }
     }
 

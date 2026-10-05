@@ -47,6 +47,14 @@ force CPU or `cuda` / `cuda:N` to require a GPU. The packaged systemd unit reads
 this setting from `/etc/huncho/huncho.env`. See [GPU setup](gpu-setup.md) for
 driver requirements and fallback behavior.
 
+During startup, `huncho serve` logs the actual device for each loaded model,
+including CPU fallback. These messages appear at the default `info` log level:
+
+```text
+registered model `clef` on GPU (CUDA device 0)
+registered model `laya` on CPU
+```
+
 Serve a built-in deterministic mock model:
 
 ```bash

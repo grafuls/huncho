@@ -85,9 +85,10 @@ nvidia-smi
 journalctl -u huncho -f
 ```
 
-The model-loading log reports `Clef device Cuda` and the selected dtype
-(BF16 by default on CUDA). A CPU fallback reports `Clef device Cpu` and defaults
-to FP16. `--dtype` overrides remain unchanged; BF16 is rejected on CPU.
+At startup, `huncho serve` reports each registered model as `on CPU` or
+`on GPU (CUDA device 0)` (with the selected GPU's number). The Clef loading log
+also reports the device and dtype: BF16 by default on CUDA, FP16 on CPU.
+`--dtype` overrides remain unchanged; BF16 is rejected on CPU.
 
 To diagnose automatic fallback, retry with `HUNCHO_CLEF_DEVICE=cuda` to expose
 the initialization or library-loading error. The public command is a launcher;

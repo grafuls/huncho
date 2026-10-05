@@ -109,7 +109,8 @@ pub struct Capabilities {
     pub supports_lora: bool,
     /// The families this backend can serve.
     pub families: Vec<Family>,
-    /// Extra backend-specific capabilities.
+    /// Extra backend-specific capabilities. `device`, when present, is a
+    /// human-readable description of the loaded execution device.
     pub extra: BTreeMap<String, String>,
 }
 

@@ -973,7 +973,7 @@ impl Backend for Qwen3_5Backend {
                 Readout::Pointer(_) => Family::F2,
                 _ => Family::F3,
             }],
-            extra: BTreeMap::new(),
+            extra: BTreeMap::from([("device".into(), crate::device_label(&self.device))]),
         }
     }
 

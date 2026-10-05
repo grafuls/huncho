@@ -164,7 +164,7 @@ impl ClefBackend {
                 )))
             }
         };
-        log::info!("Clef device {:?}, dtype {dtype}", device.location());
+        log::info!("Clef device {}, dtype {dtype}", crate::device_label(&device));
         let config_json: serde_json::Value =
             serde_json::from_slice(&std::fs::read(dir.join("config.json"))?)?;
         let text = config_json.get("text_config").unwrap_or(&config_json);
@@ -249,7 +249,7 @@ impl ClefBackend {
                 families: vec![Family::F5],
                 extra: BTreeMap::from([
                     ("runtime".into(), "candle".into()),
-                    ("device".into(), format!("{:?}", device.location())),
+                    ("device".into(), crate::device_label(&device)),
                     ("media".into(), "text-json-only".into()),
                 ]),
                 ..Default::default()

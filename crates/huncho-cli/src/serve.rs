@@ -76,8 +76,9 @@ fn load_models(args: &ServeArgs) -> anyhow::Result<ModelRegistry> {
         };
         for name in &names {
             let engine = mock_engine(name, Family::F1, BackendId::Onnx, "fp32", 1.0)?;
+            let device = engine.device().to_owned();
             registry.insert(name.clone(), engine);
-            tracing::info!("registered mock model `{name}` (F1 / onnx / fp32)");
+            tracing::info!("registered mock model `{name}` on {device} (F1 / onnx / fp32)");
         }
     }
 
@@ -91,8 +92,9 @@ fn load_models(args: &ServeArgs) -> anyhow::Result<ModelRegistry> {
             args.dtype.as_deref(),
         )?;
         let name = engine.manifest().name.clone();
+        let device = engine.device().to_owned();
         registry.insert(name.clone(), engine);
-        tracing::info!("registered model `{name}`");
+        tracing::info!("registered model `{name}` on {device}");
     }
 
     if !args.model.is_empty() {
@@ -117,8 +119,9 @@ fn load_models(args: &ServeArgs) -> anyhow::Result<ModelRegistry> {
             args.cache_dir.clone(),
         )?;
         let name = engine.manifest().name.clone();
+        let device = engine.device().to_owned();
         registry.insert(name.clone(), engine);
-        tracing::info!("registered model `{name}` (from `{model}`)");
+        tracing::info!("registered model `{name}` on {device} (from `{model}`)");
     }
 
     if registry.is_empty() {

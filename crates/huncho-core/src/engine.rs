@@ -36,6 +36,8 @@ pub struct Engine {
     head: HeadParams,
     backend_id: BackendId,
     dtype: String,
+    /// Actual execution device reported by the loaded backend.
+    device: String,
     /// Resolved calibration entry for this backend+dtype.
     calibration: CalibrationEntry,
 }
@@ -52,6 +54,11 @@ impl Engine {
     ) -> Result<Engine> {
         let dtype = dtype.into();
         let calibration = manifest.calibration.resolve(&backend_id.to_string(), &dtype);
+        let device = backend
+            .capabilities()
+            .extra
+            .remove("device")
+            .unwrap_or_else(|| "unknown device".into());
         Ok(Engine {
             formatter: formatter_for(&manifest),
             manifest,
@@ -60,6 +67,7 @@ impl Engine {
             head,
             backend_id,
             dtype,
+            device,
             calibration,
         })
     }
@@ -78,6 +86,10 @@ impl Engine {
 
     pub fn dtype(&self) -> &str {
         &self.dtype
+    }
+
+    pub fn device(&self) -> &str {
+        &self.device
     }
 
     pub fn calibration(&self) -> &CalibrationEntry {

@@ -173,7 +173,8 @@ impl Backend for OnnxBackend {
             supports_fork: false,
             supports_lora: false,
             families: self.families.clone(),
-            extra: BTreeMap::new(),
+            // This session uses ONNX Runtime's CPU execution provider.
+            extra: BTreeMap::from([("device".into(), "CPU".into())]),
         }
     }
 

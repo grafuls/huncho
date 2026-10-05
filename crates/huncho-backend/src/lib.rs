@@ -38,3 +38,12 @@ pub use null::NullBackend;
 pub use onnx::OnnxBackend;
 #[cfg(feature = "candle")]
 pub use qwen3_5::Qwen3_5Backend;
+
+#[cfg(feature = "candle")]
+fn device_label(device: &::candle::Device) -> String {
+    match device.location() {
+        ::candle::DeviceLocation::Cpu => "CPU".into(),
+        ::candle::DeviceLocation::Cuda { gpu_id } => format!("GPU (CUDA device {gpu_id})"),
+        ::candle::DeviceLocation::Metal { gpu_id } => format!("GPU (Metal device {gpu_id})"),
+    }
+}
