@@ -38,8 +38,8 @@ packaging/rpm/build-rpm.sh
 
 Output:
 
-- `~/rpmbuild/RPMS/x86_64/huncho-0.1.0-7.fc44.x86_64.rpm`
-- `~/rpmbuild/SRPMS/huncho-0.1.0-7.fc44.src.rpm`
+- `~/rpmbuild/RPMS/x86_64/huncho-0.1.0-8.fc44.x86_64.rpm`
+- `~/rpmbuild/SRPMS/huncho-0.1.0-8.fc44.src.rpm`
 
 ## RHEL / EPEL 9 derivatives
 
@@ -60,6 +60,10 @@ producing a fully functional ONNX-capable binary on EL9.
 Each runtime executable records a `DT_NEEDED` on `libonnxruntime.so.1`, so the
 license of that bundled runtime is MIT; the rest of the package is
 Apache-2.0.
+
+The RPM `%check` stage uses the ONNX library staged under the package buildroot
+via `LD_LIBRARY_PATH`. This is needed before installation, including for
+`huncho-cpu --version`; it does not alter the installed executable's search path.
 
 ## CUDA selection and CPU fallback
 
@@ -102,7 +106,7 @@ to require CUDA. CPU-only builds do not replace the former CUDA package.
 ## Install
 
 ```sh
-sudo dnf install ~/rpmbuild/RPMS/x86_64/huncho-0.1.0-7.fc44.x86_64.rpm
+sudo dnf install ~/rpmbuild/RPMS/x86_64/huncho-0.1.0-8.fc44.x86_64.rpm
 sudo systemctl enable --now huncho
 curl -s http://127.0.0.1:8080/v1/models
 ```
@@ -130,7 +134,7 @@ the source tarball and auxiliary files and runs `rpmbuild -bs` into `outdir`.
 The root `Makefile`'s `srpm` target just delegates to the same file.
 
 1. **Create a project** at <https://copr.fedorainfracloud.org> (sign in with
-   your Fedora account), e.g. `grafuls/huncho`.
+   your Fedora account). This project's COPR is `quadsdev/huncho`.
 2. **Add a package** with the **SCM** source type and the **make srpm**
    method: point it at this repo's git URL and the `main` branch, and set the
    spec file to `packaging/rpm/huncho.spec`. COPR runs `.copr/Makefile`'s
@@ -140,10 +144,11 @@ The root `Makefile`'s `srpm` target just delegates to the same file.
    unified build needs that toolkit in every chroot; a GPU is not required.
    Chroots without a supported toolkit must explicitly build `--without cuda`.
    Enable network access for Cargo/ONNX Runtime downloads.
-4. **Migrate the old CUDA package entry**: disable the separate `huncho-cuda`
-   COPR build entry (which referenced the removed `huncho-cuda.spec`). Keep the
-   `huncho` entry pointing at the canonical spec. This repository change does
-   not change existing COPR configuration or publish an RPM.
+4. **Use one package entry**: when migrating an older project, remove the
+   separate `huncho-cuda` COPR entry (which referenced `huncho-cuda.spec`). Keep
+   the `huncho` entry pointing at the canonical spec. The `quadsdev/huncho`
+   project already uses this layout. Repository settings are configured in
+   COPR separately from the spec.
 5. **Build**: trigger a build in the web UI, via `copr-cli build`, or enable the
    GitHub webhook so a push to `main` rebuilds automatically.
 6. **Configure auto-rebuild** (optional but recommended): in the COPR web UI go
@@ -154,6 +159,34 @@ The root `Makefile`'s `srpm` target just delegates to the same file.
    **Push**. Every push to `main` now triggers a COPR rebuild of the `huncho`
    package. Equivalently, this repo has a `push` webhook registered against the
    `huncho` package already.
+
+The configured x86_64 targets use these NVIDIA repositories:
+
+| COPR chroot | NVIDIA repository |
+|---|---|
+| `fedora-43-x86_64` | `https://developer.download.nvidia.com/compute/cuda/repos/fedora43/x86_64/` |
+| `fedora-44-x86_64` | `https://developer.download.nvidia.com/compute/cuda/repos/fedora44/x86_64/` |
+| `fedora-rawhide-x86_64` | `https://developer.download.nvidia.com/compute/cuda/repos/fedora44/x86_64/` |
+| `epel-9-x86_64` | `https://developer.download.nvidia.com/compute/cuda/repos/rhel9/x86_64/` |
+
+Set these in each chroot's **Additional repositories**, or with
+`copr-cli edit-chroot <owner>/huncho/<chroot> --repos <repository-url>`.
+Repositories configured for one chroot do not apply to the others. Omitting
+one causes dependency installation to fail with `No match for argument:
+cuda-toolkit`, before the Rust build starts.
+
+NVIDIA does not publish a Rawhide repository. This target uses the Fedora 44
+toolkit; check [NVIDIA's compiler compatibility table](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/#host-compiler-support-policy)
+when Rawhide advances its GCC major version, and validate it with a COPR build.
+
+Check the live configuration after changing build targets or repository settings:
+
+```sh
+python3 .copr/check-cuda-repos.py quadsdev/huncho
+```
+
+The check reports missing per-chroot repositories or disabled CUDA builds and
+exits nonzero if either would prevent shipping the unified package.
 
 Verify locally that the COPR entry point works:
 

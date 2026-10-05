@@ -13,7 +13,7 @@
 
 Name:           huncho
 Version:        0.1.0
-Release:        7%{?dist}
+Release:        8%{?dist}
 Summary:        Portable serving engine for System One decision models
 
 License:        Apache-2.0
@@ -143,6 +143,11 @@ strip --strip-unneeded huncho-cuda
 %endif
 
 %check
+%if 0%{?rhel}
+# RPM runs this in a fresh shell after %install. The bundled ONNX Runtime is
+# staged in the buildroot, not installed in the builder's system library path.
+export LD_LIBRARY_PATH="${RPM_BUILD_ROOT}%{_libdir}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+%endif
 python3 -m unittest discover -s packaging/rpm/tests -v
 ./huncho-cpu --version
 ./huncho-cpu bench --backend mock --iterations 1
@@ -228,6 +233,10 @@ mkdir -p %{buildroot}%{_localstatedir}/lib/huncho
 %endif
 
 %changelog
+* Mon Oct 05 2026 grafuls <grafuls@users.noreply.github.com> - 0.1.0-8
+- Resolve the bundled ONNX Runtime from the package buildroot during EL9 checks.
+- Add regression checks for EL9 runtime loading and COPR CUDA repositories.
+
 * Mon Oct 05 2026 grafuls <grafuls@users.noreply.github.com> - 0.1.0-7
 - Consolidate CPU and CUDA runtimes into huncho with automatic device probing
   and CPU fallback, optional NVIDIA libraries, and one public huncho command.
