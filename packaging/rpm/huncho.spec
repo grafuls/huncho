@@ -145,6 +145,12 @@ for d in /usr/local/cuda*; do
     done
   fi
 done
+
+# candle-kernels/cudaforge detects the GPU compute capability by running
+# `nvidia-smi`, which is absent in the buildroot. Pin it so the kernels are
+# built once. sm_80 (Ampere, CUDA 13's baseline is Turing/sm_75) enables bf16
+# WMMA and runs on Ampere/Ada/Hopper/Blackwell via driver PTX JIT.
+export CUDA_COMPUTE_CAP=80
 %endif
 
 cargo build --release --locked --features %{_features} --bin huncho
