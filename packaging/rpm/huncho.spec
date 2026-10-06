@@ -3,6 +3,7 @@
 # Builders without the NVIDIA toolkit can explicitly use --without cuda.
 %bcond_without cuda
 %global _features onnx,hf,tokenizers,candle,clef
+%{!?cuda_compute_cap:%global cuda_compute_cap 80}
 
 # Only NVIDIA dependencies are optional. Keep all other ELF requirements,
 # including the C/C++ runtime and the EL9 ONNX Runtime dependency.
@@ -13,7 +14,7 @@
 
 Name:           huncho
 Version:        0.1.0
-Release:        9%{?dist}
+Release:        11%{?dist}
 Summary:        Portable serving engine for System One decision models
 
 License:        Apache-2.0
@@ -72,9 +73,9 @@ It takes a state and a set of typed questions and returns calibrated
 probabilities — no text generation. It implements the Jev wire contract, so an
 unmodified Python SDK works against Huncho with only a base-URL change.
 
-The huncho command automatically uses CUDA for Clef when a compatible NVIDIA
+The huncho command automatically uses CUDA for Kev and Clef when a compatible NVIDIA
 GPU, driver and CUDA runtime are available, and otherwise uses CPU. Set
-HUNCHO_CLEF_DEVICE=cpu to force CPU or cuda[:N] to require a GPU. Other backends
+HUNCHO_DEVICE=cpu to force CPU or cuda[:N] to require a GPU. Other backends
 retain their existing device support. Both runtimes include ONNX Runtime,
 Candle, Hugging Face Hub resolution, Clef, and Hugging Face tokenization.
 
@@ -105,7 +106,7 @@ export ORT_PREFER_DYNAMIC_LINK=1
 # Save the portable executable before enabling CUDA; it must never link NVIDIA
 # libraries. Cargo rebuilds the affected crates when the feature set changes.
 cargo build --release --locked --features %{_features} --bin huncho
-install -m0755 target/release/huncho huncho-cpu
+install -m0755 "${CARGO_TARGET_DIR:-target}/release/huncho" huncho-cpu
 strip --strip-unneeded huncho-cpu
 if readelf -d huncho-cpu | grep -E 'NEEDED.*lib(cuda|cudart|cublas|cublasLt|curand|nvrtc)'; then
     echo "CPU executable must not depend on NVIDIA libraries" >&2
@@ -119,26 +120,39 @@ fi
 # `/usr/local/cuda-<ver>` (the `nvcc` is NOT on the default PATH), so prepend
 # its `bin/` to PATH and its `lib64/` to LIBRARY_PATH/LD_LIBRARY_PATH so both
 # the compile and link steps succeed.
-for d in /usr/local/cuda*; do
-  if [ -x "$d/bin/nvcc" ]; then
-    export PATH="$d/bin:$PATH"
-    for libdir in "$d/lib64" "$d/lib"; do
-      if [ -d "$libdir" ]; then
-        export LIBRARY_PATH="$libdir:$LIBRARY_PATH"
-        export LD_LIBRARY_PATH="$libdir:$LD_LIBRARY_PATH"
-      fi
-    done
+# An explicit toolkit avoids generating PTX newer than the deployment driver.
+# Example: --define 'cuda_root /usr/local/cuda-13.3'.
+cuda_root='%{?cuda_root}'
+if [ -n "$cuda_root" ]; then
+  if [ ! -x "$cuda_root/bin/nvcc" ]; then
+    echo "CUDA toolkit not found at $cuda_root" >&2
+    exit 1
   fi
-done
+else
+  for d in /usr/local/cuda*; do
+    if [ -x "$d/bin/nvcc" ]; then
+      cuda_root="$d"
+    fi
+  done
+fi
+if [ -n "$cuda_root" ]; then
+  export CUDA_ROOT="$cuda_root"
+  export PATH="$cuda_root/bin:$PATH"
+  for libdir in "$cuda_root/lib64" "$cuda_root/lib"; do
+    if [ -d "$libdir" ]; then
+      export LIBRARY_PATH="$libdir${LIBRARY_PATH:+:$LIBRARY_PATH}"
+      export LD_LIBRARY_PATH="$libdir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    fi
+  done
+fi
 
 # candle-kernels/cudaforge detects the GPU compute capability by running
 # `nvidia-smi`, which is absent in the buildroot. Pin it so the kernels are
-# built once. sm_80 (Ampere, CUDA 13's baseline is Turing/sm_75) enables bf16
-# WMMA and runs on Ampere/Ada/Hopper/Blackwell via driver PTX JIT.
-export CUDA_COMPUTE_CAP=80
+# built once. Default to sm_80; --define 'cuda_compute_cap 75' targets Turing.
+export CUDA_COMPUTE_CAP=%{cuda_compute_cap}
 
 cargo build --release --locked --features %{_features},cuda --bin huncho
-install -m0755 target/release/huncho huncho-cuda
+install -m0755 "${CARGO_TARGET_DIR:-target}/release/huncho" huncho-cuda
 strip --strip-unneeded huncho-cuda
 %endif
 
@@ -233,6 +247,14 @@ mkdir -p %{buildroot}%{_localstatedir}/lib/huncho
 %endif
 
 %changelog
+* Tue Oct 06 2026 grafuls <grafuls@users.noreply.github.com> - 0.1.0-11
+- Run Kev backbone and pointer projections on CUDA, with FP16 GPU defaults.
+- Share device selection through HUNCHO_DEVICE (legacy alias supported).
+
+* Tue Oct 06 2026 grafuls <grafuls@users.noreply.github.com> - 0.1.0-10
+- Support explicit CUDA toolkit and GPU targets for compatible node builds.
+- Probe CUDA with FP16 and use FP16 by default on pre-Ampere GPUs.
+
 * Mon Oct 05 2026 grafuls <grafuls@users.noreply.github.com> - 0.1.0-9
 - Keep check-stage comments compatible with the EL9 RPM parser.
 

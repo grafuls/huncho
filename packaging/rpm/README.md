@@ -4,7 +4,7 @@ Build a redistributable RPM (binary + source) of the `huncho` serving engine on
 any RPM-based distro (Fedora, RHEL, Rocky, etc.).
 
 Install one package, `huncho`. Its `huncho` command automatically uses CUDA for
-Clef when a compatible NVIDIA GPU, driver, and runtime are usable; otherwise
+Kev and Clef when a compatible NVIDIA GPU, driver, and runtime are usable; otherwise
 it runs on CPU. CPU machines need no NVIDIA packages.
 
 The package contains private CPU and CUDA executables, both built with
@@ -77,18 +77,22 @@ via `LD_LIBRARY_PATH`. This is needed before installation, including for
 
 ## CUDA selection and CPU fallback
 
+`HUNCHO_DEVICE` controls Kev and Clef. The legacy `HUNCHO_CLEF_DEVICE` alias
+continues to work when `HUNCHO_DEVICE` is unset.
+
 Users run the same command on either kind of host:
 
 ```sh
 huncho serve --model Cloudflare/clef
-HUNCHO_CLEF_DEVICE=cpu huncho serve --model Cloudflare/clef
-HUNCHO_CLEF_DEVICE=cuda:1 huncho serve --model Cloudflare/clef
+HUNCHO_DEVICE=cpu huncho serve --model Cloudflare/clef
+HUNCHO_DEVICE=cuda:1 huncho serve --model Cloudflare/clef
 ```
 
 `auto` (the default) probes GPU 0. `cpu` skips CUDA entirely. `cuda` and
 `cuda:N` require the chosen GPU and report errors instead of falling back.
-On CUDA Clef defaults to BF16; on CPU it defaults to FP16
-backbone weights and an FP32 head. Explicit `--dtype` overrides are preserved.
+Clef defaults to BF16 on Ampere or newer CUDA GPUs and FP16 on Turing.
+On CPU it uses FP16 backbone weights and an FP32 head. Explicit `--dtype`
+overrides are preserved; BF16 requires CUDA compute capability 8.0 or newer.
 
 The CPU executable has no NVIDIA library dependencies. The CUDA executable
 links NVIDIA libraries, but those dependencies are excluded from RPM's hard
@@ -96,10 +100,26 @@ requirements so installation on a CPU host works. Other ELF requirements are
 still generated normally. GPU users must install a compatible driver and CUDA
 runtime matching the toolkit used to build the RPM. See [GPU setup](../../docs/gpu-setup.md).
 
-Kernels are built for `sm_80` (Ampere) and require a driver capable of loading
-the toolkit's PTX. Older GPUs or drivers that fail the probe use CPU in auto
-mode. The probe runs without downloading or loading a model; sufficient VRAM
-for the chosen model is still required.
+By default, kernels are built for `sm_80` (Ampere) and require a driver capable
+of loading the toolkit's PTX. GPUs or drivers that fail the FP16 kernel probe
+use CPU in auto mode. The probe runs without downloading or loading a model;
+sufficient VRAM for the chosen model is still required.
+
+For a T4, select a Turing target and a compatible installed toolkit explicitly:
+
+```sh
+packaging/rpm/build-rpm.sh \
+  --define 'cuda_compute_cap 75' \
+  --define 'cuda_root /usr/local/cuda-12.8'
+```
+
+The selected toolkit supplies both the compiler and link libraries. The target
+driver must support its PTX version; CUDA minor-version compatibility alone
+does not guarantee that newer PTX can be loaded. The vendored Candle 0.11
+kernels remove duplicate FP16 compatibility helpers that prevent Turing builds
+with CUDA 12.8 and 13.3. Kev uses FP16 by default on CUDA and FP32 on CPU,
+with FP32 pointer projections on either device. The CPU stages and merges the
+checkpoint before transferring it to CUDA, including BF16 source weights.
 
 The default spec builds both executables. For builders without NVIDIA's
 repository/toolkit, explicitly omit CUDA (the resulting `huncho` runs only on CPU):
@@ -110,13 +130,13 @@ packaging/rpm/build-rpm.sh --without cuda
 
 There is one canonical spec, `packaging/rpm/huncho.spec`. The unified package
 obsoletes older `huncho-cuda` RPMs. `huncho` is the only public command and
-package name; update existing scripts to use it. Set `HUNCHO_CLEF_DEVICE=cuda`
+package name; update existing scripts to use it. Set `HUNCHO_DEVICE=cuda`
 to require CUDA. CPU-only builds do not replace the former CUDA package.
 
 ## Install
 
 ```sh
-sudo dnf install ~/rpmbuild/RPMS/x86_64/huncho-0.1.0-9.fc44.x86_64.rpm
+sudo dnf install ~/rpmbuild/RPMS/x86_64/huncho-0.1.0-10.fc44.x86_64.rpm
 sudo systemctl enable --now huncho
 curl -s http://127.0.0.1:8080/v1/models
 ```

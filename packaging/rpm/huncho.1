@@ -53,11 +53,14 @@ Backend override for manifests/models: \fIauto\fR (default, selected per model),
 .B HUNCHO_DTYPE
 Override the model-specific default dtype.
 .TP
-.B HUNCHO_CLEF_DEVICE
-Clef device: \fIauto\fR (default) tries CUDA on GPU 0 and falls back to CPU.
+.B HUNCHO_DEVICE
+Kev and Clef device: \fIauto\fR (default) tries CUDA on GPU 0 and falls back to CPU.
 Use \fIcpu\fR to force CPU, or \fIcuda\fR / \fIcuda:N\fR to require a GPU
 and report an error if it is unavailable. CUDA requires a compatible NVIDIA
 GPU, driver and runtime libraries; CPU needs no NVIDIA libraries.
+.TP
+.B HUNCHO_CLEF_DEVICE
+Legacy alias used when HUNCHO_DEVICE is unset.
 .TP
 .B HUNCHO_CACHE_DIR
 Model cache directory, also used by Hugging Face resolution.

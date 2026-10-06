@@ -4,7 +4,7 @@
 # the CPU executable. rpmbuild substitutes the private executable directory.
 runtime_dir='@LIBEXECDIR@/huncho'
 
-case "${HUNCHO_CLEF_DEVICE-auto}" in
+case "${HUNCHO_DEVICE-${HUNCHO_CLEF_DEVICE-auto}}" in
     auto)
         if [ -x "$runtime_dir/huncho-cuda" ] &&
             "$runtime_dir/huncho-cuda" __check-cuda >/dev/null 2>&1; then
@@ -15,14 +15,14 @@ case "${HUNCHO_CLEF_DEVICE-auto}" in
         ;;
     cuda|cuda:*)
         if [ ! -x "$runtime_dir/huncho-cuda" ]; then
-            echo 'huncho: this package was built without CUDA; install a CUDA-enabled huncho package or set HUNCHO_CLEF_DEVICE=cpu' >&2
+            echo 'huncho: this package was built without CUDA; install a CUDA-enabled huncho package or set HUNCHO_DEVICE=cpu' >&2
             exit 1
         fi
         # Explicit CUDA requests must report errors rather than fall back.
         exec "$runtime_dir/huncho-cuda" "$@"
         ;;
     *)
-        echo 'huncho: invalid HUNCHO_CLEF_DEVICE; use auto, cpu, cuda, or cuda:N' >&2
+        echo 'huncho: invalid device selection; use auto, cpu, cuda, or cuda:N' >&2
         exit 2
         ;;
 esac

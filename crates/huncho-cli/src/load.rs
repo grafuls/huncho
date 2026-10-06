@@ -193,10 +193,19 @@ pub fn engine_from_manifest(
     };
     #[cfg(not(feature = "clef"))]
     let clef_dtype: Option<&str> = None;
+    #[cfg(feature = "candle")]
+    let kev_gpu = backend_id == BackendId::Candle
+        && manifest.family == Family::F2
+        && manifest.prompt_contract.template == "kev-v1"
+        && dtype.is_none()
+        && manifest.find_artifact(backend_id, "fp16").is_some()
+        && huncho_backend::device::device_from_env()?.is_cuda();
+    #[cfg(not(feature = "candle"))]
+    let kev_gpu = false;
     let dtype = dtype.map(|s| s.to_string()).unwrap_or_else(|| {
         if backend_id == BackendId::Clef {
             clef_dtype.unwrap_or("fp16").to_string()
-        } else if manifest.family == Family::F3 {
+        } else if manifest.family == Family::F3 || kev_gpu {
             "fp16".to_string()
         } else {
             manifest.default_dtype(backend_id).to_string()
@@ -250,12 +259,13 @@ fn load_clef(_manifest: &ModelManifest, _dtype: &str, _dir: &Path) -> Result<Box
 #[cfg(feature = "candle")]
 fn load_candle(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<dyn Backend>> {
     if manifest.family == Family::F2 && manifest.prompt_contract.template == "kev-v1" {
-        let backend = Qwen3_5Backend::load_kev(
+        let backend = Qwen3_5Backend::load_kev_on_device(
             &adapter_base_dir(manifest, dir),
             dir,
             &dir.join(&manifest.head.weights),
             manifest.backbone.max_context,
             dtype,
+            huncho_backend::device::device_from_env()?,
         )?;
         return Ok(Box::new(backend));
     }
@@ -628,6 +638,23 @@ mod candle_tests {
             .unwrap_err()
             .to_string()
             .contains("question row requires"));
+        // A package declaring FP16 uses it automatically only on CUDA.
+        // Explicit dtype requests remain authoritative on either device.
+        manifest.backbone.artifacts.get_mut(&BackendId::Candle).unwrap().push(
+            huncho_core::manifest::ArtifactRef {
+                path: "adapter_model.safetensors".into(),
+                dtype: "fp16".into(),
+                quantization: None,
+            },
+        );
+        fs::write(&path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
+        let automatic = engine_from_resolved_manifest(&path, BackendChoice::Auto, None).unwrap();
+        assert_eq!(automatic.dtype(), if automatic.device().starts_with("GPU") { "fp16" } else { "fp32" });
+        for dtype in ["fp16", "fp32"] {
+            let explicit = engine_from_resolved_manifest(&path, BackendChoice::Auto, Some(dtype)).unwrap();
+            assert_eq!(explicit.dtype(), dtype);
+            explicit.eval(&req, &Default::default()).unwrap();
+        }
     }
 
     #[test]

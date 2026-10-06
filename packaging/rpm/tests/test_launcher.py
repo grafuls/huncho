@@ -26,6 +26,7 @@ class LauncherTests(unittest.TestCase):
         self.launcher.chmod(0o755)
         self.env = dict(os.environ)
         self.env.pop("HUNCHO_CLEF_DEVICE", None)
+        self.env.pop("HUNCHO_DEVICE", None)
         self.env["PROBE_LOG"] = str(self.root / "probes")
         self.stub("cpu")
         self.stub("cuda")
@@ -81,6 +82,15 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(json.loads(result.stdout)[0], "cpu")
         self.assertFalse((self.root / "probes").exists())
 
+    def test_generic_device_overrides_legacy_alias(self):
+        for device, legacy, expected in [("cpu", "cuda", "cpu"), ("cuda:1", "cpu", "cuda")]:
+            with self.subTest(device=device):
+                self.env["HUNCHO_DEVICE"] = device
+                result = self.run_launcher(legacy)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout)[0], expected)
+                self.assertFalse((self.root / "probes").exists())
+
     def test_explicit_cuda_keeps_ordinal_and_exit_status(self):
         self.stub("cuda", probe_status=1, run_status=42)
         result = self.run_launcher("cuda:2")
@@ -108,7 +118,7 @@ class LauncherTests(unittest.TestCase):
             with self.subTest(device=device):
                 result = self.run_launcher(device)
                 self.assertEqual(result.returncode, 2)
-                self.assertIn("invalid HUNCHO_CLEF_DEVICE", result.stderr)
+                self.assertIn("invalid device selection", result.stderr)
 
     def test_exec_preserves_pid_and_signals(self):
         for device in ("cpu", "auto"):

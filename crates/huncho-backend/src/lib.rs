@@ -18,6 +18,8 @@
 #[cfg(feature = "candle")]
 pub mod candle;
 #[cfg(feature = "candle")]
+pub mod device;
+#[cfg(feature = "candle")]
 pub mod kev;
 #[cfg(feature = "clef")]
 pub mod clef;

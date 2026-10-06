@@ -24,7 +24,7 @@ fn native_clef_resolves_benchmarks_and_conforms_without_python() {
         let output = Command::new(env!("CARGO_BIN_EXE_huncho"))
             .current_dir(root)
             .env("PATH", root)
-            .env("HUNCHO_CLEF_DEVICE", "cpu")
+            .env("HUNCHO_DEVICE", "cpu")
             .args(args)
             .output()
             .unwrap();

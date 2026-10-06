@@ -3,12 +3,13 @@ use std::process::Command;
 #[test]
 fn cuda_probe_cannot_report_success_for_cpu() {
     let output = Command::new(env!("CARGO_BIN_EXE_huncho"))
-        .env("HUNCHO_CLEF_DEVICE", "cpu")
+        .env("HUNCHO_DEVICE", "cpu")
+        .env("HUNCHO_CLEF_DEVICE", "cuda")
         .arg("__check-cuda")
         .output()
         .unwrap();
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("no usable Clef CUDA device"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("no usable CUDA device"));
 }
 
 #[cfg(not(feature = "cuda"))]
@@ -16,6 +17,7 @@ fn cuda_probe_cannot_report_success_for_cpu() {
 fn cpu_build_rejects_cuda_probe_in_auto_mode() {
     let output = Command::new(env!("CARGO_BIN_EXE_huncho"))
         .env_remove("HUNCHO_CLEF_DEVICE")
+        .env_remove("HUNCHO_DEVICE")
         .arg("__check-cuda")
         .output()
         .unwrap();

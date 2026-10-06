@@ -53,11 +53,11 @@ async fn main() -> anyhow::Result<()> {
         Command::Conform(a) => conform::run(a),
         Command::Bench(a) => bench::run(a),
         Command::CheckCuda => {
-            #[cfg(feature = "clef")]
-            if huncho_backend::clef::device_from_env()?.is_cuda() {
+            #[cfg(feature = "candle")]
+            if huncho_backend::device::device_from_env()?.is_cuda() {
                 return Ok(());
             }
-            anyhow::bail!("no usable Clef CUDA device")
+            anyhow::bail!("no usable CUDA device")
         }
     }
 }

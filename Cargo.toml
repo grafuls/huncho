@@ -7,6 +7,11 @@ members = [
     "crates/huncho-api",
     "crates/huncho-cli",
 ]
+exclude = ["vendor/candle-kernels"]
+
+[patch.crates-io]
+# Candle 0.11 redeclares CUDA's FP16 min/max intrinsics when targeting Turing.
+candle-kernels = { path = "vendor/candle-kernels" }
 
 [workspace.package]
 version = "0.1.0"

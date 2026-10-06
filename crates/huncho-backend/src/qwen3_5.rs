@@ -765,7 +765,9 @@ impl Qwen3_5Backend {
         max_context: usize,
         dtype: impl Into<String>,
     ) -> CoreResult<Qwen3_5Backend> {
-        Self::load_with_head(base_dir, adapter_dir, None, max_context, dtype.into())
+        Self::load_with_head(
+            base_dir, adapter_dir, None, max_context, dtype.into(), Device::Cpu,
+        )
     }
 
     /// Load Kev's backbone and trained pointer head without materializing an
@@ -777,10 +779,24 @@ impl Qwen3_5Backend {
         max_context: usize,
         dtype: impl Into<String>,
     ) -> CoreResult<Self> {
+        Self::load_kev_on_device(
+            base_dir, adapter_dir, head_path, max_context, dtype, Device::Cpu,
+        )
+    }
+
+    /// Load Kev on the selected device, retaining FP32 pointer projections.
+    pub fn load_kev_on_device(
+        base_dir: &Path,
+        adapter_dir: &Path,
+        head_path: &Path,
+        max_context: usize,
+        dtype: impl Into<String>,
+        device: Device,
+    ) -> CoreResult<Self> {
         let dtype = dtype.into();
         if !matches!(dtype.as_str(), "fp32" | "fp16" | "f16") {
             return Err(Error::Unsupported(format!(
-                "Kev's Candle CPU backend supports fp32 or fp16, not `{dtype}`"
+                "Kev's Candle backend supports fp32 or fp16, not `{dtype}`"
             )));
         }
         Self::load_with_head(
@@ -789,6 +805,7 @@ impl Qwen3_5Backend {
             Some(head_path),
             max_context,
             dtype,
+            device,
         )
     }
 
@@ -798,6 +815,7 @@ impl Qwen3_5Backend {
         pointer_path: Option<&Path>,
         max_context: usize,
         dtype: String,
+        device: Device,
     ) -> CoreResult<Self> {
         let dtype_str = dtype;
         let dtype = match dtype_str.as_str() {
@@ -810,12 +828,22 @@ impl Qwen3_5Backend {
                 )))
             }
         };
-        let device = Device::Cpu;
+        log::info!(
+            "loading Qwen3.5 on {} with {} weights",
+            crate::device_label(&device), dtype_str,
+        );
 
         let config_path = base_dir.join("config.json");
         let config = parse_config(&config_path)?;
 
-        let mut tensors = load_base_tensors(base_dir, &device, dtype)?;
+        // Stage Kev weights and merge LoRA on CPU. Turing cannot cast BF16
+        // source tensors on CUDA, and staging avoids GPU merge temporaries.
+        let weight_device = if pointer_path.is_some() {
+            Device::Cpu
+        } else {
+            device.clone()
+        };
+        let mut tensors = load_base_tensors(base_dir, &weight_device, dtype)?;
         if tensors.is_empty() {
             return Err(Error::Backend(format!(
                 "no base-weight `*.safetensors` found in `{}`; the Qwen3.5 backend needs the \
@@ -827,7 +855,7 @@ impl Qwen3_5Backend {
 
         if let Some(adapter_dir) = adapter_dir {
             let adapter_path = adapter_dir.join("adapter_model.safetensors");
-            let lora = candle::safetensors::load(&adapter_path, &device).map_err(|e| {
+            let lora = candle::safetensors::load(&adapter_path, &weight_device).map_err(|e| {
                 Error::Backend(QwenError::Load(adapter_path.display().to_string(), e.to_string()).to_string())
             })?;
             let (r, alpha) = read_lora_hyperparams(&adapter_dir.join("adapter_config.json"))?;
@@ -845,7 +873,8 @@ impl Qwen3_5Backend {
         let head = match pointer_path {
             Some(path) => {
                 tensors.remove("lm_head.weight");
-                Readout::Pointer(PointerHead::load(path, config.hidden_size)?)
+                tensors.remove("lm_head.bias");
+                Readout::Pointer(PointerHead::load(path, config.hidden_size, &device)?)
             }
             None => {
                 let lm_head_w = tensors.remove("lm_head.weight").ok_or_else(|| {
@@ -860,6 +889,10 @@ impl Qwen3_5Backend {
             config.vocab_size
         };
 
+        let tensors = tensors.into_iter()
+            .map(|(name, tensor)| tensor.to_device(&device).map(|tensor| (name, tensor)))
+            .collect::<candle::Result<HashMap<_, _>>>()
+            .map_err(|e| Error::Backend(format!("moving Qwen3.5 weights to device: {e}")))?;
         let vb = VarBuilder::from_tensors(tensors, dtype, &device);
         let model = Model::new(&config, vb, &device, dtype)
             .map_err(|e| Error::Backend(QwenError::Load("model".into(), e.to_string()).to_string()))?;

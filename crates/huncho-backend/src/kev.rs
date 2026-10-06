@@ -7,7 +7,7 @@ use std::io::BufReader;
 use std::path::Path;
 
 use candle::pickle::{Object, PthTensors, Stack};
-use candle::{DType, Tensor};
+use candle::{DType, Device, Tensor};
 use candle_nn::{Linear, Module};
 use huncho_core::error::{Error, Result};
 
@@ -116,7 +116,7 @@ pub(crate) struct PointerHead {
 }
 
 impl PointerHead {
-    pub(crate) fn load(path: &Path, hidden_size: usize) -> Result<Self> {
+    pub(crate) fn load(path: &Path, hidden_size: usize, device: &Device) -> Result<Self> {
         let meta = KevMetadata::load(path)?;
         let tensors = PthTensors::new(path, Some("head")).map_err(invalid)?;
         let tensor = |name: &str, shape: &[usize]| -> Result<Tensor> {
@@ -141,7 +141,7 @@ impl PointerHead {
             {
                 return Err(invalid(format!("`{name}` contains non-finite weights")));
             }
-            Ok(t)
+            t.to_device(device).map_err(invalid)
         };
         let projection = |name: &str| -> Result<Linear> {
             Ok(Linear::new(
@@ -220,7 +220,7 @@ mod tests {
     #[test]
     fn rejects_head_backbone_dimension_mismatch() {
         let path = Path::new("tests/fixtures/tiny_kev/head.pt");
-        let err = PointerHead::load(path, 8)
+        let err = PointerHead::load(path, 8, &Device::Cpu)
             .err()
             .expect("must reject mismatched head");
         assert!(err.to_string().contains("q.weight"));

@@ -11,13 +11,29 @@ const FIXTURE: &str = "tests/fixtures/tiny_clef";
 
 #[test]
 fn native_clef_matches_reference_tokens_spans_and_logits() {
+    assert_clef_matches_reference(candle::Device::Cpu, &["fp32", "fp16"]);
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+#[ignore = "requires an NVIDIA GPU and compatible CUDA kernels"]
+fn native_clef_cuda_matches_reference_tokens_spans_and_logits() {
+    let device = huncho_backend::clef::device_from_env().unwrap();
+    assert!(device.is_cuda(), "CUDA probe unexpectedly fell back to CPU");
+    // This also exercises the T4's automatic FP16 selection. Explicit FP32
+    // retains the stricter reference tolerance.
+    let dtype = huncho_backend::clef::default_dtype().unwrap();
+    assert_clef_matches_reference(device, &["fp32", dtype]);
+}
+
+fn assert_clef_matches_reference(device: candle::Device, dtypes: &[&str]) {
     let root = Path::new(FIXTURE);
     let manifest = ModelManifest::load(root.join("huncho-model.json")).unwrap();
     let golden: Value =
         serde_json::from_slice(&std::fs::read(root.join("golden.json")).unwrap()).unwrap();
     let tokenizer = HfTokenizer::from_file_unbounded(root.join("tokenizer.json")).unwrap();
-    for dtype in ["fp32", "fp16"] {
-        let mut model = ClefBackend::load(root, &manifest, dtype, candle::Device::Cpu).unwrap();
+    for &dtype in dtypes {
+        let mut model = ClefBackend::load(root, &manifest, dtype, device.clone()).unwrap();
         for (i, case) in golden["cases"].as_array().unwrap().iter().enumerate() {
             let request: SystemOneRequest =
                 serde_json::from_value(case["request"].clone()).unwrap();

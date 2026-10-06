@@ -172,13 +172,14 @@ Each question runs as an independent causal row, preserving question isolation.
 The backend returns one raw pointer logit per option. Score confidence follows
 Kev's ordered-level formula; choice confidence uses the existing peak formula.
 
-Current support is CPU inference for Qwen3.5 LoRA checkpoints in fp32 (default)
-or fp16, with 8,192 tokens per complete row. KV/recurrent prefix caching is not
+Qwen3.5 LoRA checkpoints run on CPU (fp32 by default) or CUDA (fp16 by default),
+with an FP32 pointer head on the selected device and a limit of 8,192 tokens
+per complete row. KV/recurrent prefix caching is not
 implemented, so the state is recomputed for each question. Qwen3 checkpoints,
 full-weight Kev releases, option isolation, and trained special embeddings are
-rejected explicitly. This CPU path does not claim the upstream GPU server's
+rejected explicitly. This implementation does not claim the upstream server's
 64k state window. Offline reference fixtures test prompt tokens and calibrated
-probabilities against PyTorch; see
+probabilities against PyTorch on CPU and CUDA; see
 [`tiny_kev`](../crates/huncho-backend/tests/fixtures/tiny_kev/README.md).
 
 ## Backend selection in the CLI

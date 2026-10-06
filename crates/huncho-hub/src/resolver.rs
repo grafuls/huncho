@@ -400,7 +400,7 @@ fn synthesize_checkpoint(
         if adapter.get("task_type").and_then(|v| v.as_str()) == Some("FEATURE_EXTRACTION") {
             if !matches!(dtype, "fp32" | "fp16" | "f16") {
                 return Err(HubError::Package(format!(
-                    "Kev's Candle CPU backend supports fp32 or fp16, not `{dtype}`"
+                    "Kev's Candle backend supports fp32 or fp16, not `{dtype}`"
                 )));
             }
             return synthesize_kev(repo, opts, &adapter_path, &adapter);

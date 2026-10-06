@@ -43,8 +43,8 @@ TypeSafe Python SDK works against Huncho with only a base-URL change.
 ## Quick start
 
 The [RPM package](packaging/rpm/README.md) bundles CPU and CUDA runtimes behind
-one `huncho` command. Clef automatically uses a compatible NVIDIA GPU when its
-driver and runtime are available, otherwise CPU. Set `HUNCHO_CLEF_DEVICE=cpu`
+one `huncho` command. Kev and Clef automatically use a compatible NVIDIA GPU when the
+driver and runtime are available, otherwise CPU. Set `HUNCHO_DEVICE=cpu`
 to force CPU or `cuda` / `cuda:N` to require a GPU. See [GPU setup](docs/gpu-setup.md).
 
 Serve a built-in deterministic mock model (no weights required):
@@ -98,7 +98,7 @@ runtime must be included in the build; a missing runtime produces a build hint.
 The manifest and the selected backend's artifacts are fetched into the HF cache,
 pinned to the resolved commit, so `serve --model` is deterministic across runs.
 
-Serve Kev-4B natively on CPU with Candle:
+Serve Kev-4B natively with Candle (add the `cuda` feature for GPU support):
 
 ```bash
 cargo build --release -p huncho-cli --features hf,candle,tokenizers
@@ -107,7 +107,7 @@ cargo build --release -p huncho-cli --features hf,candle,tokenizers
 
 The first load downloads the adapter, tokenizer, pointer head, and the base
 checkpoint pinned by `head.pt`. Requests use `"model": "kev-4b"`. The default
-is fp32; add `--dtype fp16` to reduce memory use. This path supports Qwen3.5 Kev
+is fp16 on CUDA and fp32 on CPU; `--dtype` overrides it. This path supports Qwen3.5 Kev
 LoRA checkpoints with up to 8,192 tokens per state-plus-question row. See
 [native Kev support](docs/backends.md#kev-f2-on-candle) for the loading contract
 and current limits.
