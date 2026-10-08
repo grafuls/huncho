@@ -297,6 +297,46 @@ fn load_clef(_manifest: &ModelManifest, _dtype: &str, _dir: &Path) -> Result<Box
 
 #[cfg(feature = "candle")]
 fn load_candle(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<dyn Backend>> {
+    if matches!(dtype, "q8_0-fp32" | "q4_0-fp32") {
+        #[cfg(not(feature = "quantization"))]
+        return Err(Error::Unsupported(
+            "packed Kev requires the quantization feature".into(),
+        ));
+        #[cfg(feature = "quantization")]
+        {
+            use huncho_backend::qwen3_5::quantized::Scheme;
+            if manifest.family != Family::F2 || manifest.prompt_contract.template != "kev-v1" {
+                return Err(Error::Unsupported(
+                    "packed artifacts currently support Kev F2 only".into(),
+                ));
+            }
+            if std::env::var_os("HUNCHO_DEVICE").is_some_and(|value| value != "cpu") {
+                return Err(Error::Unsupported(
+                    "packed Kev requires HUNCHO_DEVICE=cpu (no GPU initialization)".into(),
+                ));
+            }
+            let artifact = manifest
+                .find_artifact(BackendId::Candle, dtype)
+                .ok_or_else(|| Error::Package("missing exact packed Kev artifact".into()))?;
+            if artifact.quantization.as_deref()
+                != Some(Scheme::from_dtype(dtype).unwrap().profile())
+            {
+                return Err(Error::Package(
+                    "packed artifact quantization profile must match dtype".into(),
+                ));
+            }
+            let backend = Qwen3_5Backend::load_quantized_kev(
+                &dir.join(&artifact.path),
+                &dir.join(&manifest.head.weights),
+                manifest.backbone.max_context,
+                dtype,
+            )?
+            .with_projection_chunk_rows(projection_chunk_rows_from_env()?)?
+            .with_fp32_attention(fp32_attention_from_env()?)?
+            .with_cpu_delta_rule(bool_env("HUNCHO_CPU_DELTA_RULE")?)?;
+            return Ok(Box::new(backend));
+        }
+    }
     if manifest.family == Family::F2 && manifest.prompt_contract.template == "kev-v1" {
         let backend = Qwen3_5Backend::load_kev_on_device(
             &adapter_base_dir(manifest, dir),

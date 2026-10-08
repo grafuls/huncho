@@ -25,6 +25,7 @@ default = []
 onnx = ["dep:ort"]
 onnx-cuda = ["onnx", "ort/cuda"]
 candle = ["dep:candle", "dep:candle-nn", "dep:candle-transformers", "dep:zip"]
+quantization = ["candle"]
 clef = ["candle", "huncho-core/tokenizers"]
 cuda = ["clef", "candle/cuda", "candle-nn/cuda"]
 

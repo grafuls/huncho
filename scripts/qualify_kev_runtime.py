@@ -16,6 +16,11 @@ import platform
 import subprocess
 import time
 
+PACKED_PROFILES = {
+    "q8_0-fp32": "kev-projections-q8_0-fp32-v1",
+    "q4_0-fp32": "kev-projections-q4_0-fp32-v1",
+}
+
 
 def sha256(path):
     digest = hashlib.sha256()
@@ -60,6 +65,10 @@ def verify_report(report, args, suite, mode):
         expected_metadata["attention_compute_dtype"] = "fp32"
     if args.cpu_delta_rule:
         expected_metadata["delta_rule_execution"] = "cpu-buffered-v1"
+    if args.dtype in PACKED_PROFILES:
+        expected_metadata.update(weight_quantization=PACKED_PROFILES[args.dtype],
+            activation_dtype="fp32", recurrent_state_dtype="fp32", pointer_head_dtype="fp32",
+            projection_kernel="candle-packed-cpu-v1")
     if metadata != expected_metadata:
         raise ValueError("reported kernel profile differs from the requested execution")
     device = report.get("device", "")
@@ -112,6 +121,8 @@ def verify_report(report, args, suite, mode):
 def run(args):
     if args.cpu_delta_rule and args.device != "cpu":
         raise ValueError("buffered delta recurrence is CPU-only")
+    if args.dtype in PACKED_PROFILES and args.device != "cpu":
+        raise ValueError("packed Kev artifacts are CPU-only")
     if args.persistent_prefix_bytes < 0:
         raise ValueError("persistent prefix byte budget must be nonnegative")
     if args.batch_max_requests is not None and not 2 <= args.batch_max_requests <= 64:
@@ -131,6 +142,8 @@ def run(args):
         raise ValueError("package must be the Kev F2 pointer contract")
     calibration = manifest["calibration"]
     entry = calibration.get("entries", {}).get(f"candle:{args.dtype}", calibration["default"])
+    if args.dtype in PACKED_PROFILES and not args.numerical_only and calibration.get("entries", {}).get(f"candle:{args.dtype}", {}).get("status") != "refit":
+        raise ValueError("packed acceptance requires an explicit backend:dtype refit")
     if not args.numerical_only and entry.get("status") not in ("fit", "refit"):
         raise ValueError("labeled acceptance requires an explicitly fitted calibration entry")
     if not 0 <= args.projection_chunk_rows <= 4096 or args.batch_tokens <= 0:
@@ -143,7 +156,13 @@ def run(args):
     tracked = [manifest_path, args.package / manifest["head"]["weights"]]
     if manifest["backbone"].get("tokenizer"):
         tracked.append(args.package / manifest["backbone"]["tokenizer"])
-    tracked.extend(path for path in [args.package / "adapter_config.json", args.package / "adapter_model.safetensors"] if path.exists())
+    if args.dtype in PACKED_PROFILES:
+        artifacts = [a for a in manifest["backbone"].get("artifacts", {}).get("candle", []) if a.get("dtype") == args.dtype]
+        if len(artifacts) != 1 or artifacts[0].get("quantization") != PACKED_PROFILES[args.dtype]:
+            raise ValueError("an exact packed artifact with the requested profile is required")
+        tracked.append(args.package / artifacts[0]["path"])
+    else:
+        tracked.extend(path for path in [args.package / "adapter_config.json", args.package / "adapter_model.safetensors"] if path.exists())
     identity = {
         "schema_version": "1.0", "started_utc": datetime.now(timezone.utc).isoformat(),
         "binary": str(binary), "binary_sha256": sha256(binary),
@@ -227,7 +246,7 @@ def main():
         parser.add_argument(f"--{name}", type=Path, required=True)
     parser.add_argument("--source-archive", type=Path)
     parser.add_argument("--device", choices=["cpu", "cuda"], required=True)
-    parser.add_argument("--dtype", choices=["fp32", "fp16"], required=True)
+    parser.add_argument("--dtype", choices=["fp32", "fp16", *PACKED_PROFILES], required=True)
     parser.add_argument("--projection-chunk-rows", type=int, default=0)
     parser.add_argument("--fp32-attention", action="store_true")
     parser.add_argument("--cpu-delta-rule", action="store_true")

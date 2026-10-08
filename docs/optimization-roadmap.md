@@ -491,3 +491,29 @@ counts. These runs lack observed labels and explicitly record `qualified=false`;
 they do not establish held-out calibration, cross-request scheduling acceptance,
 latency improvement or a GPU result. Elapsed times include model loading and
 paired/warm-up work, so they cannot compare optimization speed directly.
+
+## Durable CPU Kev quantization increment (2026-10-08)
+
+O18 now has actual CPU Q8_0/Q4_0 packed projection artifacts and Candle packed
+matmul kernels, with FP32 LoRA merge, activations, state, convolution, embeddings
+and trained pointer head. Huncho records the full mixed precision/kernel profile;
+the loader validates embedded configuration/layout and cannot silently switch
+to environment-selected dense kernels. `quantize` creates a new package,
+rechecks source hashes and sets calibration pending. `capture-logits` collects
+independent fitting logits offline, including pending variants, with explicit
+observed targets and artifact/runtime evidence. It does not export goldens or
+serve unqualified probabilities. Existing `calibrate` refits the exact variant.
+HTTP serving requires an explicit backend:dtype refit and fresh complete
+labeled conformance at unchanged thresholds; inherited/source fit entries fail.
+
+CPU tests run both real packed kernels on the tiny Kev fixture and verify
+durable reload, changed logits, immutable forks/persistent hits, same-profile
+batch parity, profile/layout/truncation rejection, no overwrite, byte-identical
+source files, candidate/target order, offline dry fitting and serving rejection.
+Packed input widths below 32 are locally zero-padded, including the fixture;
+no padding enters attention or token usage. Conversion/initial loading still
+materialize dense weights temporarily; packed projection payload counts are
+not peak RSS or a speed claim. Released Kev Q8_0/Q4_0 acceptance, direct packed
+model construction, other families/platforms and additional quantization layouts
+remain open. CONV-03 is partial: conversion supplies no automatic calibration
+approval. See [the workflow and limits](quantization.md).

@@ -170,6 +170,11 @@ hf download convaiinnovations/laya --local-dir ./laya-checkout
 
 ### Kev (F2) on Candle
 
+Optional experimental CPU Q8_0/Q4_0 projection artifacts are available through
+the separate `quantization` feature. The pointer head and retained state remain
+FP32; conversion leaves calibration pending and serving requires an explicit
+variant refit plus fresh labeled conformance. See [quantization](quantization.md).
+
 With `--features hf,candle,tokenizers`, `serve --model jaredpalmer/kev-4b` loads
 Kev directly. The Hub resolver distinguishes Kev's
 PEFT `FEATURE_EXTRACTION` adapter from Nimble's candidate-logit adapter.

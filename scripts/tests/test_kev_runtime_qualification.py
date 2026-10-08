@@ -48,6 +48,20 @@ class RuntimeQualificationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "kernel profile"):
             qualifier.verify_report(data, options(), suite(), "prefix")
 
+    def test_packed_precision_requires_complete_arithmetic_identity(self):
+        for dtype, profile in qualifier.PACKED_PROFILES.items():
+            data = dict(report(), dtype=dtype)
+            args = options(dtype=dtype)
+            with self.assertRaisesRegex(ValueError, "kernel profile"):
+                qualifier.verify_report(data, args, suite(), "prefix")
+            data["execution_metadata"].update(weight_quantization=profile, activation_dtype="fp32",
+                recurrent_state_dtype="fp32", pointer_head_dtype="fp32", projection_kernel="candle-packed-cpu-v1")
+            self.assertTrue(qualifier.verify_report(data, args, suite(), "prefix"))
+            for field in ["pointer_head_dtype", "projection_kernel", "weight_quantization"]:
+                changed = dict(data, execution_metadata=dict(data["execution_metadata"], **{field:"substituted"}))
+                with self.subTest(dtype=dtype, field=field), self.assertRaises(ValueError):
+                    qualifier.verify_report(changed, args, suite(), "prefix")
+
     def test_persistent_prefix_reuse_requires_real_hits_and_exact_budget(self):
         args = options(persistent_prefix_bytes=1024)
         data = dict(report(), persistent_prefix_bytes=1024)
@@ -75,6 +89,7 @@ class RuntimeQualificationTests(unittest.TestCase):
     def test_invalid_cpu_profile_and_cache_modes_fail_before_any_file_or_device_access(self):
         for change in [
             {"device": "cuda", "cpu_delta_rule": True},
+            {"device": "cuda", "dtype": "q8_0-fp32"},
             {"persistent_prefix_bytes": -1}, {"persistent_prefix_bytes": 1, "modes": "independent"},
             {"batch_max_requests": 1}, {"batch_max_requests": 65},
             {"batch_max_requests": 2, "modes": "prefix"},
@@ -180,6 +195,25 @@ class RuntimeQualificationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "explicitly fitted"):
                 qualifier.run(args)
             self.assertFalse(args.output.exists())
+
+    def test_packed_acceptance_cannot_inherit_source_or_default_refits(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package = root / "package"
+            package.mkdir()
+            manifest = {"family":"F2", "prompt_contract":{"template":"kev-v1"},
+                "calibration":{"default":{"temperature":2.40605,"status":"refit"},"entries":{}}}
+            (package / "huncho-model.json").write_text(json.dumps(manifest))
+            golden = root / "golden.json"
+            golden.write_text(json.dumps(suite()))
+            for entries in [{}, {"candle:q8_0-fp32":{"temperature":2.40605,"status":"fit"}}]:
+                manifest["calibration"]["entries"] = entries
+                (package / "huncho-model.json").write_text(json.dumps(manifest))
+                args = options(dtype="q8_0-fp32", binary=root / "must-not-run", package=package,
+                    golden=golden, output=root / "audit", source_archive=None, modes="independent")
+                with self.subTest(entries=entries), self.assertRaisesRegex(ValueError, "explicit backend:dtype refit"):
+                    qualifier.run(args)
+                self.assertFalse(args.output.exists())
 
 
 if __name__ == "__main__":

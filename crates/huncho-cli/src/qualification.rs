@@ -57,6 +57,10 @@ pub(crate) struct InputSnapshot {
 }
 
 impl InputSnapshot {
+    #[cfg(feature = "quantization")]
+    pub(crate) fn file_digests(&self) -> &BTreeMap<String, FileDigest> {
+        &self.files
+    }
     /// Run before tokenizer/weights are loaded. Native Qwen records every
     /// loaded base shard, including when the adapter lives in a separate cache.
     pub(crate) fn capture(
@@ -119,6 +123,11 @@ fn input_paths(
         paths.insert("tokenizer".into(), dir.join(tokenizer));
     }
     match backend {
+        BackendId::Candle if matches!(dtype, "q8_0-fp32" | "q4_0-fp32") => {
+            let artifact = manifest.find_artifact(backend, dtype).ok_or_else(|| Error::Package("missing exact packed artifact".into()))?;
+            paths.insert("backbone/packed".into(), dir.join(&artifact.path));
+            paths.insert("head".into(), dir.join(&manifest.head.weights));
+        }
         BackendId::Candle if manifest.family == Family::F3 ||
             (manifest.family == Family::F2 && manifest.prompt_contract.template == "kev-v1") => {
             let base = crate::load::adapter_base_dir(manifest, dir);
@@ -206,7 +215,7 @@ fn add_tree(paths: &mut BTreeMap<String, PathBuf>, dir: &Path, role: &str) -> Re
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
-struct ExecutionIdentity {
+pub(crate) struct ExecutionIdentity {
     program: FileDigest,
     artifacts: BTreeMap<String, FileDigest>,
     manifest_sha256: String,
@@ -222,7 +231,7 @@ struct ExecutionIdentity {
 }
 
 impl ExecutionIdentity {
-    fn capture(
+    pub(crate) fn capture(
         engine: &Engine,
         inputs: &InputSnapshot,
         options: &EvalOptions,

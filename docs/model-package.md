@@ -1,5 +1,11 @@
 # Model package format
 
+Experimental CPU Kev packages may carry a merged GGUF artifact with dtype
+`q8_0-fp32` or `q4_0-fp32` and its exact `kev-projections-*-fp32-v1` quantization
+profile. These artifacts embed text configuration and projection layout; the
+package also retains the trained pointer head and tokenizer. See the
+[conversion and calibration workflow](quantization.md).
+
 A model package is a single `huncho-model.json` manifest plus artifacts. Every
 backend can load it. The manifest pins everything the engine needs to serve a
 model deterministically: family, backbone, head, prompt contract, calibration,

@@ -2,11 +2,15 @@
 
 mod bench;
 mod calibrate;
+#[cfg(feature = "quantization")]
+mod capture_logits;
 mod conform;
 mod convert;
 mod load;
 #[cfg(feature = "qualification")]
 mod qualification;
+#[cfg(feature = "quantization")]
+mod quantize;
 mod serve;
 
 use clap::{Parser, Subcommand};
@@ -30,6 +34,12 @@ enum Command {
     Calibrate(calibrate::CalibrateArgs),
     Conform(conform::ConformArgs),
     Bench(bench::BenchArgs),
+    #[cfg(feature = "quantization")]
+    /// Build a new CPU Kev packed-weight package with pending calibration.
+    Quantize(quantize::QuantizeArgs),
+    #[cfg(feature = "quantization")]
+    /// Collect independent Kev fitting logits offline, including pending variants.
+    CaptureLogits(capture_logits::CaptureArgs),
     /// Packaging probe: initialize CUDA and run kernels without loading a model.
     #[command(name = "__check-cuda", hide = true)]
     CheckCuda,
@@ -55,6 +65,10 @@ async fn main() -> anyhow::Result<()> {
         Command::Calibrate(a) => calibrate::run(a),
         Command::Conform(a) => conform::run(a),
         Command::Bench(a) => bench::run(a),
+        #[cfg(feature = "quantization")]
+        Command::Quantize(a) => quantize::run(a),
+        #[cfg(feature = "quantization")]
+        Command::CaptureLogits(a) => capture_logits::run(a),
         Command::CheckCuda => {
             #[cfg(feature = "candle")]
             if huncho_backend::device::device_from_env()?.is_cuda() {

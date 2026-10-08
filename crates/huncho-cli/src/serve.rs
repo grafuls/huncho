@@ -350,14 +350,7 @@ impl RecordBindings {
                     )
                 })?;
             let require_outcomes = engine.calibration().status == CalibrationStatus::Refit
-                || [
-                    "projection_chunk_rows",
-                    "attention_compute_dtype",
-                    "device_path",
-                    "joint_head_execution",
-                ]
-                .iter()
-                .any(|key| engine.execution_metadata().contains_key(*key));
+                || changed_arithmetic_profile(&engine);
             record.verify(
                 &engine,
                 inputs,
@@ -371,6 +364,22 @@ impl RecordBindings {
         }
         Ok(())
     }
+}
+
+fn changed_arithmetic_profile(engine: &huncho_core::engine::Engine) -> bool {
+    [
+        "projection_chunk_rows",
+        "attention_compute_dtype",
+        "device_path",
+        "joint_head_execution",
+        "onnx_execution_provider",
+        "onnx_intra_threads",
+        "onnx_native_batch",
+        "delta_rule_execution",
+        "weight_quantization",
+    ]
+    .iter()
+    .any(|key| engine.execution_metadata().contains_key(*key))
 }
 
 fn qualify_optimizations(registry: &ModelRegistry, args: &ServeArgs) -> anyhow::Result<()> {
@@ -404,18 +413,19 @@ fn qualify_optimizations(registry: &ModelRegistry, args: &ServeArgs) -> anyhow::
             engine.dtype()
         );
         let refit = engine.calibration().status == CalibrationStatus::Refit;
-        let kernel_profile = [
-            "projection_chunk_rows",
-            "attention_compute_dtype",
-            "device_path",
-            "joint_head_execution",
-            "onnx_execution_provider",
-            "onnx_intra_threads",
-            "onnx_native_batch",
-            "delta_rule_execution",
-        ]
-        .iter()
-        .any(|key| engine.execution_metadata().contains_key(*key));
+        if engine
+            .execution_metadata()
+            .contains_key("weight_quantization")
+        {
+            let exact = engine.manifest().calibration.entries.get(
+                &engine
+                    .manifest()
+                    .calibration_key(&engine.backend_id().to_string(), engine.dtype()),
+            );
+            anyhow::ensure!(exact.is_some_and(|entry| entry.status == CalibrationStatus::Refit),
+                "quantized serving for `{name}` requires an explicit backend:dtype refit; an inherited or fitted source entry is insufficient");
+        }
+        let kernel_profile = changed_arithmetic_profile(engine);
         let opts = evaluation_options(engine, args);
         let onnx_readout_profile = ["onnx_readout", "onnx_output_buffer_bytes"]
             .iter()

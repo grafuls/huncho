@@ -37,6 +37,7 @@ tokenizers = ["huncho-core/tokenizers"]
 clef = ["candle", "hf", "tokenizers", "huncho-backend/clef"]
 cuda = ["clef", "huncho-backend/cuda"]
 qualification = ["dep:sha2"]
+quantization = ["candle", "qualification", "huncho-backend/quantization"]
 
 [dev-dependencies]
 tempfile = "3"

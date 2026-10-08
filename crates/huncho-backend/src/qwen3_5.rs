@@ -33,6 +33,10 @@ use huncho_core::error::{Error, Result as CoreResult};
 use huncho_core::manifest::{BackendId, Family};
 use huncho_core::tensor::Tensor as CoreTensor;
 
+#[cfg(feature = "quantization")]
+#[path = "qwen_quantized.rs"]
+pub mod quantized;
+
 /// The block type of a decoder layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LayerType {
@@ -296,14 +300,68 @@ fn repeat_interleave_head(t: &Tensor, n: usize, dim: usize) -> Result<Tensor> {
 /// Zero padding is local to a linear projection and discarded immediately;
 /// it never enters attention, recurrence, positions or logical token usage.
 struct BackboneLinear {
-    linear: Linear,
+    linear: Projection,
     chunk_rows: usize,
+}
+
+enum Projection {
+    Dense(Linear),
+    #[cfg(feature = "quantization")]
+    Packed {
+        matmul: candle::quantized::QMatMul,
+        bias: Option<Tensor>,
+        input_width: usize,
+        packed_width: usize,
+    },
+}
+
+impl Module for Projection {
+    fn forward(&self, input: &Tensor) -> Result<Tensor> {
+        match self {
+            Self::Dense(linear) => linear.forward(input),
+            #[cfg(feature = "quantization")]
+            Self::Packed {
+                matmul,
+                bias,
+                input_width,
+                packed_width,
+            } => {
+                let (batch, sequence, width) = input.dims3()?;
+                if width != *input_width || input.dtype() != DType::F32 || !input.device().is_cpu()
+                {
+                    candle::bail!(
+                        "packed Qwen projection requires CPU FP32 inputs with width {input_width}"
+                    )
+                }
+                let input = if input_width == packed_width {
+                    input.contiguous()?
+                } else {
+                    Tensor::cat(
+                        &[
+                            input,
+                            &Tensor::zeros(
+                                (batch, sequence, packed_width - input_width),
+                                DType::F32,
+                                &Device::Cpu,
+                            )?,
+                        ],
+                        2,
+                    )?
+                };
+                let output = matmul.forward(&input)?;
+                match bias {
+                    Some(bias) => output.broadcast_add(bias),
+                    None => Ok(output),
+                }
+            }
+        }
+    }
 }
 
 impl From<Linear> for BackboneLinear {
     fn from(linear: Linear) -> Self {
         Self {
-            linear,
+            linear: Projection::Dense(linear),
             chunk_rows: 0,
         }
     }
@@ -1604,6 +1662,14 @@ impl Backend for Qwen3_5Backend {
         }
         if self.model.cpu_delta_rule {
             extra.insert("delta_rule_execution".into(), "cpu-buffered-v1".into());
+        }
+        #[cfg(feature = "quantization")]
+        if let Some(scheme) = quantized::Scheme::from_dtype(&self.dtype) {
+            extra.insert("weight_quantization".into(), scheme.profile().into());
+            extra.insert("activation_dtype".into(), "fp32".into());
+            extra.insert("recurrent_state_dtype".into(), "fp32".into());
+            extra.insert("pointer_head_dtype".into(), "fp32".into());
+            extra.insert("projection_kernel".into(), "candle-packed-cpu-v1".into());
         }
         if self.device.is_cuda() && matches!(self.head, Readout::LanguageModel(_)) {
             extra.insert("device_path".into(), "qwen-f3-cuda".into());

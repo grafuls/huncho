@@ -170,6 +170,10 @@ current validation scope and full-model memory requirements.
 A single `huncho-model.json` manifest pins the family, backbone, head, prompt
 contract, and per-backend calibration. See [docs/model-package.md](docs/model-package.md).
 
+Experimental CPU Kev Q8_0/Q4_0 conversion uses the optional `quantization`
+feature. Packages remain pending until a variant refit and fresh labeled
+conformance pass. See [docs/quantization.md](docs/quantization.md).
+
 ## Testing
 
 The default build is offline and testable without weights:
