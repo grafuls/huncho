@@ -19,12 +19,12 @@ also show drift. Packed CPU fitting/held-out evaluation is still running.
 | O05 F3 selected projection | Available | Released Nimble qualification |
 | O06 execution/preparation workers | Available | Released workload capacity/latency measurements |
 | O07 tokenizer/prompt caching | Available, bounded, default off | Model-specific hit rates and memory measurements |
-| O08 ONNX output/readout path | CPU gather and output reuse available | Device I/O binding and device-resident head |
+| O08 ONNX output/readout path | CPU gather, output reuse and integrated F1 raw-head graphs available | Released graph exports; device I/O binding and device-resident head |
 | O09 fused/bounded compute | CPU SiLU/multiply, causal query blocks and unexpanded grouped K/V available | FlashAttention and further fused native/device kernels |
 | O10 precision/calibration gates | Every real serving runtime requires fresh labeled conformance | Released CPU acceptance remains rejected/pending; no GPU checks |
 | O11 native Kev prefix forks | Available | Released CPU paired/labeled acceptance |
 | O12 dynamic batching | Equal-length collation and bounded CPU Qwen/ModernBERT right-padding available | F5/ONNX masked padding, device qualification and cached-branch batching |
-| O13 family head work | CPU Clef vectorized heads/grouped spans and optional Laya final marker queries available | Released Clef/Laya labeled qualification |
+| O13 family head work | CPU Clef vectorized heads/grouped spans, optional Laya final marker queries and integrated ONNX F1 heads available | Released graph exports and Clef/Laya labeled qualification |
 | O14 concurrent execution contexts | CPU shared-weight replicas, including optional ONNX initializers, available | Released concurrent workloads, memory and affinity measurements |
 | O15 device buffers/graph replay | Open | CUDA implementation and later device qualification |
 | O16 Candle device propagation | Optional CUDA loaders available | Actual GPU checks deferred |
@@ -41,6 +41,29 @@ also show drift. Packed CPU fitting/held-out evaluation is still running.
 | O27 browser WASM/WebGPU | Separate CPU WASM F1 integrated-head SDK, packaging and fresh labeled gates available | Released exports/calibration, other families and browser scheduling; WebGPU deferred |
 
 ## Implemented increments
+
+### Native CPU ONNX integrated F1 raw heads
+
+O08/O13 now include default-disabled actual CPU FP32 graph-side F1 scalar
+heads. Strict dynamic token/marker/qtype signatures match the browser ABI;
+unknown names/shapes/dtypes are refused. Raw finite marker scores bypass host
+mean projection and feed unchanged shared typed temperatures/softmax. Native
+loading is restricted to `laya-v1`, scalar F1 and the declared native tokenizer.
+Serving needs an explicit fitted/refitted `onnx:fp32` entry and fresh complete
+observed-label gates. Capture from pending packages stays an offline operation.
+Profile metadata and persisted environment identity bind the execution.
+
+Bounded CPU output reuse owns returned data; optional shared initializer
+replicas retain immutable sources and independent sessions/buffers. Native
+tests compare all question types against frozen independent synthetic scalar
+arithmetic, including masked/unmasked graphs, reordered/duplicate markers,
+empty readouts, nonfinite failures and concurrent replicas after primary drop
+and source replacement. Actual CLI tests check complete fixed conformance,
+identity and missing/unlabeled/default-only calibration refusal. No released
+graph export, outcome calibration or speed/RSS result follows from synthetic
+fixtures. Native batching, feature-gather contracts, prefix caches, other
+precisions and GPU providers are explicitly incompatible with this increment.
+Device-resident paths and released Laya export/qualification remain open.
 
 ### Masked CPU ModernBERT batches with original-length Laya heads
 

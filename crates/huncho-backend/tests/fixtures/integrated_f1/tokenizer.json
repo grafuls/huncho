@@ -1,0 +1,93 @@
+{
+  "version": "1.0",
+  "truncation": null,
+  "padding": null,
+  "added_tokens": [
+    {
+      "id": 0,
+      "content": "[UNK]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 1,
+      "content": "[CLS]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 2,
+      "content": "[SEP]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 3,
+      "content": "[MASK]",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    }
+  ],
+  "normalizer": null,
+  "pre_tokenizer": {
+    "type": "Whitespace"
+  },
+  "post_processor": null,
+  "decoder": null,
+  "model": {
+    "type": "WordLevel",
+    "vocab": {
+      "[UNK]": 0,
+      "[CLS]": 1,
+      "[SEP]": 2,
+      "[MASK]": 3,
+      "choice": 4,
+      "score": 5,
+      "noul": 6,
+      "question": 7,
+      ":": 8,
+      "Team": 9,
+      "Urgent": 10,
+      "Priority": 11,
+      "billing": 12,
+      "Charges": 13,
+      "returns": 14,
+      "Refunds": 15,
+      "shipping": 16,
+      "Delivery": 17,
+      "level": 18,
+      "0": 19,
+      "1": 20,
+      "2": 21,
+      "low": 22,
+      "medium": 23,
+      "high": 24,
+      "no": 25,
+      "yes": 26,
+      "refund": 27,
+      "customer": 28,
+      "wants": 29,
+      "a": 30,
+      "shoes": 31,
+      "too": 32,
+      "small": 33,
+      "hello": 34,
+      "world": 35,
+      "caf\u00e9": 36,
+      "\ud83d\ude80": 37
+    },
+    "unk_token": "[UNK]"
+  }
+}

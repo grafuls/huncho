@@ -443,6 +443,7 @@ fn requires_outcome_qualification(engine: &huncho_core::engine::Engine) -> bool 
         "onnx_execution_provider",
         "onnx_intra_threads",
         "onnx_native_batch",
+        "onnx_integrated_head",
         "onnx_initializer_residency",
         "delta_rule_execution",
         "causal_conv_execution",
@@ -490,6 +491,11 @@ fn qualify_optimizations(registry: &ModelRegistry, args: &ServeArgs) -> anyhow::
             engine.dtype()
         );
         let refit = engine.calibration().status == CalibrationStatus::Refit;
+        if engine.execution_metadata().contains_key("onnx_integrated_head") {
+            anyhow::ensure!(engine.manifest().calibration.entries.get("onnx:fp32")
+                .is_some_and(|entry| entry.status != CalibrationStatus::Pending),
+                "integrated ONNX serving for `{name}` requires an explicit fitted/refitted onnx:fp32 calibration entry");
+        }
         if engine
             .execution_metadata()
             .contains_key("weight_quantization")
@@ -1153,7 +1159,7 @@ mod tests {
             serde_json::to_vec(&clef_manifest).unwrap(),
         )
         .unwrap();
-        let crate::Command::Serve(args) = crate::Cli::try_parse_from([
+        let crate::Command::Serve(mut args) = crate::Cli::try_parse_from([
             "huncho",
             "serve",
             "--backend",
@@ -1172,6 +1178,48 @@ mod tests {
         else {
             panic!("expected serve arguments")
         };
+        // This is routing/gate plumbing with synthetic targets, never released
+        // outcome evidence. Native startup must still perform its real gate.
+        for path in [
+            root.path().join("huncho-model.json"),
+            Path::new("../../examples/mock-model/huncho-model.json").to_path_buf(),
+            clef_manifest_path,
+        ] {
+            let engine =
+                engine_from_resolved_manifest(&path, BackendChoice::Auto, Some("fp32")).unwrap();
+            let name = engine.manifest().name.clone();
+            let request: huncho_core::contract::SystemOneRequest = serde_json::from_value(
+                serde_json::json!({"model":name,"state":"synthetic routing fixture","questions":{
+                    "q":{"type":"noul","instructions":"Urgent?"}
+                }}),
+            )
+            .unwrap();
+            let response = engine.eval(&request, &Default::default()).unwrap();
+            let huncho_core::contract::Answer::Noul { noul } = response.answers["q"] else {
+                panic!("expected noul")
+            };
+            let suite = huncho_core::conformance::GoldenSuite {
+                schema_version: "1.0".into(),
+                family: engine.family().to_string(),
+                hash: None,
+                cases: vec![huncho_core::conformance::GoldenCase {
+                    id: "synthetic-routing-only".into(),
+                    request,
+                    expected: std::collections::BTreeMap::from([(
+                        "q".into(),
+                        std::collections::BTreeMap::from([
+                            ("no".into(), 1. - noul),
+                            ("yes".into(), noul),
+                        ]),
+                    )]),
+                    targets: std::collections::BTreeMap::from([("q".into(), "yes".into())]),
+                }],
+            };
+            let golden = root.path().join(format!("{name}-routing-only.json"));
+            fs::write(&golden, serde_json::to_vec(&suite).unwrap()).unwrap();
+            args.qualification_golden
+                .push(format!("{name}={}", golden.display()));
+        }
         let registry = load_models(&args).unwrap();
         assert_eq!(registry.len(), 3);
         assert_eq!(

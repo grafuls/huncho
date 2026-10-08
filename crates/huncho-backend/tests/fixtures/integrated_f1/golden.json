@@ -1,0 +1,221 @@
+{
+  "schema_version": "1.0",
+  "family": "F1",
+  "hash": null,
+  "cases": [
+    {
+      "id": "synthetic-0",
+      "request": {
+        "state": "customer wants a refund",
+        "model": "browser-synthetic-f1",
+        "questions": {
+          "z_choice": {
+            "type": "choice",
+            "instructions": "Team?",
+            "criteria": {
+              "shipping": "Delivery",
+              "billing": "Charges",
+              "returns": "Refunds"
+            }
+          },
+          "a_noul": {
+            "type": "noul",
+            "instructions": "Urgent?",
+            "criteria": null
+          },
+          "m_score": {
+            "type": "score",
+            "instructions": "Priority?",
+            "criteria": [
+              "low",
+              "medium",
+              "high"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "a_noul": {
+          "no": 0.47605997,
+          "yes": 0.52394
+        },
+        "m_score": {
+          "0": 0.28672305,
+          "1": 0.33104914,
+          "2": 0.3822278
+        },
+        "z_choice": {
+          "billing": 0.36732632,
+          "returns": 0.33103713,
+          "shipping": 0.30163655
+        }
+      },
+      "targets": {
+        "a_noul": "yes",
+        "m_score": "1",
+        "z_choice": "returns"
+      }
+    },
+    {
+      "id": "synthetic-1",
+      "request": {
+        "state": {
+          "text": "shoes too small"
+        },
+        "model": "browser-synthetic-f1",
+        "questions": {
+          "z_choice": {
+            "type": "choice",
+            "instructions": "Team?",
+            "criteria": {
+              "shipping": "Delivery",
+              "billing": "Charges",
+              "returns": "Refunds"
+            }
+          },
+          "a_noul": {
+            "type": "noul",
+            "instructions": "Urgent?",
+            "criteria": null
+          },
+          "m_score": {
+            "type": "score",
+            "instructions": "Priority?",
+            "criteria": [
+              "low",
+              "medium",
+              "high"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "a_noul": {
+          "no": 0.47605997,
+          "yes": 0.52394
+        },
+        "m_score": {
+          "0": 0.28672308,
+          "1": 0.3310491,
+          "2": 0.3822278
+        },
+        "z_choice": {
+          "billing": 0.37183684,
+          "returns": 0.3175646,
+          "shipping": 0.31059852
+        }
+      },
+      "targets": {
+        "a_noul": "yes",
+        "m_score": "1",
+        "z_choice": "returns"
+      }
+    },
+    {
+      "id": "synthetic-2",
+      "request": {
+        "state": "hello world café 🚀",
+        "model": "browser-synthetic-f1",
+        "questions": {
+          "z_choice": {
+            "type": "choice",
+            "instructions": "Team?",
+            "criteria": {
+              "shipping": "Delivery",
+              "billing": "Charges",
+              "returns": "Refunds"
+            }
+          },
+          "a_noul": {
+            "type": "noul",
+            "instructions": "Urgent?",
+            "criteria": null
+          },
+          "m_score": {
+            "type": "score",
+            "instructions": "Priority?",
+            "criteria": [
+              "low",
+              "medium",
+              "high"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "a_noul": {
+          "no": 0.47605997,
+          "yes": 0.52394
+        },
+        "m_score": {
+          "0": 0.28672305,
+          "1": 0.33104914,
+          "2": 0.3822278
+        },
+        "z_choice": {
+          "billing": 0.36338305,
+          "returns": 0.33821845,
+          "shipping": 0.29839846
+        }
+      },
+      "targets": {
+        "a_noul": "yes",
+        "m_score": "1",
+        "z_choice": "returns"
+      }
+    },
+    {
+      "id": "synthetic-3",
+      "request": {
+        "state": "refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund ",
+        "model": "browser-synthetic-f1",
+        "questions": {
+          "z_choice": {
+            "type": "choice",
+            "instructions": "Team?",
+            "criteria": {
+              "shipping": "Delivery",
+              "billing": "Charges",
+              "returns": "Refunds"
+            }
+          },
+          "a_noul": {
+            "type": "noul",
+            "instructions": "Urgent?",
+            "criteria": null
+          },
+          "m_score": {
+            "type": "score",
+            "instructions": "Priority?",
+            "criteria": [
+              "low",
+              "medium",
+              "high"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "a_noul": {
+          "no": 0.47605997,
+          "yes": 0.52394
+        },
+        "m_score": {
+          "0": 0.28672308,
+          "1": 0.3310491,
+          "2": 0.3822278
+        },
+        "z_choice": {
+          "billing": 0.38346866,
+          "returns": 0.26010415,
+          "shipping": 0.3564272
+        }
+      },
+      "targets": {
+        "a_noul": "yes",
+        "m_score": "1",
+        "z_choice": "returns"
+      }
+    }
+  ]
+}

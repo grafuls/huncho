@@ -1,0 +1,72 @@
+{
+  "schema_version": "1.0",
+  "name": "browser-synthetic-f1",
+  "family": "F1",
+  "backbone": {
+    "source": {
+      "kind": "local",
+      "path": "model.onnx"
+    },
+    "artifacts": {
+      "onnx": [
+        {
+          "path": "model.onnx",
+          "dtype": "fp32"
+        }
+      ]
+    },
+    "tokenizer": "tokenizer.json",
+    "hidden_size": 4,
+    "max_context": 128
+  },
+  "head": {
+    "kind": "option-marker",
+    "width": 1,
+    "weights": "model.onnx"
+  },
+  "prompt_contract": {
+    "template": "laya-v1",
+    "option_marker_tokens": [
+      "[MASK]"
+    ],
+    "state_budget": 64,
+    "head_budget": 64,
+    "max_options": 8,
+    "max_len": 128,
+    "head_max_len": 48,
+    "contract_hash": "synthetic-browser-fixture-v1"
+  },
+  "calibration": {
+    "default": {
+      "temperature": 1.7,
+      "confidence": "peak",
+      "status": "fit",
+      "per_type_temperatures": {
+        "choice": 1.1,
+        "score": 0.8,
+        "noul": 2.4
+      }
+    },
+    "entries": {
+      "onnx:fp32": {
+        "temperature": 1.7,
+        "confidence": "peak",
+        "status": "fit",
+        "per_type_temperatures": {
+          "choice": 1.1,
+          "score": 0.8,
+          "noul": 2.4
+        }
+      }
+    }
+  },
+  "reference": {
+    "family_impl": "synthetic-independent-rust-mlp-v1",
+    "revision": "fixture-only",
+    "golden": "golden.json"
+  },
+  "capabilities": {
+    "supports_fork": false,
+    "supports_multi_lora": false
+  }
+}

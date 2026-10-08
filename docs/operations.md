@@ -642,6 +642,45 @@ argmax and observed calibration gates. They do not select a new temperature.
 Choose thread counts from measured workload evidence; no universal setting is
 promoted. Both settings are part of optional persisted qualification identity.
 
+### Native integrated F1 ONNX heads
+
+Build with `--features onnx,tokenizers` and use explicit CPU FP32 selection:
+
+```sh
+HUNCHO_ONNX_EP=cpu HUNCHO_ONNX_THREADS=1 HUNCHO_ONNX_INTEGRATED_HEAD=1 \
+  huncho conform --model /path/to/package --backend onnx --dtype fp32 \
+  --golden /path/to/pinned-complete-labeled-golden.json
+```
+
+This default-disabled profile executes the actual graph head and returns raw
+scores directly to the shared Rust temperature/softmax path. The loader
+requires F1, scalar option-marker width one, `laya-v1`, a declared tokenizer
+and the `tokenizers` feature. The graph must declare exactly `tokens` int64
+`[1,S]`, `positions` int64 `[N]`, `qtype` int64 `[1]`, optional
+`attention_mask` int64 `[1,S]`, and one `scores` float32 `[N,1]` output.
+Sequence/marker dimensions must be dynamic; batch one and scalar width one
+must be fixed. Qtype is the actual choice/score/noul value 0/1/2. Markers retain
+requested order and duplicates. Scores must be finite; they are neither
+activated nor calibrated inside the graph. An optional mask is all ones.
+
+This is the CPU graph ABI used by the separate browser SDK. No export of a
+released trained model is inferred from compatible names/shapes. The graph
+must contain the correct backbone and trained typed head. Fresh complete
+observed-label conformance and an explicit fitted/refitted `onnx:fp32` entry
+are required before serving; a fitted default entry alone cannot authorize it.
+Temperature and fixed delta/argmax/ECE gates are unchanged. Capturing raw
+scores from a pending package for fitting remains possible offline.
+
+`HUNCHO_ONNX_OUTPUT_BUFFER_BYTES` can reuse one bounded CPU output buffer;
+returned scores own their data. `onnx-shared` plus
+`HUNCHO_ONNX_SHARED_INITIALIZERS=1` enables independent shared-source CPU
+replicas, including after source replacement or primary drop. Native batching,
+compact feature gathering, cached/prefix forwards, other precisions and GPU
+providers are rejected. The profile and environment flag bind qualification
+receipts. Synthetic native/browser fixtures establish implementation parity,
+not released-model calibration, throughput or memory savings. See the
+[fixture and reproduction limits](../crates/huncho-backend/tests/fixtures/integrated_f1/README.md).
+
 ### Native ONNX tensor batches
 
 `HUNCHO_ONNX_NATIVE_BATCH=1` opts into F1 graphs with `input_ids` and optional

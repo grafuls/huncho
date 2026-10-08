@@ -275,6 +275,7 @@ impl ExecutionIdentity {
             "HUNCHO_CLEF_GROUPED_POOL",
             "HUNCHO_BASE_CACHE_BYTES",
             "HUNCHO_ONNX_COMPACT_READOUT",
+            "HUNCHO_ONNX_INTEGRATED_HEAD",
             "HUNCHO_ONNX_OUTPUT_BUFFER_BYTES",
             "HUNCHO_ONNX_EP",
             "HUNCHO_ONNX_THREADS",

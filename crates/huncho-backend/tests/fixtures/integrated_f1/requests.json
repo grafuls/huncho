@@ -1,0 +1,116 @@
+[
+  {
+    "model": "browser-synthetic-f1",
+    "state": "customer wants a refund",
+    "questions": {
+      "z_choice": {
+        "type": "choice",
+        "instructions": "Team?",
+        "criteria": {
+          "shipping": "Delivery",
+          "billing": "Charges",
+          "returns": "Refunds"
+        }
+      },
+      "a_noul": {
+        "type": "noul",
+        "instructions": "Urgent?"
+      },
+      "m_score": {
+        "type": "score",
+        "instructions": "Priority?",
+        "criteria": [
+          "low",
+          "medium",
+          "high"
+        ]
+      }
+    }
+  },
+  {
+    "model": "browser-synthetic-f1",
+    "state": {
+      "text": "shoes too small"
+    },
+    "questions": {
+      "z_choice": {
+        "type": "choice",
+        "instructions": "Team?",
+        "criteria": {
+          "shipping": "Delivery",
+          "billing": "Charges",
+          "returns": "Refunds"
+        }
+      },
+      "a_noul": {
+        "type": "noul",
+        "instructions": "Urgent?"
+      },
+      "m_score": {
+        "type": "score",
+        "instructions": "Priority?",
+        "criteria": [
+          "low",
+          "medium",
+          "high"
+        ]
+      }
+    }
+  },
+  {
+    "model": "browser-synthetic-f1",
+    "state": "hello world caf\u00e9 \ud83d\ude80",
+    "questions": {
+      "z_choice": {
+        "type": "choice",
+        "instructions": "Team?",
+        "criteria": {
+          "shipping": "Delivery",
+          "billing": "Charges",
+          "returns": "Refunds"
+        }
+      },
+      "a_noul": {
+        "type": "noul",
+        "instructions": "Urgent?"
+      },
+      "m_score": {
+        "type": "score",
+        "instructions": "Priority?",
+        "criteria": [
+          "low",
+          "medium",
+          "high"
+        ]
+      }
+    }
+  },
+  {
+    "model": "browser-synthetic-f1",
+    "state": "refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund refund ",
+    "questions": {
+      "z_choice": {
+        "type": "choice",
+        "instructions": "Team?",
+        "criteria": {
+          "shipping": "Delivery",
+          "billing": "Charges",
+          "returns": "Refunds"
+        }
+      },
+      "a_noul": {
+        "type": "noul",
+        "instructions": "Urgent?"
+      },
+      "m_score": {
+        "type": "score",
+        "instructions": "Priority?",
+        "criteria": [
+          "low",
+          "medium",
+          "high"
+        ]
+      }
+    }
+  }
+]

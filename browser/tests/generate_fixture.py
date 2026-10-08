@@ -5,14 +5,17 @@ Laya model, observed-outcome dataset, trained-model fit or speed benchmark.
 The native Rust example supplies independent fixture readouts/golden answers.
 """
 import json
+import argparse
 from pathlib import Path
 
 import numpy as np
 import onnx
 from onnx import TensorProto as T, helper as h, numpy_helper as nh
 
-root = Path(__file__).resolve().parent / "generated"
-root.mkdir(exist_ok=True)
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--out-dir", type=Path, default=Path(__file__).resolve().parent / "generated")
+root = parser.parse_args().out_dir
+root.mkdir(parents=True, exist_ok=True)
 
 
 def write(name, value):
@@ -67,7 +70,7 @@ b2 = np.array([-0.17], dtype=np.float32)
 write("weights.json", {"embedding": embedding.tolist(), "w1": w1.tolist(),
                        "b1": b1.tolist(), "w2": w2[:, 0].tolist(), "b2": float(b2[0])})
 
-def make_graph(name, bad=False, output="scores"):
+def make_graph(name, bad=False, output="scores", mask=False):
     initializers = [nh.from_array(value, key) for key, value in {
         "embedding": embedding, "w1": w1, "b1": b1, "w2": w2,
         "b2": np.array([np.nan], np.float32) if bad else b2,
@@ -75,8 +78,15 @@ def make_graph(name, bad=False, output="scores"):
         "one_axis": np.array([1], np.int64), "one": np.array([1], np.float32),
         "pos_scale": np.array([0.023], np.float32),
     }.items()]
-    nodes = [
-        h.make_node("Gather", ["embedding", "tokens"], ["encoded"], axis=0),
+    if mask:
+        initializers.append(nh.from_array(np.array([2], np.int64), "mask_axis"))
+    nodes = [h.make_node("Gather", ["embedding", "tokens"],
+                         ["unmasked" if mask else "encoded"], axis=0)]
+    if mask:
+        nodes += [h.make_node("Cast", ["attention_mask"], ["mask_float"], to=T.FLOAT),
+                  h.make_node("Unsqueeze", ["mask_float", "mask_axis"], ["mask_3d"]),
+                  h.make_node("Mul", ["unmasked", "mask_3d"], ["encoded"])]
+    nodes += [
         h.make_node("ReduceMean", ["encoded", "one_axis"], ["context"], keepdims=0),
         h.make_node("Add", ["positions", "one_i64"], ["next_positions"]),
         h.make_node("Gather", ["encoded", "next_positions"], ["option_batched"], axis=1),
@@ -95,11 +105,15 @@ def make_graph(name, bad=False, output="scores"):
         h.make_node("Mul", ["positions_2d", "pos_scale"], ["position_bias"]),
         h.make_node("Add", ["head", "position_bias"], [output]),
     ]
-    graph = h.make_graph(nodes, "synthetic-integrated-f1-v1", [
+    inputs = [
         h.make_tensor_value_info("tokens", T.INT64, [1, "sequence"]),
         h.make_tensor_value_info("positions", T.INT64, ["markers"]),
         h.make_tensor_value_info("qtype", T.INT64, [1]),
-    ], [h.make_tensor_value_info(output, T.FLOAT, ["markers", 1])], initializers)
+    ]
+    if mask:
+        inputs.append(h.make_tensor_value_info("attention_mask", T.INT64, [1, "sequence"]))
+    graph = h.make_graph(nodes, "synthetic-integrated-f1-v1", inputs,
+                         [h.make_tensor_value_info(output, T.FLOAT, ["markers", 1])], initializers)
     model = h.make_model(graph, opset_imports=[h.make_opsetid("", 18)], ir_version=9,
                          producer_name="huncho-synthetic-browser-tests")
     onnx.checker.check_model(model)
@@ -109,3 +123,4 @@ def make_graph(name, bad=False, output="scores"):
 make_graph("model.onnx")
 make_graph("nonfinite.onnx", bad=True)
 make_graph("wrong-output.onnx", output="logits")
+make_graph("masked.onnx", mask=True)

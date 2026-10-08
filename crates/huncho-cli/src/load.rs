@@ -603,6 +603,19 @@ fn load_candle(_manifest: &ModelManifest, _dtype: &str, _dir: &Path) -> Result<B
 
 #[cfg(feature = "onnx")]
 fn load_onnx(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<dyn Backend>> {
+    let integrated_head = bool_env("HUNCHO_ONNX_INTEGRATED_HEAD")?;
+    if integrated_head
+        && (manifest.family != Family::F1
+            || manifest.head.kind != huncho_core::manifest::HeadKind::OptionMarker
+            || manifest.head.width != 1
+            || manifest.prompt_contract.template != "laya-v1"
+            || !cfg!(feature = "tokenizers")
+            || manifest.backbone.tokenizer.is_none())
+    {
+        return Err(Error::Unsupported(
+            "integrated ONNX heads require an F1 scalar option head, laya-v1 prompt contract, declared tokenizer and tokenizers feature".into(),
+        ));
+    }
     let artifact = manifest
         .find_artifact(BackendId::Onnx, dtype)
         .ok_or_else(|| {
@@ -632,6 +645,7 @@ fn load_onnx(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<dy
         manifest.backbone.max_context,
         dtype.to_string(),
         huncho_backend::onnx::OnnxOptions {
+            integrated_head,
             compact_readout: bool_env("HUNCHO_ONNX_COMPACT_READOUT")?,
             output_buffer_bytes,
             execution_provider,

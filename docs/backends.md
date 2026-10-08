@@ -98,6 +98,17 @@ declared in the manifest for the requested dtype. Without the feature, an
 ONNX-only package reports a build error. Use `--backend mock` explicitly for an
 offline demo.
 
+An optional CPU FP32 integrated F1 graph returns raw scalar marker scores,
+including its trained head, instead of host features or mean projection.
+`HUNCHO_ONNX_INTEGRATED_HEAD=1` selects the explicit `tokens`, `positions`,
+`qtype` and `scores` contract described in [operations](operations.md#native-integrated-f1-onnx-heads).
+It currently requires `laya-v1`, a declared native tokenizer, an explicit
+`onnx:fp32` calibration entry and fresh complete labeled serving conformance.
+It composes with bounded CPU output reuse and optional shared initializer
+replicas. It cannot combine with native batching, compact feature gathering,
+prefix retention or GPU providers. Synthetic graphs cover the implementation;
+export and qualification of released trained Laya graphs remain open.
+
 The ONNX feature also enables `ort`'s `download-binaries` and `tls-native`
 features, so a build with this feature:
 

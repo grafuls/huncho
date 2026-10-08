@@ -11,6 +11,7 @@ fn command() -> Command {
         .env("HUNCHO_ONNX_SHARED_INITIALIZERS", "1")
         .env_remove("HUNCHO_ONNX_NATIVE_BATCH")
         .env_remove("HUNCHO_ONNX_COMPACT_READOUT")
+        .env_remove("HUNCHO_ONNX_INTEGRATED_HEAD")
         .env_remove("HUNCHO_ONNX_OUTPUT_BUFFER_BYTES")
         .env_remove("HUNCHO_DEVICE")
         .env_remove("HUNCHO_BACKEND");
