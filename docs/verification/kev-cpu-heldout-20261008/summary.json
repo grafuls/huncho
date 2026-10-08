@@ -1,0 +1,121 @@
+{
+  "qualified": false,
+  "disposition": "Rejected: complete held-out maximum probability delta exceeds unchanged 0.001 gate.",
+  "full_run": {
+    "source": "3e79e41",
+    "backend": "candle",
+    "dtype": "fp32",
+    "device": "CPU",
+    "metadata": {
+      "delta_rule_execution": "cpu-buffered-v1"
+    },
+    "work": {
+      "forward_calls": 1536,
+      "prefill_calls": 0,
+      "processed_tokens": 205297,
+      "reused_prefix_tokens": 0,
+      "cache_forks": 0,
+      "batch_calls": 0,
+      "cross_request_batches": 0,
+      "persistent_prefix_hits": 0,
+      "result_cache_hits": 0,
+      "prompt_cache_hits": 0,
+      "prepared_questions": 0
+    },
+    "questions": 1536,
+    "max_prob_delta": 0.02354765,
+    "argmax_agreement": 1.0,
+    "ece_drift": 0.0007697381,
+    "outcome_calibration": {
+      "questions": 1536,
+      "backend_ece": 0.011408618,
+      "reference_ece": 0.01063888,
+      "backend_brier": 0.21863429646732327,
+      "reference_brier": 0.21867220862267855
+    },
+    "cases_exceeding_probability_delta_gate": 57
+  },
+  "diagnostic_temperature": 2.40605,
+  "diagnostic_cases": [
+    {
+      "id": "score-eval-19651",
+      "raw_float_bits_equal": true,
+      "max_raw_delta": 0.0,
+      "cpu_baseline_vs_buffered_max_prob_delta_fp64": 0.0,
+      "cpu_baseline_vs_reference_max_prob_delta_fp64": 0.02354767045814138
+    },
+    {
+      "id": "noul-eval-255",
+      "raw_float_bits_equal": true,
+      "max_raw_delta": 0.0,
+      "cpu_baseline_vs_buffered_max_prob_delta_fp64": 0.0,
+      "cpu_baseline_vs_reference_max_prob_delta_fp64": 0.002608589077312984
+    },
+    {
+      "id": "choice-eval-211",
+      "raw_float_bits_equal": true,
+      "max_raw_delta": 0.0,
+      "cpu_baseline_vs_buffered_max_prob_delta_fp64": 0.0,
+      "cpu_baseline_vs_reference_max_prob_delta_fp64": 0.002507040033236485
+    },
+    {
+      "id": "score-eval-40906",
+      "raw_float_bits_equal": true,
+      "max_raw_delta": 0.0,
+      "cpu_baseline_vs_buffered_max_prob_delta_fp64": 0.0,
+      "cpu_baseline_vs_reference_max_prob_delta_fp64": 0.00223894398771296
+    },
+    {
+      "id": "noul-eval-625",
+      "raw_float_bits_equal": true,
+      "max_raw_delta": 0.0,
+      "cpu_baseline_vs_buffered_max_prob_delta_fp64": 0.0,
+      "cpu_baseline_vs_reference_max_prob_delta_fp64": 0.00215211644536184
+    },
+    {
+      "id": "noul-eval-1703",
+      "raw_float_bits_equal": true,
+      "max_raw_delta": 0.0,
+      "cpu_baseline_vs_buffered_max_prob_delta_fp64": 0.0,
+      "cpu_baseline_vs_reference_max_prob_delta_fp64": 0.002078985182340176
+    },
+    {
+      "id": "noul-eval-1717",
+      "raw_float_bits_equal": true,
+      "max_raw_delta": 0.0,
+      "cpu_baseline_vs_buffered_max_prob_delta_fp64": 0.0,
+      "cpu_baseline_vs_reference_max_prob_delta_fp64": 0.002028363904092445
+    },
+    {
+      "id": "noul-eval-2870",
+      "raw_float_bits_equal": true,
+      "max_raw_delta": 0.0,
+      "cpu_baseline_vs_buffered_max_prob_delta_fp64": 0.0,
+      "cpu_baseline_vs_reference_max_prob_delta_fp64": 0.001987025443592527
+    }
+  ],
+  "limits": [
+    "Diagnostic cases were selected from the failed held-out suite. They are forbidden for temperature fitting.",
+    "All eight selected cases retain identical original CPU and buffered CPU raw float bits. The baseline itself differs from the older CUDA FP16 reference.",
+    "The diagnostic uses a separately pinned older CPU binary (8f09121). It does not prove equality on all 1,536 cases or qualify newer kernels.",
+    "Diagnostic softmax is offline FP64; the full rejected runtime report retains its actual FP32 gate values.",
+    "Old diagnostic capture work records describe only the last row, not aggregate work. Collector accounting was fixed in 75a48c6.",
+    "Elapsed full-run time includes load/hash and concurrent CPU contention. No inference-throughput claim is made.",
+    "No fitting, threshold changes, model/calibration mutation, golden replacement or new GPU execution occurred."
+  ],
+  "evidence_sha256": {
+    "drift-diagnosis/baseline/capture-identity.json": "dab3052c1e945d4f292e2c445970e21ae9bb715a62a73b45c18d27188627223a",
+    "drift-diagnosis/baseline/diagnostic-logits.jsonl": "44392335a243b0fb66b5f7bc402866cda261fa85194084690ef369077e2c3139",
+    "drift-diagnosis/buffered/capture-identity.json": "862eed3691be4e188bf1856293a9cdc06e13f5163089f4a7fe5abfcaf9657f38",
+    "drift-diagnosis/buffered/diagnostic-logits.jsonl": "44392335a243b0fb66b5f7bc402866cda261fa85194084690ef369077e2c3139",
+    "drift-diagnosis/job.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "drift-diagnosis/reference.json": "cc88abe512d7bc83aa222200a4c22b4bf64a0710b94c762d4c6852b786af810f",
+    "drift-diagnosis/run.sh": "b6071b214e2e7c449ee73da9dfc733ae58b69dad93c8a59aa8a72e6fa445e06c",
+    "drift-diagnosis/scope.json": "b1fa68428dbbfa35d30628c5769997650ba21be1646fce8368e18e00c26ac53e",
+    "heldout.exit": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+    "heldout.log": "3c1817bdebb2109910af5a6d44e13af25522c3efd6585fbc5d33118410d50163",
+    "labeled-cpu-buffered/identity.json": "5da29e68249d04ee746762071d92a7b0bef55ef79932a6a8488c1ae97ebfe50c",
+    "labeled-cpu-buffered/independent.json": "8df7493de85a3ce34dc8e1a6ad1a59ad26aada412abc7c10953d78eb2b87b5a9",
+    "labeled-cpu-buffered/independent.log": "8ae6d38c1b81cf78d062984dc013dd7c13756b145fbd373663c48ab44fdd0ba7"
+  }
+}

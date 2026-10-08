@@ -853,3 +853,25 @@ retains twelve alternating pairs at 256 x 4096 elements on a local Core Ultra
 pilot without frequency isolation, excludes all projection/head/serving work,
 and supplies no peak-RSS or released-model acceptance. The flag stays off by
 default; allocation savings alone do not imply lower latency for every dtype.
+
+## Complete CPU FP32 held-out rejection and drift diagnosis (2026-10-08)
+
+The CPU buffered recurrence run completed all 1,536 frozen labeled cases
+and 205,297 submitted token positions. It fails the unchanged probability-delta
+gate: maximum delta 0.02354765, with 57 cases above 0.001. Argmax agreement is
+complete and ECE drift is 0.0007697381; those passing metrics do not override the
+failed delta. Temperature 2.40605 and the original CUDA FP16 reference vectors
+remain unchanged. This profile is rejected.
+
+A separate CPU-only diagnostic replays the eight worst failing held-out cases
+through the original and buffered CPU FP32 paths. All raw logits retain exact
+float bits across the two modes, including the worst 0.02355 reference delta.
+This establishes that the baseline CPU path already differs from the older
+reference on those cases; it does not prove equality on the entire suite or
+accept any newer optimization. Different pinned binaries are retained for the
+full run and diagnostic. Diagnostic cases are forbidden for fitting, and the
+older capture counters describe only the final row. No throughput claim,
+temperature refit, threshold change, golden replacement or new GPU execution
+is made. [Reports, identities and reproducible analysis](verification/kev-cpu-heldout-20261008/summary.json)
+retain the rejection without corpus text. Cross-precision acceptance and
+full-profile paired CPU qualification remain open.

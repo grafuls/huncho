@@ -1,0 +1,15 @@
+{
+  "case_ids": [
+    "score-eval-19651",
+    "noul-eval-255",
+    "choice-eval-211",
+    "score-eval-40906",
+    "noul-eval-625",
+    "noul-eval-1703",
+    "noul-eval-1717",
+    "noul-eval-2870"
+  ],
+  "purpose": "Compare CPU buffered delta with original CPU FP32 raw logits on worst frozen held-out cases; no refit or regenerated goldens",
+  "source": "8f09121",
+  "qualified": false
+}
