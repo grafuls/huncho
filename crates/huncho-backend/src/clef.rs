@@ -41,6 +41,21 @@ pub struct ClefBackend {
     grouped_pooling: bool,
 }
 impl ClefBackend {
+    /// CPU grouped query matmuls keep the backbone K/V heads unexpanded.
+    pub fn with_grouped_gqa(mut self, enabled: bool) -> Result<Self> {
+        let current = self.capabilities.extra.contains_key("gqa_execution");
+        if current != enabled {
+            self.model_mut()?.set_grouped_gqa(enabled)?;
+        }
+        if enabled {
+            self.capabilities
+                .extra
+                .insert("gqa_execution".into(), "cpu-grouped-queries-v1".into());
+        } else {
+            self.capabilities.extra.remove("gqa_execution");
+        }
+        Ok(self)
+    }
     /// Bound backbone CPU attention workspace while preserving the joint head.
     pub fn with_attention_query_rows(mut self, rows: usize) -> Result<Self> {
         let current = self

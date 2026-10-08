@@ -274,14 +274,15 @@ fn load_backend(
     dir: &Path,
 ) -> Result<Box<dyn Backend>> {
     let query_rows = attention_query_rows_from_env()?;
-    if query_rows > 0
+    let grouped_gqa = bool_env("HUNCHO_GROUPED_GQA")?;
+    if (query_rows > 0 || grouped_gqa)
         && (!cfg!(feature = "candle")
             || !((backend_id == BackendId::Candle
                 && matches!(manifest.family, Family::F2 | Family::F3))
                 || (backend_id == BackendId::Clef && manifest.family == Family::F5))
             || std::env::var("HUNCHO_DEVICE").as_deref() != Ok("cpu"))
     {
-        return Err(Error::Unsupported("attention query blocks require native Qwen F2/F3 or Clef and explicit HUNCHO_DEVICE=cpu".into()));
+        return Err(Error::Unsupported("attention query blocks/grouped GQA require native Qwen F2/F3 or Clef and explicit HUNCHO_DEVICE=cpu".into()));
     }
     if bool_env("HUNCHO_LAYA_SELECTED_HEAD")?
         && (!cfg!(feature = "candle")
@@ -379,6 +380,7 @@ fn load_clef(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<dy
         .with_cpu_causal_conv(bool_env("HUNCHO_CPU_CAUSAL_CONV")?)?
         .with_cpu_fused_gate(bool_env("HUNCHO_CPU_FUSED_GATE")?)?
         .with_attention_query_rows(attention_query_rows_from_env()?)?
+        .with_grouped_gqa(bool_env("HUNCHO_GROUPED_GQA")?)?
         .with_cpu_blas_from_env()?,
     ))
 }
@@ -430,6 +432,7 @@ fn load_candle(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<
             .with_cpu_causal_conv(bool_env("HUNCHO_CPU_CAUSAL_CONV")?)?
             .with_cpu_fused_gate(bool_env("HUNCHO_CPU_FUSED_GATE")?)?
             .with_attention_query_rows(attention_query_rows_from_env()?)?
+            .with_grouped_gqa(bool_env("HUNCHO_GROUPED_GQA")?)?
             .with_cpu_blas_from_env()?
             .with_prefill_chunk_tokens(prefill_chunk_tokens_from_env()?)?;
             return Ok(Box::new(backend));
@@ -450,6 +453,7 @@ fn load_candle(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<
         .with_cpu_causal_conv(bool_env("HUNCHO_CPU_CAUSAL_CONV")?)?
         .with_cpu_fused_gate(bool_env("HUNCHO_CPU_FUSED_GATE")?)?
         .with_attention_query_rows(attention_query_rows_from_env()?)?
+        .with_grouped_gqa(bool_env("HUNCHO_GROUPED_GQA")?)?
         .with_cpu_blas_from_env()?
         .with_prefill_chunk_tokens(prefill_chunk_tokens_from_env()?)?;
         return Ok(Box::new(backend));
@@ -484,6 +488,7 @@ fn load_candle(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<
             .with_cpu_causal_conv(bool_env("HUNCHO_CPU_CAUSAL_CONV")?)?
             .with_cpu_fused_gate(bool_env("HUNCHO_CPU_FUSED_GATE")?)?
             .with_attention_query_rows(attention_query_rows_from_env()?)?
+            .with_grouped_gqa(bool_env("HUNCHO_GROUPED_GQA")?)?
             .with_cpu_blas_from_env()?
             .with_prefill_chunk_tokens(prefill_chunk_tokens_from_env()?)?;
         return Ok(Box::new(backend) as Box<dyn Backend>);

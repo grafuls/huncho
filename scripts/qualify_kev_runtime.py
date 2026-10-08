@@ -74,6 +74,8 @@ def verify_report(report, args, suite, mode):
     if args.attention_query_rows:
         expected_metadata.update(attention_query_rows=str(args.attention_query_rows),
             attention_execution="cpu-query-blocks-v1")
+    if args.grouped_gqa:
+        expected_metadata["gqa_execution"] = "cpu-grouped-queries-v1"
     if args.cpu_delta_rule:
         expected_metadata["delta_rule_execution"] = "cpu-buffered-v1"
     if args.cpu_causal_conv:
@@ -155,7 +157,7 @@ def verify_report(report, args, suite, mode):
 def run(args):
     if not 0 <= args.attention_query_rows <= 4096 or (args.attention_query_rows and args.device != "cpu"):
         raise ValueError("attention query rows must be CPU-only and 0..4096")
-    if (args.cpu_delta_rule or args.cpu_causal_conv or args.cpu_fused_gate or args.cooperative_prefill or args.cpu_blas_library) and args.device != "cpu":
+    if (args.grouped_gqa or args.cpu_delta_rule or args.cpu_causal_conv or args.cpu_fused_gate or args.cooperative_prefill or args.cpu_blas_library) and args.device != "cpu":
         raise ValueError("buffered recurrence and convolution are CPU-only")
     if args.cooperative_prefill and not args.prefill_chunk_tokens:
         raise ValueError("cooperative scheduling requires configured prefill chunks")
@@ -234,6 +236,7 @@ def run(args):
         "dtype": args.dtype, "projection_chunk_rows": args.projection_chunk_rows,
         "fp32_attention": args.fp32_attention, "kernel": platform.release(),
         "attention_query_rows": args.attention_query_rows,
+        "grouped_gqa": args.grouped_gqa,
         "cpu_delta_rule": args.cpu_delta_rule,
         "cpu_causal_conv": args.cpu_causal_conv,
         "cpu_fused_gate": args.cpu_fused_gate,
@@ -267,6 +270,7 @@ def run(args):
     env["HUNCHO_CPU_CAUSAL_CONV"] = str(args.cpu_causal_conv).lower()
     env["HUNCHO_CPU_FUSED_GATE"] = str(args.cpu_fused_gate).lower()
     env["HUNCHO_ATTENTION_QUERY_ROWS"] = str(args.attention_query_rows)
+    env["HUNCHO_GROUPED_GQA"] = "1" if args.grouped_gqa else "0"
     # Clear unrelated ambient profiles; this runner admits only explicit flags.
     for key in ["HUNCHO_CPU_BLAS_LIBRARY", "HUNCHO_CPU_BLAS_THREADS", "HUNCHO_COOPERATIVE_PREFILL", "HUNCHO_BASE_CACHE_BYTES"]:
         env.pop(key, None)
@@ -336,6 +340,7 @@ def main():
     parser.add_argument("--projection-chunk-rows", type=int, default=0)
     parser.add_argument("--fp32-attention", action="store_true")
     parser.add_argument("--attention-query-rows", type=int, default=0)
+    parser.add_argument("--grouped-gqa", action="store_true")
     parser.add_argument("--cpu-delta-rule", action="store_true")
     parser.add_argument("--cpu-causal-conv", action="store_true")
     parser.add_argument("--cpu-fused-gate", action="store_true")

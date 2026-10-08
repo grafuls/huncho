@@ -20,7 +20,7 @@ also show drift. Packed CPU fitting/held-out evaluation is still running.
 | O06 execution/preparation workers | Available | Released workload capacity/latency measurements |
 | O07 tokenizer/prompt caching | Available, bounded, default off | Model-specific hit rates and memory measurements |
 | O08 ONNX output/readout path | CPU gather and output reuse available | Device I/O binding and device-resident head |
-| O09 fused/bounded compute | CPU SiLU/multiply and causal query blocks available | FlashAttention and further fused native/device kernels |
+| O09 fused/bounded compute | CPU SiLU/multiply, causal query blocks and unexpanded grouped K/V available | FlashAttention and further fused native/device kernels |
 | O10 precision/calibration gates | Every real serving runtime requires fresh labeled conformance | Released CPU acceptance remains rejected/pending; no GPU checks |
 | O11 native Kev prefix forks | Available | Released CPU paired/labeled acceptance |
 | O12 dynamic batching | Equal-length collation and bounded CPU Qwen right-padding available | F1/F5 masked padding, device qualification and cached-branch batching |
@@ -41,6 +41,31 @@ also show drift. Packed CPU fitting/held-out evaluation is still running.
 | O27 browser WASM/WebGPU | Open | Separate actual browser runtime, packaging and gates |
 
 ## Implemented increments
+
+### CPU grouped-query attention without repeated K/V
+
+O09/O02 now include default-disabled grouped CPU query matmuls. Query heads
+retain the original contiguous groups mapped to each K/V head, while K/V keep
+their original head count. CPU matmul gets dense K/V copies where projections
+are strided, without query-head repetition. Masks, absolute prefix offsets,
+complete key reductions, scale, rotary and output gates/heads remain. It composes
+with bounded query rows; full score matrices/arithmetic remain quadratic when
+that profile is disabled. Existing retained prefix K/V was already unexpanded.
+No measured released-model performance/memory claim follows.
+
+Execution changes reject shared replicas or active/partial/retained caches.
+The explicit CPU option, metadata, receipts and runner bind the arithmetic
+identity; every real serving runtime still needs fresh complete observed labels.
+CPU FP32/FP16 fixtures cover 1/2/4 query-head groups, strided inputs, masks/prefix
+offsets, mixed native padding, complete pointer probabilities, replicas, selected
+F3 codes and Clef joint heads. A real padded-batch test found and verified the
+contiguous K/V requirement before acceptance. Packed Q8/Q4 tests compare to the
+same independent packed kernels, without source-temperature substitutions.
+The complete `clef,qualification,quantization` CPU workspace and 22 Python
+runner checks pass. Actual CLI conformance binds the new profile and retained
+receipt, exercises real prefix interleaving, and still marks unlabeled fixture
+evidence as unqualified. No actual GPU/Apple check ran.
+The dependency-light default workspace also passes with this option disabled.
 
 ### Bounded qualified CPU lazy residency
 

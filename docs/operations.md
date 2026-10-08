@@ -925,3 +925,24 @@ serving request counters. CPU frozen Clef fixtures cover real cold reloads and
 failures; synthetic fixture labels test gate plumbing, not released calibration.
 Runtime LoRA dispatch, released residency/RSS benchmarks and GPU residency remain
 open. Apple work and actual GPU checks remain deferred by the user's scope.
+
+
+## CPU grouped-query attention
+
+`HUNCHO_DEVICE=cpu HUNCHO_GROUPED_GQA=1` enables grouped query matmuls for native
+Qwen F2/F3 and Clef F5. It preserves the query-head-to-K/V-head mapping, all
+causal keys, original scale/masks/rotary/gates, trained readouts and temperatures.
+K/V forward workspace uses the original K/V head count; contiguous copies can
+still be necessary for strided projections. Compared with dense repetition,
+this workspace is smaller by the query-head/K/V-head ratio. Prefix caches already
+retain unexpanded K/V and do not gain that factor again. Score/probability memory
+and arithmetic remain quadratic without the separate bounded-query profile.
+
+It composes with `HUNCHO_ATTENTION_QUERY_ROWS`, native prefixes/chunks, CPU
+replicas, padded batches and packed Q8/Q4 projections. Changing it after live,
+pending or retained prefixes, or shared replicas, is rejected. Unsupported
+families/devices and malformed flags fail before device initialization. Metadata
+and qualification receipts bind `cpu-grouped-queries-v1`; the CPU runner uses
+`--grouped-gqa` and clears unrequested ambient settings. Matrix shapes change,
+so complete fresh observed-label serving conformance remains mandatory. No
+released speed, peak RSS or calibration acceptance follows from fixture parity.

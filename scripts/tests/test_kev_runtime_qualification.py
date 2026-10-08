@@ -24,7 +24,7 @@ def options(**overrides):
     args = SimpleNamespace(device="cpu", dtype="fp16", projection_chunk_rows=64,
         fp32_attention=True, batch_tokens=4096, numerical_only=False, prepare_all=False,
         cpu_delta_rule=False, cpu_causal_conv=False, prefill_chunk_tokens=0, cpu_kernel_build=None, persistent_prefix_bytes=0, batch_max_requests=None, max_batch_padding_percent=0)
-    vars(args).update(cpu_fused_gate=False, cooperative_prefill=False, cpu_blas_library=None, cpu_blas_profile=None, cpu_blas_threads=1, cpu_blas_metadata=None, attention_query_rows=0)
+    vars(args).update(cpu_fused_gate=False, cooperative_prefill=False, cpu_blas_library=None, cpu_blas_profile=None, cpu_blas_threads=1, cpu_blas_metadata=None, attention_query_rows=0, grouped_gqa=False)
     vars(args).update(overrides)
     return args
 
@@ -39,6 +39,18 @@ def report():
 
 
 class RuntimeQualificationTests(unittest.TestCase):
+    def test_grouped_gqa_binds_native_arithmetic_identity(self):
+        data = report()
+        with self.assertRaisesRegex(ValueError, "kernel profile"):
+            qualifier.verify_report(data, options(grouped_gqa=True), suite(), "prefix")
+        data["execution_metadata"]["gqa_execution"] = "cpu-grouped-queries-v1"
+        self.assertTrue(qualifier.verify_report(data, options(grouped_gqa=True), suite(), "prefix"))
+        with self.assertRaisesRegex(ValueError, "kernel profile"):
+            qualifier.verify_report(data, options(), suite(), "prefix")
+        data["execution_metadata"]["gqa_execution"] = "other"
+        with self.assertRaisesRegex(ValueError, "kernel profile"):
+            qualifier.verify_report(data, options(grouped_gqa=True), suite(), "prefix")
+
     def test_query_blocks_bind_exact_size_and_native_arithmetic_identity(self):
         data = report()
         args = options(attention_query_rows=64)
@@ -200,6 +212,7 @@ class RuntimeQualificationTests(unittest.TestCase):
             {"attention_query_rows": -1}, {"attention_query_rows": 4097},
             {"attention_query_rows": 64, "device": "cuda"},
             {"device": "cuda", "cpu_delta_rule": True},
+            {"device": "cuda", "grouped_gqa": True},
             {"device": "cuda", "cpu_causal_conv": True},
             {"device": "cuda", "cpu_fused_gate": True},
             {"device": "cuda", "cooperative_prefill": True},

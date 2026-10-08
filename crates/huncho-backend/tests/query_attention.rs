@@ -17,6 +17,31 @@ fn parity(actual: &[f32], expected: &[f32]) {
     );
 }
 #[test]
+fn grouped_gqa_profile_cannot_change_shared_or_partial_prefix_arithmetic() {
+    let root = Path::new("tests/fixtures/tiny_kev");
+    let fresh = || {
+        Qwen3_5Backend::load_kev(root, root, &root.join("head.pt"), 512, "fp32")
+            .unwrap()
+            .with_grouped_gqa(true)
+            .unwrap()
+    };
+    let backend = fresh();
+    let replica = backend.replica().unwrap();
+    assert!(backend.with_grouped_gqa(false).is_err());
+    drop(replica);
+    let mut backend = fresh().with_prefill_chunk_tokens(3).unwrap();
+    backend
+        .begin_resumable_prefill(&[1, 2, 3, 4, 5], 0)
+        .unwrap();
+    assert!(backend.with_grouped_gqa(false).is_err());
+    let mut backend = fresh();
+    let cached = backend.prefill_cached(&[1, 2, 3], 1 << 20).unwrap();
+    backend.release_cache(cached.handle).unwrap();
+    backend.clear_prefix_cache().unwrap();
+    let backend = backend.with_grouped_gqa(false).unwrap();
+    assert!(!backend.capabilities().extra.contains_key("gqa_execution"));
+}
+#[test]
 fn query_blocks_preserve_frozen_pointer_probabilities_prefixes_and_padded_batches() {
     let root = Path::new("tests/fixtures/tiny_kev");
     let golden: serde_json::Value =
@@ -24,16 +49,35 @@ fn query_blocks_preserve_frozen_pointer_probabilities_prefixes_and_padded_batche
     for dtype in ["fp32", "fp16"] {
         let mut reference =
             Qwen3_5Backend::load_kev(root, root, &root.join("head.pt"), 512, dtype).unwrap();
-        for rows in [1, 3, 7, 64] {
+        for (rows, grouped) in [
+            (1, false),
+            (3, false),
+            (7, false),
+            (64, false),
+            (0, true),
+            (3, true),
+        ] {
             let mut blocked =
                 Qwen3_5Backend::load_kev(root, root, &root.join("head.pt"), 512, dtype)
                     .unwrap()
                     .with_attention_query_rows(rows)
+                    .unwrap()
+                    .with_grouped_gqa(grouped)
                     .unwrap();
-            assert_eq!(
-                blocked.capabilities().extra["attention_execution"],
-                "cpu-query-blocks-v1"
-            );
+            if rows > 0 {
+                assert_eq!(
+                    blocked.capabilities().extra["attention_execution"],
+                    "cpu-query-blocks-v1"
+                );
+            }
+            if grouped {
+                assert_eq!(
+                    blocked.capabilities().extra["gqa_execution"],
+                    "cpu-grouped-queries-v1"
+                );
+            } else {
+                assert!(!blocked.capabilities().extra.contains_key("gqa_execution"));
+            }
             let mut replica = blocked.replica().unwrap();
             for case in golden["cases"].as_array().unwrap() {
                 for row in case["rows"].as_array().unwrap() {
@@ -132,16 +176,20 @@ fn query_blocks_preserve_selected_candidate_logits() {
     candle::safetensors::save(&tensors, temp.path().join("model.safetensors")).unwrap();
     for dtype in ["fp32", "fp16"] {
         let mut reference = Qwen3_5Backend::load(temp.path(), Some(root), 512, dtype).unwrap();
-        let mut blocked = Qwen3_5Backend::load(temp.path(), Some(root), 512, dtype)
-            .unwrap()
-            .with_attention_query_rows(3)
-            .unwrap();
-        let mut input = ForwardInput::new(vec![1, 31, 14, 63, 2, 4, 5, 11, 15], vec![8, 1, 8]);
-        input.logit_codes = Some(vec![37, 36, 37]);
-        let expected = reference.forward(input.clone()).unwrap();
-        let actual = blocked.forward(input).unwrap();
-        assert_eq!(actual.positions(), expected.positions());
-        parity(actual.values().data(), expected.values().data());
+        for (rows, grouped) in [(3, false), (0, true), (3, true)] {
+            let mut blocked = Qwen3_5Backend::load(temp.path(), Some(root), 512, dtype)
+                .unwrap()
+                .with_attention_query_rows(rows)
+                .unwrap()
+                .with_grouped_gqa(grouped)
+                .unwrap();
+            let mut input = ForwardInput::new(vec![1, 31, 14, 63, 2, 4, 5, 11, 15], vec![8, 1, 8]);
+            input.logit_codes = Some(vec![37, 36, 37]);
+            let expected = reference.forward(input.clone()).unwrap();
+            let actual = blocked.forward(input).unwrap();
+            assert_eq!(actual.positions(), expected.positions());
+            parity(actual.values().data(), expected.values().data());
+        }
     }
 }
 #[cfg(feature = "clef")]
@@ -155,28 +203,32 @@ fn query_blocks_preserve_complete_joint_schema_heads_and_usage() {
         serde_json::from_slice(&std::fs::read(root.join("golden.json")).unwrap()).unwrap();
     for dtype in ["fp32", "fp16"] {
         let mut baseline = ClefBackend::load(root, &manifest, dtype, candle::Device::Cpu).unwrap();
-        let mut blocked = ClefBackend::load(root, &manifest, dtype, candle::Device::Cpu)
-            .unwrap()
-            .with_attention_query_rows(7)
-            .unwrap();
-        for case in golden["cases"].as_array().unwrap() {
-            let req = serde_json::from_value(case["request"].clone()).unwrap();
-            let expected = baseline.forward_request(&req, 4096).unwrap();
-            let actual = blocked.forward_request(&req, 4096).unwrap();
-            assert_eq!(actual.input_tokens, expected.input_tokens);
-            assert_eq!(
-                actual.logits.keys().collect::<Vec<_>>(),
-                expected.logits.keys().collect::<Vec<_>>()
-            );
-            for (id, logits) in actual.logits {
+        for (rows, grouped) in [(7, false), (0, true), (7, true)] {
+            let mut blocked = ClefBackend::load(root, &manifest, dtype, candle::Device::Cpu)
+                .unwrap()
+                .with_attention_query_rows(rows)
+                .unwrap()
+                .with_grouped_gqa(grouped)
+                .unwrap();
+            for case in golden["cases"].as_array().unwrap() {
+                let req = serde_json::from_value(case["request"].clone()).unwrap();
+                let expected = baseline.forward_request(&req, 4096).unwrap();
+                let actual = blocked.forward_request(&req, 4096).unwrap();
+                assert_eq!(actual.input_tokens, expected.input_tokens);
                 assert_eq!(
-                    logits.keys().collect::<Vec<_>>(),
-                    expected.logits[&id].keys().collect::<Vec<_>>()
+                    actual.logits.keys().collect::<Vec<_>>(),
+                    expected.logits.keys().collect::<Vec<_>>()
                 );
-                parity(
-                    &logits.values().copied().collect::<Vec<_>>(),
-                    &expected.logits[&id].values().copied().collect::<Vec<_>>(),
-                );
+                for (id, logits) in actual.logits {
+                    assert_eq!(
+                        logits.keys().collect::<Vec<_>>(),
+                        expected.logits[&id].keys().collect::<Vec<_>>()
+                    );
+                    parity(
+                        &logits.values().copied().collect::<Vec<_>>(),
+                        &expected.logits[&id].values().copied().collect::<Vec<_>>(),
+                    );
+                }
             }
         }
     }

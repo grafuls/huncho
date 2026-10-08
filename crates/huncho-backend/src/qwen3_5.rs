@@ -492,6 +492,7 @@ struct Attention {
     eps: f32,
     fp32_compute: bool,
     query_rows: usize,
+    grouped_gqa: bool,
 }
 
 impl Attention {
@@ -540,6 +541,7 @@ impl Attention {
             eps: cfg.rms_norm_eps,
             fp32_compute: false,
             query_rows: 0,
+            grouped_gqa: false,
         })
     }
 
@@ -588,12 +590,12 @@ impl Attention {
         let retained = cache.as_ref().map(|_| (k.clone(), v.clone()));
 
         let n_rep = self.num_heads / self.num_kv_heads;
-        let k = if n_rep > 1 {
+        let k = if n_rep > 1 && !self.grouped_gqa {
             repeat_interleave_head(&k, n_rep, 1)?
         } else {
             k
         };
-        let v = if n_rep > 1 {
+        let v = if n_rep > 1 && !self.grouped_gqa {
             repeat_interleave_head(&v, n_rep, 1)?
         } else {
             v
@@ -609,7 +611,9 @@ impl Attention {
         } else {
             (q, k, v)
         };
-        let attn = if self.query_rows > 0 {
+        let attn = if self.grouped_gqa {
+            attention::grouped_queries(&q, &k, &v, self.query_rows, mask)?
+        } else if self.query_rows > 0 {
             attention::query_blocks(&q, &k, &v, self.query_rows)?
         } else {
             let mask = mask.ok_or_else(|| candle::Error::Msg("missing full causal mask".into()))?;
@@ -1163,6 +1167,7 @@ pub struct Model {
     projection_chunk_rows: usize,
     fp32_attention: bool,
     attention_query_rows: usize,
+    grouped_gqa: bool,
     cpu_delta_rule: bool,
     cpu_causal_conv: bool,
     cpu_fused_gate: bool,
@@ -1216,6 +1221,7 @@ impl Model {
             projection_chunk_rows: 0,
             fp32_attention: false,
             attention_query_rows: 0,
+            grouped_gqa: false,
             cpu_delta_rule: false,
             cpu_causal_conv: false,
             cpu_fused_gate: false,
@@ -1320,6 +1326,23 @@ impl Model {
             }
         }
         self.attention_inputs = Mutex::new(AttentionInputCache::default());
+        Ok(())
+    }
+
+    pub(crate) fn set_grouped_gqa(&mut self, enabled: bool) -> CoreResult<()> {
+        if enabled
+            && (!self.device.is_cpu() || self.layers.iter().all(|layer| layer.self_attn.is_none()))
+        {
+            return Err(Error::Unsupported(
+                "grouped GQA requires CPU full attention layers".into(),
+            ));
+        }
+        self.grouped_gqa = enabled;
+        for layer in &mut self.layers {
+            if let Some(attention) = &mut layer.self_attn {
+                attention.grouped_gqa = enabled;
+            }
+        }
         Ok(())
     }
 
@@ -1601,6 +1624,19 @@ enum Readout {
 }
 
 impl Qwen3_5Backend {
+    /// Group query heads by their existing K/V head without expanding K/V.
+    /// Call shapes change; configure before caches/replicas and qualify anew.
+    pub fn with_grouped_gqa(mut self, enabled: bool) -> CoreResult<Self> {
+        if enabled != self.model.grouped_gqa {
+            if !self.caches.is_empty() || !self.prefixes.values.is_empty() {
+                return Err(Error::Unsupported(
+                    "release retained Qwen caches before changing GQA execution".into(),
+                ));
+            }
+            self.model_mut()?.set_grouped_gqa(enabled)?;
+        }
+        Ok(self)
+    }
     /// Bound CPU attention score/mask rows; every causal key remains present.
     /// Reduction shapes change, so fresh conformance is required before serving.
     pub fn with_attention_query_rows(mut self, rows: usize) -> CoreResult<Self> {
@@ -2236,6 +2272,9 @@ impl Backend for Qwen3_5Backend {
                 self.model.attention_query_rows.to_string(),
             );
             extra.insert("attention_execution".into(), "cpu-query-blocks-v1".into());
+        }
+        if self.model.grouped_gqa {
+            extra.insert("gqa_execution".into(), "cpu-grouped-queries-v1".into());
         }
         if self.model.cpu_delta_rule {
             extra.insert("delta_rule_execution".into(), "cpu-buffered-v1".into());

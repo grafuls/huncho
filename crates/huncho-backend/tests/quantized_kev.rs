@@ -56,6 +56,8 @@ fn durable_quantized_artifacts_run_packed_kernels_and_preserve_native_cache_and_
         .with_cpu_fused_gate(true)
         .unwrap()
         .with_attention_query_rows(3)
+        .unwrap()
+        .with_grouped_gqa(true)
         .unwrap();
         let metadata = backend.capabilities();
         assert_eq!(metadata.dtype, scheme.dtype());

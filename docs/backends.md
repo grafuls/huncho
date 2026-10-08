@@ -393,3 +393,13 @@ across independently merged models. Metadata `base_weight_cache=content-checked-
 requires fresh numerical startup qualification. It does not share adapters,
 KV/recurrence state, temperatures or packed artifacts. Retaining unmerged target
 weights can increase single-adapter memory; see [operations](operations.md#immutable-cpu-base-residency-across-adapters).
+
+
+Native Qwen F2/F3 and Clef also support the opt-in CPU profile
+`HUNCHO_GROUPED_GQA=1`. It groups query-head rows under each original K/V head
+instead of physically repeating K/V to the query-head count. A dense copy of
+strided K/V is still needed by CPU matmul. It composes with query blocking,
+retains complete causal key reductions, and reports
+`gqa_execution=cpu-grouped-queries-v1`. Default-disabled; fresh complete labeled
+conformance binds the execution profile. Retained KV was already unexpanded, so
+this saves forward workspace rather than shrinking existing prefix snapshots.

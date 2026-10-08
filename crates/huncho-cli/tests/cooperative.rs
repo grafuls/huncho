@@ -11,10 +11,14 @@ fn run(args: &[&str], chunk: &str) -> Output {
     run_profile(args, chunk, "0")
 }
 fn run_profile(args: &[&str], chunk: &str, query_rows: &str) -> Output {
+    run_attention_profile(args, chunk, query_rows, "0")
+}
+fn run_attention_profile(args: &[&str], chunk: &str, query_rows: &str, grouped: &str) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_huncho"))
         .env("HUNCHO_DEVICE", "cpu")
         .env("HUNCHO_PREFILL_CHUNK_TOKENS", chunk)
         .env("HUNCHO_ATTENTION_QUERY_ROWS", query_rows)
+        .env("HUNCHO_GROUPED_GQA", grouped)
         .env("RAYON_NUM_THREADS", "1")
         .env("CANDLE_NUM_THREADS", "1")
         .env_remove("HUNCHO_CPU_DELTA_RULE")
@@ -448,4 +452,93 @@ fn cpu_query_block_profile_binds_qualification_and_preserves_unchanged_goldens()
         assert!(!output.status.success());
         assert!(String::from_utf8_lossy(&output.stderr).contains("HUNCHO_ATTENTION_QUERY_ROWS"));
     }
+}
+
+#[cfg(feature = "qualification")]
+#[test]
+fn grouped_cpu_gqa_binds_fresh_receipts_and_actual_prefix_interleaving() {
+    let (tmp, manifest, golden) = package();
+    for rows in ["0", "7"] {
+        let receipt = tmp.path().join(format!("grouped-{rows}.json"));
+        let output = run_attention_profile(
+            &[
+                "conform",
+                "--manifest",
+                manifest.to_str().unwrap(),
+                "--backend",
+                "candle",
+                "--dtype",
+                "fp32",
+                "--golden",
+                golden.to_str().unwrap(),
+                "--prefix-cache",
+                "--cooperative-prefill",
+                "--json",
+                "--write-qualification",
+                receipt.to_str().unwrap(),
+            ],
+            "3",
+            rows,
+            "1",
+        );
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["passed"], true);
+        assert_eq!(
+            report["execution_metadata"]["gqa_execution"],
+            "cpu-grouped-queries-v1"
+        );
+        assert!(
+            report["optimization_parity"]["max_prob_delta"]
+                .as_f64()
+                .unwrap()
+                <= 1e-4
+        );
+        assert!(report["work"]["prefill_interleaves"].as_u64().unwrap() > 0);
+        let record: Value = serde_json::from_slice(&std::fs::read(&receipt).unwrap()).unwrap();
+        assert_eq!(record["outcome_gates_passed"], false);
+        let text = std::fs::read_to_string(&receipt).unwrap();
+        assert!(text.contains("HUNCHO_GROUPED_GQA") && text.contains("cpu-grouped-queries-v1"));
+    }
+    let binding = format!("tiny-kev={}", golden.display());
+    let output = run_attention_profile(
+        &[
+            "serve",
+            "--manifest",
+            manifest.to_str().unwrap(),
+            "--backend",
+            "candle",
+            "--dtype",
+            "fp32",
+            "--qualification-golden",
+            &binding,
+            "--bind",
+            "127.0.0.1:0",
+        ],
+        "0",
+        "0",
+        "1",
+    );
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("observed target labels"));
+    let output = run_attention_profile(
+        &[
+            "bench",
+            "--manifest",
+            manifest.to_str().unwrap(),
+            "--backend",
+            "candle",
+            "--iterations",
+            "1",
+        ],
+        "0",
+        "0",
+        "broken",
+    );
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("HUNCHO_GROUPED_GQA"));
 }
