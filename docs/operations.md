@@ -660,7 +660,9 @@ on one context does not make another context warm. The per-model persistent
 prefix byte budget is divided evenly across contexts; a small share that cannot
 retain representative prefixes fails its nonvacuous qualification. Temporary
 activations and active state can grow with concurrency. Shared CPU workers can
-also contend for cores and memory bandwidth, so replica count needs workload
+also contend for cores and memory bandwidth. Candle packed dot products share
+a process-wide barrier pool which serializes concurrent packed kernel calls;
+other inference work can overlap. Replica count therefore needs workload
 measurements; no automatic throughput gain is claimed.
 
 Admission covers N running jobs plus `--max-queued-per-model` waiting jobs.

@@ -3,7 +3,9 @@
 //! remain FP32. This is an experimental execution, never a calibration approval.
 
 use super::*;
-use candle::quantized::{gguf_file, GgmlDType, QMatMul, QTensor};
+#[cfg(test)]
+use candle::quantized::QMatMul;
+use candle::quantized::{gguf_file, GgmlDType, QTensor};
 use std::io::{Read, Seek, Write};
 use std::sync::Arc;
 
@@ -222,6 +224,111 @@ mod tests {
     }
 
     #[test]
+    fn direct_packed_construction_keeps_projection_rows_out_of_the_dense_map_and_matches_the_previous_loader(
+    ) {
+        let root = Path::new("tests/fixtures/tiny_kev");
+        let golden: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(root.join("golden.json")).unwrap()).unwrap();
+        for scheme in [Scheme::Q8_0, Scheme::Q4_0] {
+            let temporary = tempfile::tempdir().unwrap();
+            let path = temporary.path().join("backbone.gguf");
+            convert_kev(
+                root,
+                root,
+                scheme,
+                &mut std::fs::File::create(&path).unwrap(),
+            )
+            .unwrap();
+            let (cfg, mut dense, packed) =
+                read_backbone(&mut std::fs::File::open(&path).unwrap(), scheme).unwrap();
+            assert_eq!(packed.len(), projection_names(&cfg).len());
+            assert!(packed.keys().all(|name| !dense.contains_key(name)));
+            // Reference-only reconstruction of the previous dequantize/build/
+            // replace loader. Production never materializes these matrices.
+            for (name, (weight, width)) in &packed {
+                dense.insert(
+                    name.clone(),
+                    weight
+                        .dequantize(&Device::Cpu)
+                        .unwrap()
+                        .narrow(1, 0, *width)
+                        .unwrap()
+                        .force_contiguous()
+                        .unwrap(),
+                );
+            }
+            let mut model = Model::new(
+                &cfg,
+                VarBuilder::from_tensors(dense, DType::F32, &Device::Cpu),
+                &Device::Cpu,
+                DType::F32,
+            )
+            .unwrap();
+            install_packed(&mut model, packed).unwrap();
+            let mut previous = Qwen3_5Backend {
+                model: Arc::new(model),
+                head: Arc::new(Readout::Pointer(
+                    PointerHead::load(&root.join("head.pt"), cfg.hidden_size, &Device::Cpu)
+                        .unwrap(),
+                )),
+                vocab_size: 1,
+                input_vocab_size: cfg.vocab_size,
+                max_context: 512,
+                dtype: scheme.dtype().into(),
+                device: Device::Cpu,
+                caches: BTreeMap::new(),
+                prefixes: PrefixSnapshots::default(),
+                prefill_chunk_tokens: 0,
+            };
+            let mut direct = Qwen3_5Backend::load_quantized_kev(
+                &path,
+                &root.join("head.pt"),
+                512,
+                scheme.dtype(),
+            )
+            .unwrap();
+            for case in golden["cases"].as_array().unwrap() {
+                for row in case["rows"].as_array().unwrap() {
+                    let input = ForwardInput::new(
+                        serde_json::from_value(row["tokens"].clone()).unwrap(),
+                        serde_json::from_value(row["positions"].clone()).unwrap(),
+                    );
+                    let actual = direct.forward(input.clone()).unwrap();
+                    let expected = previous.forward(input).unwrap();
+                    assert_eq!(
+                        actual
+                            .values()
+                            .data()
+                            .iter()
+                            .map(|v| v.to_bits())
+                            .collect::<Vec<_>>(),
+                        expected
+                            .values()
+                            .data()
+                            .iter()
+                            .map(|v| v.to_bits())
+                            .collect::<Vec<_>>()
+                    );
+                    for temperature in [0.75, 1.0, 2.40605] {
+                        assert_eq!(
+                            huncho_core::calibration::calibrate(
+                                actual.values().data(),
+                                temperature
+                            )
+                            .unwrap(),
+                            huncho_core::calibration::calibrate(
+                                expected.values().data(),
+                                temperature
+                            )
+                            .unwrap()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn loaded_projection_modules_release_dense_weights_and_retain_only_packed_blocks() {
         let fixture = Path::new("tests/fixtures/tiny_kev");
         for scheme in [Scheme::Q8_0, Scheme::Q4_0] {
@@ -283,9 +390,9 @@ mod tests {
 
 impl Qwen3_5Backend {
     /// Load the exact CPU packed artifact. CUDA/Metal and silent dequantized
-    /// kernel substitution are excluded from this profile. The initial loader
-    /// temporarily dequantizes for model construction, then releases dense
-    /// projection storage; steady-state matmuls retain only packed weights.
+    /// kernel substitution are excluded from this profile. Projection modules
+    /// are constructed directly from packed blocks without temporary dense
+    /// projection weights. Embeddings, norms, convolution and head remain FP32.
     pub fn load_quantized_kev(
         artifact: &Path,
         head: &Path,
@@ -300,14 +407,14 @@ impl Qwen3_5Backend {
                 "context budget exceeds embedded model configuration",
             ));
         }
-        let mut model = Model::new(
+        let model = Model::new_with_projections(
             &cfg,
             VarBuilder::from_tensors(tensors, DType::F32, &Device::Cpu),
             &Device::Cpu,
             DType::F32,
+            &mut ProjectionSource::Packed(quantized),
         )
         .map_err(invalid)?;
-        install_packed(&mut model, quantized)?;
         let head = Readout::Pointer(PointerHead::load(head, cfg.hidden_size, &Device::Cpu)?);
         Ok(Self {
             model: Arc::new(model),
@@ -324,7 +431,7 @@ impl Qwen3_5Backend {
     }
 }
 
-type PackedWeights = HashMap<String, (Arc<QTensor>, usize)>;
+pub(super) type PackedWeights = HashMap<String, (Arc<QTensor>, usize)>;
 fn read_backbone<R: Read + Seek>(
     reader: &mut R,
     scheme: Scheme,
@@ -371,14 +478,6 @@ fn read_backbone<R: Read + Seek>(
                     "invalid quantized projection layout: {name}"
                 )));
             }
-            let dequantized = tensor
-                .dequantize(&Device::Cpu)
-                .map_err(invalid)?
-                .narrow(1, 0, width)
-                .map_err(invalid)?
-                .force_contiguous()
-                .map_err(invalid)?;
-            dense.insert(name.clone(), dequantized);
             packed.insert(name.clone(), (Arc::new(tensor), width));
         } else {
             if info.ggml_dtype != GgmlDType::F32 {
@@ -396,6 +495,7 @@ fn read_backbone<R: Read + Seek>(
     Ok((cfg, dense, packed))
 }
 
+#[cfg(test)]
 fn install_packed(model: &mut Model, mut weights: PackedWeights) -> CoreResult<()> {
     let mut replace = |projection: &mut BackboneLinear, name: String| -> CoreResult<()> {
         let (weight, input_width) = weights

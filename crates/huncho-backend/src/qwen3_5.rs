@@ -358,6 +358,63 @@ impl Module for Projection {
     }
 }
 
+/// Construction source keeps packed weights packed from file to projection.
+/// Norms, embeddings, convolution and biases still use the ordinary builder.
+enum ProjectionSource {
+    Dense,
+    #[cfg(feature = "quantization")]
+    Packed(quantized::PackedWeights),
+}
+
+impl ProjectionSource {
+    fn linear(
+        &mut self,
+        input: usize,
+        output: usize,
+        bias: bool,
+        vb: VarBuilder,
+    ) -> Result<BackboneLinear> {
+        match self {
+            Self::Dense => Ok(linear_b(input, output, bias, vb)?.into()),
+            #[cfg(feature = "quantization")]
+            Self::Packed(weights) => {
+                let name = format!("{}.weight", vb.prefix());
+                let (weight, original_width) = weights.remove(&name).ok_or_else(|| {
+                    candle::Error::Msg(format!("missing packed projection {name}"))
+                })?;
+                let (rows, packed_width) = weight.shape().dims2()?;
+                if rows != output || original_width != input {
+                    candle::bail!("packed projection schema mismatch: {name}")
+                }
+                let bias = if bias {
+                    Some(vb.get(output, "bias")?)
+                } else {
+                    None
+                };
+                Ok(BackboneLinear {
+                    linear: Projection::Packed {
+                        matmul: candle::quantized::QMatMul::QTensor(weight),
+                        bias,
+                        input_width: input,
+                        packed_width,
+                    },
+                    chunk_rows: 0,
+                })
+            }
+        }
+    }
+
+    fn finish(&self) -> Result<()> {
+        #[cfg(feature = "quantization")]
+        if let Self::Packed(weights) = self {
+            if !weights.is_empty() {
+                candle::bail!("unused packed projections in model schema")
+            }
+        }
+        Ok(())
+    }
+}
+
 impl From<Linear> for BackboneLinear {
     fn from(linear: Linear) -> Self {
         Self {
@@ -420,30 +477,30 @@ struct Attention {
 }
 
 impl Attention {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    fn new(cfg: &Config, vb: VarBuilder, projections: &mut ProjectionSource) -> Result<Self> {
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
         let head_dim = cfg.head_dim;
         let hidden = cfg.hidden_size;
-        let q_proj = linear_b(
+        let q_proj = projections.linear(
             hidden,
             num_heads * head_dim * 2,
             cfg.attention_bias,
             vb.pp("q_proj"),
         )?;
-        let k_proj = linear_b(
+        let k_proj = projections.linear(
             hidden,
             num_kv_heads * head_dim,
             cfg.attention_bias,
             vb.pp("k_proj"),
         )?;
-        let v_proj = linear_b(
+        let v_proj = projections.linear(
             hidden,
             num_kv_heads * head_dim,
             cfg.attention_bias,
             vb.pp("v_proj"),
         )?;
-        let o_proj = linear_b(
+        let o_proj = projections.linear(
             num_heads * head_dim,
             hidden,
             cfg.attention_bias,
@@ -452,10 +509,10 @@ impl Attention {
         let q_norm = effective_norm_weight(vb.get(head_dim, "q_norm.weight")?)?;
         let k_norm = effective_norm_weight(vb.get(head_dim, "k_norm.weight")?)?;
         Ok(Self {
-            q_proj: q_proj.into(),
-            k_proj: k_proj.into(),
-            v_proj: v_proj.into(),
-            o_proj: o_proj.into(),
+            q_proj,
+            k_proj,
+            v_proj,
+            o_proj,
             q_norm,
             k_norm,
             num_heads,
@@ -584,7 +641,13 @@ struct LinearAttn {
 }
 
 impl LinearAttn {
-    fn new(cfg: &Config, vb: VarBuilder, _device: &Device, dtype: DType) -> Result<Self> {
+    fn new(
+        cfg: &Config,
+        vb: VarBuilder,
+        _device: &Device,
+        dtype: DType,
+        projections: &mut ProjectionSource,
+    ) -> Result<Self> {
         let hidden = cfg.hidden_size;
         let num_v_heads = cfg.linear_num_value_heads;
         let num_k_heads = cfg.linear_num_key_heads;
@@ -595,11 +658,16 @@ impl LinearAttn {
         let conv_dim = key_dim * 2 + value_dim;
         let conv_kernel = cfg.linear_conv_kernel_dim;
 
-        let in_proj_qkv = linear_b(hidden, conv_dim, cfg.attention_bias, vb.pp("in_proj_qkv"))?;
-        let in_proj_z = linear_b(hidden, value_dim, cfg.attention_bias, vb.pp("in_proj_z"))?;
-        let in_proj_b = linear_b(hidden, num_v_heads, cfg.attention_bias, vb.pp("in_proj_b"))?;
-        let in_proj_a = linear_b(hidden, num_v_heads, cfg.attention_bias, vb.pp("in_proj_a"))?;
-        let out_proj = linear_b(value_dim, hidden, cfg.attention_bias, vb.pp("out_proj"))?;
+        let in_proj_qkv =
+            projections.linear(hidden, conv_dim, cfg.attention_bias, vb.pp("in_proj_qkv"))?;
+        let in_proj_z =
+            projections.linear(hidden, value_dim, cfg.attention_bias, vb.pp("in_proj_z"))?;
+        let in_proj_b =
+            projections.linear(hidden, num_v_heads, cfg.attention_bias, vb.pp("in_proj_b"))?;
+        let in_proj_a =
+            projections.linear(hidden, num_v_heads, cfg.attention_bias, vb.pp("in_proj_a"))?;
+        let out_proj =
+            projections.linear(value_dim, hidden, cfg.attention_bias, vb.pp("out_proj"))?;
         let conv1d_w = vb
             .get((conv_dim, 1, conv_kernel), "conv1d.weight")?
             .to_dtype(DType::F32)?;
@@ -609,11 +677,11 @@ impl LinearAttn {
         let base_g = a_log.exp()?.neg()?; // -exp(A_log)
 
         Ok(Self {
-            in_proj_qkv: in_proj_qkv.into(),
-            in_proj_z: in_proj_z.into(),
-            in_proj_b: in_proj_b.into(),
-            in_proj_a: in_proj_a.into(),
-            out_proj: out_proj.into(),
+            in_proj_qkv,
+            in_proj_z,
+            in_proj_b,
+            in_proj_a,
+            out_proj,
             conv1d_w,
             norm_w,
             num_k_heads,
@@ -818,16 +886,19 @@ struct Mlp {
 }
 
 impl Mlp {
-    fn new(cfg: &Config, vb: VarBuilder) -> Result<Self> {
+    fn new(cfg: &Config, vb: VarBuilder, projections: &mut ProjectionSource) -> Result<Self> {
         let hidden = cfg.hidden_size;
         let intermediate = cfg.intermediate_size;
-        let gate_proj = linear_b(hidden, intermediate, cfg.attention_bias, vb.pp("gate_proj"))?;
-        let up_proj = linear_b(hidden, intermediate, cfg.attention_bias, vb.pp("up_proj"))?;
-        let down_proj = linear_b(intermediate, hidden, cfg.attention_bias, vb.pp("down_proj"))?;
+        let gate_proj =
+            projections.linear(hidden, intermediate, cfg.attention_bias, vb.pp("gate_proj"))?;
+        let up_proj =
+            projections.linear(hidden, intermediate, cfg.attention_bias, vb.pp("up_proj"))?;
+        let down_proj =
+            projections.linear(intermediate, hidden, cfg.attention_bias, vb.pp("down_proj"))?;
         Ok(Self {
-            gate_proj: gate_proj.into(),
-            up_proj: up_proj.into(),
-            down_proj: down_proj.into(),
+            gate_proj,
+            up_proj,
+            down_proj,
             act: Activation::Silu,
         })
     }
@@ -855,18 +926,28 @@ impl DecoderLayer {
         vb: VarBuilder,
         device: &Device,
         dtype: DType,
+        projections: &mut ProjectionSource,
     ) -> Result<Self> {
         let input_layernorm =
             effective_norm_weight(vb.get(cfg.hidden_size, "input_layernorm.weight")?)?;
         let post_attention_layernorm =
             effective_norm_weight(vb.get(cfg.hidden_size, "post_attention_layernorm.weight")?)?;
-        let mlp = Mlp::new(cfg, vb.pp("mlp"))?;
+        let mlp = Mlp::new(cfg, vb.pp("mlp"), projections)?;
         let (linear_attn, self_attn) = match layer_type {
             LayerType::Linear => (
-                Some(LinearAttn::new(cfg, vb.pp("linear_attn"), device, dtype)?),
+                Some(LinearAttn::new(
+                    cfg,
+                    vb.pp("linear_attn"),
+                    device,
+                    dtype,
+                    projections,
+                )?),
                 None,
             ),
-            LayerType::Full => (None, Some(Attention::new(cfg, vb.pp("self_attn"))?)),
+            LayerType::Full => (
+                None,
+                Some(Attention::new(cfg, vb.pp("self_attn"), projections)?),
+            ),
         };
         Ok(Self {
             input_layernorm,
@@ -1056,6 +1137,16 @@ impl Model {
     /// Build the text model from a `VarBuilder` rooted at the full weight
     /// prefix (`model.language_model.<module>` and `lm_head`).
     pub fn new(cfg: &Config, vb: VarBuilder, device: &Device, dtype: DType) -> Result<Self> {
+        Self::new_with_projections(cfg, vb, device, dtype, &mut ProjectionSource::Dense)
+    }
+
+    fn new_with_projections(
+        cfg: &Config,
+        vb: VarBuilder,
+        device: &Device,
+        dtype: DType,
+        projections: &mut ProjectionSource,
+    ) -> Result<Self> {
         let embed_tokens = embedding(
             cfg.vocab_size,
             cfg.hidden_size,
@@ -1070,9 +1161,11 @@ impl Model {
                 vb.pp(format!("model.language_model.layers.{i}")),
                 device,
                 dtype,
+                projections,
             )?;
             layers.push(layer);
         }
+        projections.finish()?;
         let norm =
             effective_norm_weight(vb.get(cfg.hidden_size, "model.language_model.norm.weight")?)?;
         Ok(Self {

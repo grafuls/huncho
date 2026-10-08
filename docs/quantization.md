@@ -73,9 +73,12 @@ actual artifact, mixed precision and kernel metadata. Numerical-only runs remain
 diagnostic. Receipts hash the packed artifact, trained head and tokenizer, but
 cannot replace startup qualification or establish dataset independence alone.
 
-Conversion and initial loading temporarily materialize dense weights.
-Steady-state projection modules release dense projection tensors and retain
-packed blocks; embeddings/head remain dense. Payload stats exclude peak RSS,
+Conversion temporarily materializes dense weights. Loading constructs every
+backbone projection directly from packed blocks, without dequantizing those
+matrices or making a temporary dense model. Dense FP32 embeddings/norms/
+convolution/biases and the trained head still load normally; their file
+materialization and copies are not eliminated. Projection modules retain packed
+blocks. Payload stats exclude peak RSS,
 allocator/workspace, bias, head, tokenizer and caches. No full-model latency,
 memory or cost improvement is claimed. CPU tests execute both packed kernels
 on the tiny Kev fixture, verify changed logits, finite distributions, immutable
@@ -96,3 +99,12 @@ isolated build and its exact `cpu_kernel_build` identity. Fit and evaluate with
 the intended binary/profile, retain that identity, and repeat startup
 qualification if it changes. A quantization layout and dtype alone do not
 identify the arithmetic kernels.
+
+
+Direct packed loading uses the same block layouts, activation quantization and
+kernel variant as the previous loader. CPU tests reconstruct the previous
+loader only as a reference and require bit-identical raw logits and calibrated
+probabilities at three temperatures for both Q8_0 and Q4_0. The production dense
+map contains no projection weights; schema/row/original-width checks apply
+before execution. Conversion still requires the full merged FP32 backbone;
+loading-time peak RSS and released-model measurements remain outstanding.

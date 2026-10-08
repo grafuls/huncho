@@ -633,3 +633,25 @@ measurements remain open. Each concurrent job retains its own activations and
 state and can contend for cores/memory bandwidth. ONNX/Clef replica loaders,
 replica-aware benchmark summaries and cross-request worker scaling remain open;
 GPU and Apple checks are not performed.
+
+
+## Direct packed model construction (2026-10-08)
+
+The remaining O18 loading-memory increment now constructs Q8_0/Q4_0 backbone
+projections directly from `QTensor` blocks. A private projection source supplies
+validated output rows, original input widths, packed widths and FP32 biases
+during the normal layer construction. Dense embeddings, normalization,
+convolution, recurrence scalars and the trained pointer head use the original
+builders. No dense projection model, placeholder matrix or environment-selected
+dequantized kernel exists on the production packed load path. The GGUF layouts,
+projection kernel, prompt, temperatures and dtype identity stay unchanged.
+
+A test-only reference retains the previous dequantize/build/replace loader;
+all fixture rows match raw float bits and calibrated probabilities at three
+temperatures for both packed schemes. Tests also prove that the loaded dense
+map excludes every projection, validate packed schema/rows/input widths and
+check retained packed payloads. Existing native batch/fork/replica fixtures,
+conversion/source immutability and offline fit/serving rejection checks pass.
+Conversion still materializes merged FP32 weights; dense non-projection file
+copies remain. Full-model peak RSS/load latency and labeled acceptance are not
+inferred from this structural memory improvement.
