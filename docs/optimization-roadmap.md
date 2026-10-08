@@ -21,14 +21,14 @@ still times out. These variants remain unqualified.
 | O05 F3 selected projection | Available | Released Nimble qualification |
 | O06 execution/preparation workers | Available | Released workload capacity/latency measurements |
 | O07 tokenizer/prompt caching | Available, bounded, default off | Model-specific hit rates and memory measurements |
-| O08 ONNX output/readout path | CPU gather, output reuse and integrated F1 raw-head graphs available | Released graph exports; device I/O binding and device-resident head |
+| O08 ONNX output/readout path | CPU gather/output reuse/integrated F1 raw heads and compile-checked CUDA device I/O available | Released graph exports; actual device qualification and device-resident head |
 | O09 fused/bounded compute | CPU SiLU/multiply, causal query blocks and unexpanded grouped K/V available | FlashAttention and further fused native/device kernels |
 | O10 precision/calibration gates | Every real serving runtime requires fresh labeled conformance | Released CPU acceptance remains rejected/pending; no GPU checks |
 | O11 native Kev prefix forks | Available | Released CPU paired/labeled acceptance |
 | O12 dynamic batching | Equal-length collation and bounded CPU Qwen/ModernBERT/masked ONNX feature/whole-schema Clef right-padding available | Integrated-head graph batching, device qualification and cached-branch batching |
 | O13 family head work | CPU Clef vectorized heads/grouped spans, optional Laya final marker queries and integrated ONNX F1 heads available | Released graph exports and Clef/Laya labeled qualification |
 | O14 concurrent execution contexts | CPU shared-weight replicas, including optional ONNX initializers, available | Released concurrent workloads, memory and affinity measurements |
-| O15 device buffers/graph replay | Open | CUDA implementation and later device qualification |
+| O15 device buffers/graph replay | Optional stable CUDA ONNX I/O and bounded graph replay implemented; CPU ownership checks and CUDA compilation pass | Actual GPU capture/execution/calibration and released graph/performance qualification deferred |
 | O16 Candle device propagation | Optional CUDA loaders available | Actual GPU checks deferred |
 | O17 recurrent/conv buffers | CPU implementations available | Released profile acceptance rejected; parallel device kernels open |
 | O18 quantization | Experimental Candle and llama.cpp CPU Q8/Q4 packages available | Portable Q8/Q4 fit/held-out job staged; host currently unreachable; other families open |
@@ -43,6 +43,31 @@ still times out. These variants remain unqualified.
 | O27 browser WASM/WebGPU | Separate CPU WASM F1 integrated-head SDK, packaging and fresh labeled gates available | Released exports/calibration, other families and browser scheduling; WebGPU deferred |
 
 ## Implemented increments
+
+### Stable ONNX device I/O and bounded CUDA graph replay
+
+O15 now has optional strict CUDA FP32 I/O slots and graph replay, separate from
+CPU output reuse/shared initializers. Every exact input/output shape owns stable
+device allocations and a CPU readback buffer; fresh inputs copy into their
+original bound addresses. Up to 32 slots and a configured 512 MiB maximum
+charged budget are retained without eviction. Captured graph IDs/addresses
+therefore stay valid for the native session lifetime. Budget/slot exhaustion
+refuses new shapes; copy/run/readback/nonfinite failures invalidate the context.
+Allocator lifetime is explicit: a CPU ownership regression initially crashed
+because ORT tensors outlived their allocator, and the retained allocator/drop
+order fixes that crash. Returned core readouts remain separately owned.
+
+Optional CUDA builder/profile code and the future ignored device regression
+compile. Actual CPU address/data/ownership, limits, failure invalidation and
+ordinary/compact/integrated/masked/batched/shared readout gates pass. CLI CPU
+profile refusal and qualification regression checks pass. No GPU inventory,
+execution, capture/replay or calibration check was run. The new path is default
+off and requires fresh complete labeled qualification before serving. CPU
+substitution tests establish ownership logic only; they do not qualify device
+arithmetic, captures or performance. The charged budget excludes caller input
+buffers, native arenas/workspaces and captured graphs. Device-resident trained
+heads, released exports and actual GPU checks remain open/deferred.
+[Verification and allocator failure evidence](verification/onnx-device-io-20261008/README.md).
 
 ### Immutable CPU bases with runtime LoRA adapters
 

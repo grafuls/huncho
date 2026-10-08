@@ -1,0 +1,11 @@
+   Compiling huncho-backend v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-backend)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.77s
+     Running unittests src/lib.rs (target/debug/deps/huncho_backend-305a2c81cf9d41b1)
+
+running 2 tests
+test onnx::device_io::tests::actual_cpu_io_uses_original_addresses_for_changed_data_and_keeps_owned_copies ... ok
+test onnx::device_io::tests::slots_and_bytes_are_bounded_and_failures_poison_without_eviction_or_reallocation ... [1;31m2026-10-08 21:26:39.391774406 [E:onnxruntime:, sequential_executor.cc:671 ExecuteKernel] Non-zero status code returned while running Gather node. Name:'embed_lookup' Status Message: indices element out of data bounds, idx=9223372036854775807 must be within the inclusive range [-16,15][m
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.02s
+

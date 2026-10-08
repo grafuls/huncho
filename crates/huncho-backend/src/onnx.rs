@@ -21,6 +21,8 @@ use huncho_core::error::{Error, Result};
 use huncho_core::manifest::{BackendId, Family};
 use huncho_core::tensor::Tensor as CoreTensor;
 
+mod device_io;
+
 /// Errors from the ONNX backend.
 #[derive(Debug, thiserror::Error)]
 pub enum OnnxError {
@@ -58,6 +60,7 @@ pub struct OnnxBackend {
     // pinned ORT crate makes a deep copy and must never bind a cached clone.
     output_buffer: Option<(Vec<usize>, Mutex<IoBinding>)>,
     output_buffer_reuses: u64,
+    device_io: Option<device_io::State>,
     #[cfg(test)]
     expected_bound_output_address: Option<usize>,
     #[cfg(test)]
@@ -103,6 +106,12 @@ pub struct OnnxOptions {
     /// Snapshot a supported flat CPU graph and share initializer/prepack storage
     /// across independently owned sessions. Requires `onnx-shared`; default off.
     pub shared_initializers: bool,
+    /// Default-disabled stable CUDA input/output allocations. The byte bound
+    /// includes device buffers, CPU readback and metadata; not ORT workspaces.
+    pub device_io_bytes: usize,
+    /// Replay up to 32 exact shape profiles at permanent owned device addresses.
+    /// Requires device_io_bytes, strict CUDA FP32 and independent session use.
+    pub cuda_graph: bool,
 }
 
 #[derive(Clone)]
@@ -164,6 +173,27 @@ impl OnnxBackend {
         options: OnnxOptions,
     ) -> Result<OnnxBackend> {
         let dtype = dtype.into();
+        if options.device_io_bytes > device_io::MAX_BYTES {
+            return Err(Error::Request(
+                "ONNX stable device I/O budget must be 0..512 MiB".into(),
+            ));
+        }
+        if (options.device_io_bytes > 0 || options.cuda_graph)
+            && (dtype != "fp32"
+                || !matches!(
+                    options.execution_provider,
+                    OnnxExecutionProvider::Cuda { .. }
+                )
+                || options.shared_initializers
+                || options.output_buffer_bytes > 0)
+        {
+            return Err(Error::Unsupported("ONNX stable device I/O/graphs require strict CUDA fp32 without CPU output buffers/shared initializers".into()));
+        }
+        if options.cuda_graph && options.device_io_bytes == 0 {
+            return Err(Error::Request(
+                "ONNX CUDA graphs require a nonzero stable device I/O budget".into(),
+            ));
+        }
         if options.integrated_head
             && (dtype != "fp32"
                 || options.execution_provider != OnnxExecutionProvider::Cpu
@@ -248,6 +278,7 @@ impl OnnxBackend {
                 .with_execution_providers([ort::ep::CUDA::default()
                     .with_device_id(device)
                     .with_tf32(false)
+                    .with_cuda_graph(options.cuda_graph)
                     .build()
                     .error_on_failure()])
                 .map_err(|e| Error::Backend(OnnxError::Init(e.to_string()).to_string()))?
@@ -434,6 +465,23 @@ impl OnnxBackend {
             }
         }
 
+        let device_io = if options.device_io_bytes > 0 {
+            if !matches!(output_shape.as_deref(), Some([_, width] | [_, _, width]) if *width > 0) {
+                return Err(Error::Unsupported(
+                    "stable ONNX I/O requires a fixed positive float32 output width".into(),
+                ));
+            }
+            let OnnxExecutionProvider::Cuda { device } = options.execution_provider else {
+                unreachable!()
+            };
+            Some(device_io::State::cuda(
+                device,
+                options.device_io_bytes,
+                options.cuda_graph,
+            ))
+        } else {
+            None
+        };
         Ok(OnnxBackend {
             session,
             #[cfg(feature = "onnx-shared")]
@@ -451,6 +499,7 @@ impl OnnxBackend {
             output_shape,
             output_buffer: None,
             output_buffer_reuses: 0,
+            device_io,
             #[cfg(test)]
             expected_bound_output_address: None,
             #[cfg(test)]
@@ -624,28 +673,45 @@ impl OnnxBackend {
         } else {
             seq
         };
-        let shape = self
-            .output_shape
-            .as_deref()
-            .and_then(|shape| match shape {
-                [b, n, h]
-                    if (*b == -1 || *b == batch as i64)
-                        && (*n == -1 || *n == rows as i64)
-                        && *h > 0 =>
-                {
-                    Some(vec![batch, rows, *h as usize])
-                }
-                [n, h] if batch == 1 && (*n == -1 || *n == rows as i64) && *h > 0 => {
-                    Some(vec![rows, *h as usize])
-                }
-                _ => None,
-            })
-            .filter(|shape| {
-                shape
-                    .iter()
-                    .try_fold(4usize, |bytes, &n| bytes.checked_mul(n))
-                    .is_some_and(|bytes| bytes > 0 && bytes <= self.options.output_buffer_bytes)
-            });
+        let layout = ReadoutLayout {
+            batch,
+            seq,
+            rows,
+            compact: self.options.compact_readout || self.options.integrated_head,
+            integrated: self.options.integrated_head,
+            empty_width: self.hidden_size,
+        };
+        let shape = self.output_shape.as_deref().and_then(|shape| match shape {
+            [b, n, h]
+                if (*b == -1 || *b == batch as i64)
+                    && (*n == -1 || *n == rows as i64)
+                    && *h > 0 =>
+            {
+                Some(vec![batch, rows, *h as usize])
+            }
+            [n, h] if batch == 1 && (*n == -1 || *n == rows as i64) && *h > 0 => {
+                Some(vec![rows, *h as usize])
+            }
+            _ => None,
+        });
+        if let Some(state) = &mut self.device_io {
+            let shape = shape.ok_or_else(|| {
+                Error::Unsupported(
+                    "stable ONNX I/O requires a concrete compatible output shape".into(),
+                )
+            })?;
+            let value = state.run(&mut self.session, &inputs, &self.output_name, shape)?;
+            let (shape, data) = value
+                .try_extract_tensor::<f32>()
+                .map_err(|e| Error::Backend(e.to_string()))?;
+            return layout.copy(requests, &shape[..], data);
+        }
+        let shape = shape.filter(|shape| {
+            shape
+                .iter()
+                .try_fold(4usize, |bytes, &n| bytes.checked_mul(n))
+                .is_some_and(|bytes| bytes > 0 && bytes <= self.options.output_buffer_bytes)
+        });
         let binding = if let Some(shape) = shape {
             if self
                 .output_buffer
@@ -715,7 +781,27 @@ impl OnnxBackend {
             self.last_native_output_address = Some(data.as_ptr() as usize);
         }
 
-        let (output_seq, hidden) = match &shape[..] {
+        layout.copy(requests, &shape[..], data)
+    }
+}
+
+struct ReadoutLayout {
+    batch: usize,
+    seq: usize,
+    rows: usize,
+    compact: bool,
+    integrated: bool,
+    empty_width: usize,
+}
+impl ReadoutLayout {
+    fn copy(
+        &self,
+        requests: &[(&[u32], &[usize])],
+        shape: &[i64],
+        data: &[f32],
+    ) -> Result<Vec<CoreTensor>> {
+        let (batch, seq, rows) = (self.batch, self.seq, self.rows);
+        let (output_seq, hidden) = match shape {
             [b, seq, hidden] if *b == batch as i64 && *seq >= 0 && *hidden > 0 => {
                 (*seq as usize, *hidden as usize)
             }
@@ -735,9 +821,7 @@ impl OnnxBackend {
                 "ONNX feature shape {shape:?} does not cover the input sequence of length {seq}"
             )));
         }
-        if self.options.integrated_head
-            && (hidden != 1 || data.iter().any(|value| !value.is_finite()))
-        {
+        if self.integrated && (hidden != 1 || data.iter().any(|value| !value.is_finite())) {
             return Err(Error::Backend(
                 "integrated ONNX head returned nonfinite or nonscalar marker scores".into(),
             ));
@@ -751,7 +835,7 @@ impl OnnxBackend {
                     .checked_mul(hidden)
                     .ok_or_else(|| Error::Backend("ONNX readout size overflow".into()))?;
                 let mut selected = Vec::with_capacity(count);
-                if self.options.compact_readout || self.options.integrated_head {
+                if self.compact {
                     selected.extend_from_slice(data);
                 } else {
                     for &pos in *positions {
@@ -762,7 +846,7 @@ impl OnnxBackend {
                 // Preserve the legacy empty-readout metadata hint; nonempty readouts
                 // use the actual graph width, as before. Trained heads validate width.
                 let width = if positions.is_empty() {
-                    self.hidden_size
+                    self.empty_width
                 } else {
                     hidden
                 };
@@ -933,6 +1017,16 @@ impl Backend for OnnxBackend {
                         "onnx_execution_provider".into(),
                         "cuda-strict-tf32-off-v1".into(),
                     );
+                }
+                if self.options.device_io_bytes > 0 {
+                    extra.insert("onnx_device_io".into(), "cuda-stable-io-v1".into());
+                    extra.insert(
+                        "onnx_device_io_bytes".into(),
+                        self.options.device_io_bytes.to_string(),
+                    );
+                }
+                if self.options.cuda_graph {
+                    extra.insert("onnx_cuda_graph".into(), "bounded-stable-shapes-v1".into());
                 }
                 if self.options.intra_threads > 0 {
                     extra.insert(

@@ -1,0 +1,10 @@
+   Compiling anyhow v1.0.104
+   Compiling ort-sys v2.0.0-rc.13
+   Compiling huncho-backend v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-backend)
+    Checking huncho-core v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-core)
+   Compiling prost-derive v0.14.4
+    Checking prost v0.14.4
+    Checking ort v2.0.0-rc.13
+    Checking huncho-api v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-api)
+    Checking huncho-cli v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-cli)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 44.22s

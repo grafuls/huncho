@@ -1,0 +1,47 @@
+warning: Missing auto-load script at offset 0 in section .debug_gdb_scripts
+of file /home/grafuls/Sources/huncho/target/debug/deps/huncho_backend-305a2c81cf9d41b1.
+Use `info auto-load python-scripts [REGEXP]' to list them.
+
+This GDB supports auto-downloading debuginfo from the following URLs:
+  <ima:enforcing>
+  <https://debuginfod.fedoraproject.org/>
+  <ima:ignore>
+Enable debuginfod for this session? (y or [n]) [answered N; input not from terminal]
+Debuginfod has been disabled.
+To make this setting permanent, add 'set debuginfod enabled off' to .gdbinit.
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib64/libthread_db.so.1".
+
+running 1 test
+test onnx::device_io::tests::actual_cpu_io_uses_original_addresses_for_changed_data_and_keeps_owned_copies ... [New Thread 0x7ffff78ef680 (LWP 468211)]
+[New Thread 0x7ffff76ee680 (LWP 468213)]
+[New Thread 0x7ffff6eed680 (LWP 468214)]
+[New Thread 0x7ffff66ec680 (LWP 468215)]
+[New Thread 0x7ffff5eeb680 (LWP 468216)]
+[New Thread 0x7ffff56ea680 (LWP 468217)]
+[New Thread 0x7ffff4ee9680 (LWP 468218)]
+[New Thread 0x7fffdffff680 (LWP 468219)]
+[New Thread 0x7fffdf7fe680 (LWP 468220)]
+[New Thread 0x7fffdeffd680 (LWP 468221)]
+[New Thread 0x7fffde7fc680 (LWP 468222)]
+[New Thread 0x7fffddffb680 (LWP 468223)]
+[New Thread 0x7fffdd7fa680 (LWP 468224)]
+[New Thread 0x7fffdcff9680 (LWP 468225)]
+[New Thread 0x7fffc7fff680 (LWP 468226)]
+[New Thread 0x7fffc77fe680 (LWP 468227)]
+
+Thread 2 "onnx::device_io" received signal SIGSEGV, Segmentation fault.
+[Switching to Thread 0x7ffff78ef680 (LWP 468211)]
+0x0000000000000000 in ?? ()
+#0  0x0000000000000000 in ?? ()
+#1  0x0000555555789d9e in onnxruntime::Tensor::~Tensor() ()
+#2  0x000055555570b21e in void onnxruntime::Delete<onnxruntime::Tensor>(void*) ()
+#3  0x000055555566b95b in std::_Sp_counted_deleter<void*, void (*)(void*), std::allocator<void>, (__gnu_cxx::_Lock_policy)2>::_M_dispose() ()
+#4  0x0000555555663f39 in OrtApis::ReleaseValue(OrtValue*) ()
+#5  0x000055555563dfb0 in ort::value::{impl#2}::drop (self=0x7ffff067a5a0) at src/lib.rs:327
+#6  0x000055555563fde7 in core::ptr::drop_glue<ort::value::ValueInner> () at /builddir/build/BUILD/rust-1.97.1-build/rustc-1.97.1-src/library/core/src/ptr/mod.rs:825
+#7  0x00005555556212d2 in core::ptr::drop_in_place<ort::value::ValueInner> (to_drop=<optimized out>) at /builddir/build/BUILD/rust-1.97.1-build/rustc-1.97.1-src/library/core/src/ptr/mod.rs:820
+#8  alloc::sync::Arc<ort::value::ValueInner, alloc::alloc::Global>::drop_slow<ort::value::ValueInner, alloc::alloc::Global> (self=0x7ffff067b408) at /builddir/build/BUILD/rust-1.97.1-build/rustc-1.97.1-src/library/alloc/src/sync.rs:2143
+#9  0x0000555555622920 in alloc::sync::{impl#41}::drop<ort::value::ValueInner, alloc::alloc::Global> (self=0x7ffff067b408) at /builddir/build/BUILD/rust-1.97.1-build/rustc-1.97.1-src/library/alloc/src/sync.rs:2874
+#10 0x000055555563f4bb in core::ptr::drop_glue<alloc::sync::Arc<ort::value::ValueInner, alloc::alloc::Global>> () at /builddir/build/BUILD/rust-1.97.1-build/rustc-1.97.1-src/library/core/src/ptr/mod.rs:825
+#11 0x00005555556412fc in core::ptr::drop_glue<(alloc::string::String, alloc::sync::Arc<ort::value::ValueInner, alloc::alloc::Global>)> () at /builddir/build/BUILD/rust-1.97.1-build/rustc-1.97.1-src/library/core/src/ptr/mod.rs:825

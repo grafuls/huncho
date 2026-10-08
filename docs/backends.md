@@ -49,7 +49,7 @@ scores all questions together. See [Clef setup](clef.md).
 | `MockBackend` | `huncho-backend` | ✅ built-in | Deterministic, dependency-free. The **offline reference** for the conformance harness and demos. |
 | `ClefBackend` | `huncho-backend` | `clef` | Native Rust/Candle Qwen3.5 and trained F5 joint schema head; CPU, optional CUDA. No Python runtime. |
 | `NullBackend` | `huncho-backend` | ✅ built-in | Reports an unloaded-backend error; placeholder for unavailable models. |
-| `OnnxBackend` | `huncho-backend` | ⚙️ feature-gated | ONNX Runtime CPU; explicit optional strict CUDA EP remains unqualified. CPU shared initializer replicas require `onnx-shared`. Device I/O remains open. |
+| `OnnxBackend` | `huncho-backend` | ⚙️ feature-gated | ONNX Runtime CPU; explicit optional strict CUDA EP remains unqualified. CPU shared initializer replicas require `onnx-shared`. Stable CUDA I/O and graph replay are compile-checked; actual GPU execution/qualification is deferred. |
 | `CandleBackend` | `huncho-backend` | ⚙️ feature-gated | Native ModernBERT/Laya, FP32 on CPU by default; explicit optional CUDA path requires labeled qualification. Built with `candle`; GPU kernels require `cuda`. |
 | `Qwen3_5Backend` | `huncho-backend` | ⚙️ feature-gated | Kev F2 pointers and F3 candidate logits over Qwen3.5/merged LoRA. CPU, optional CUDA; F3 GPU selection is explicit and requires labeled qualification. |
 | `LlamaCppBackend` | `huncho-backend` | `llamacpp` | Pinned CPU Qwen3.5 GGUF; trained Kev F2 pointers and F3 raw candidate logits. Shared-weight replicas and bounded full-state F2 prefix forks/retention; fresh labeled qualification required. See [workflow and limits](llamacpp.md). |

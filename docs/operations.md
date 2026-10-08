@@ -667,6 +667,47 @@ establish speed/RSS. Direct paged kernels, cached-branch batches and tenant
 retention policy remain separate work. Apple work and actual GPU checks are
 deferred by the user.
 
+### Optional ONNX CUDA device I/O and graph replay
+
+Build `onnx-cuda` and explicitly select `HUNCHO_ONNX_EP=cuda:N` with `--dtype
+fp32`. `HUNCHO_ONNX_DEVICE_IO_BYTES=B` optionally retains stable device
+inputs/output and CPU readback buffers within a charged 0..512 MiB budget.
+Default zero preserves ordinary execution. Optional
+`HUNCHO_ONNX_CUDA_GRAPH=1` requires a nonzero device-I/O budget and enables
+capture/replay on that strict CUDA session with TF32 and CPU fallback disabled.
+CPU output-buffer reuse/shared initializer profiles and CPU integrated-head
+graphs cannot combine with this path. Raw feature/compact graphs require a
+fixed positive float32 output width; trained host heads and core temperatures
+stay in their existing paths.
+
+Each of at most 32 exact I/O shape profiles retains its original bound device
+addresses for the entire session lifetime. New data copies synchronously into
+those addresses. Full output copies to an owned CPU readback tensor, then
+requested core rows copy to independently owned results. Captured buffers are
+never evicted/reallocated under a graph ID: exhausting bytes/slots rejects new
+shapes. A copy/run/readback/nonfinite failure invalidates the context until
+reload. The budget includes device input/output, CPU readback and conservative
+slot metadata; it excludes transient caller inputs, ORT arenas/workspaces and
+captured graph allocations. It is not a total host/device memory limit. Current
+copy helpers use ORT identity sessions and synchronization; no throughput or
+latency benefit is assumed without measurements.
+
+[ORT's CUDA graph requirements](https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html#using-cuda-graphs-preview)
+include stable tensor shapes/addresses, CUDA placement of every node, no
+control-flow operators and serialized calls to each session. Huncho owns one
+session/slot set per backend behind its existing execution mutex; unsupported
+graphs fail through the native runtime. The first native run includes capture
+setup/replay work. Serving/bench counters count submitted forwards, not internal
+capture kernel executions. New profile metadata/environment binds fresh
+complete numerical, argmax, labeled ECE-drift and independent paired gates;
+receipts do not bypass fresh qualification.
+
+This path is compile-checked with CPU ownership/ordinary-readout regressions.
+Actual GPU initialization, data transfer, capture/replay, arithmetic/calibration
+and performance are unverified and deferred by the user. The ignored CUDA
+regression is future qualification work and was not run. CPU substitution tests
+cannot establish CUDA behavior or release a model. Apple work stays skipped.
+
 ### ONNX compact readouts and bounded output reuse
 
 The optional `onnx` build keeps its existing CPU/full-sequence output behavior by

@@ -450,6 +450,8 @@ fn requires_outcome_qualification(engine: &huncho_core::engine::Engine) -> bool 
         "onnx_native_batch",
         "onnx_integrated_head",
         "onnx_initializer_residency",
+        "onnx_device_io",
+        "onnx_cuda_graph",
         "delta_rule_execution",
         "causal_conv_execution",
         "mlp_gate_execution",

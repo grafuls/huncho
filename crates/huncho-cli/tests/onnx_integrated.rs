@@ -7,12 +7,17 @@ use std::{
     time::{Duration, Instant},
 };
 fn run(args: &[&str], flag: &str) -> Output {
+    run_device_flags(args, flag, "0", "0")
+}
+fn run_device_flags(args: &[&str], flag: &str, bytes: &str, graph: &str) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_huncho"))
         .env("HUNCHO_DEVICE", "cpu")
         .env("HUNCHO_ONNX_EP", "cpu")
         .env("HUNCHO_ONNX_THREADS", "1")
         .env("HUNCHO_ONNX_INTEGRATED_HEAD", flag)
         .env("HUNCHO_ONNX_OUTPUT_BUFFER_BYTES", "64")
+        .env("HUNCHO_ONNX_DEVICE_IO_BYTES", bytes)
+        .env("HUNCHO_ONNX_CUDA_GRAPH", graph)
         .env_remove("HUNCHO_ONNX_COMPACT_READOUT")
         .env_remove("HUNCHO_ONNX_NATIVE_BATCH")
         .env_remove("HUNCHO_ONNX_SHARED_INITIALIZERS")
@@ -158,4 +163,38 @@ fn native_raw_head_process_binds_identity_and_requires_exact_labeled_serving() {
         !output.status.success()
             && String::from_utf8_lossy(&output.stderr).contains("laya-v1 prompt contract")
     );
+}
+
+#[test]
+fn device_buffer_and_graph_flags_refuse_cpu_and_invalid_profiles_without_accessing_gpu() {
+    let manifest = Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../huncho-backend/tests/fixtures/integrated_f1/huncho-model.json"
+    ));
+    let args = [
+        "bench",
+        "--manifest",
+        manifest.to_str().unwrap(),
+        "--backend",
+        "onnx",
+        "--dtype",
+        "fp32",
+        "--iterations",
+        "1",
+    ];
+    for (bytes, graph, reason) in [
+        ("4096", "0", "strict CUDA fp32"),
+        ("0", "1", "strict CUDA fp32"),
+        ("536870913", "0", "budget must be"),
+        ("broken", "0", "HUNCHO_ONNX_DEVICE_IO_BYTES"),
+        ("0", "broken", "HUNCHO_ONNX_CUDA_GRAPH"),
+    ] {
+        let output = run_device_flags(&args, "1", bytes, graph);
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(reason),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }

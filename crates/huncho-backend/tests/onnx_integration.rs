@@ -218,9 +218,20 @@ fn disabled_or_oversized_binding_retains_no_output_storage() {
 #[test]
 fn provider_and_thread_configuration_validate_without_gpu_probes() {
     #[cfg(not(feature = "onnx-shared"))]
-    assert!(OnnxBackend::load_with_options("absent.onnx", 8, 512, "fp32", OnnxOptions {
-        shared_initializers: true, ..Default::default()
-    }).err().unwrap().to_string().contains("onnx-shared"));
+    assert!(OnnxBackend::load_with_options(
+        "absent.onnx",
+        8,
+        512,
+        "fp32",
+        OnnxOptions {
+            shared_initializers: true,
+            ..Default::default()
+        }
+    )
+    .err()
+    .unwrap()
+    .to_string()
+    .contains("onnx-shared"));
     assert_eq!(
         OnnxExecutionProvider::parse("CPU").unwrap(),
         OnnxExecutionProvider::Cpu
@@ -388,4 +399,117 @@ fn native_dynamic_batches_preserve_isolated_rows_and_validate_contract() {
     .is_err());
     assert!(!reference.supports_batch());
     assert!(reference.forward_batch(inputs).is_err());
+}
+
+#[test]
+fn stable_device_profiles_refuse_incompatible_options_before_loading_any_runtime() {
+    for (dtype, options, reason) in [
+        (
+            "fp32",
+            OnnxOptions {
+                device_io_bytes: 4096,
+                ..Default::default()
+            },
+            "strict CUDA fp32",
+        ),
+        (
+            "fp32",
+            OnnxOptions {
+                cuda_graph: true,
+                ..Default::default()
+            },
+            "strict CUDA fp32",
+        ),
+        (
+            "fp16",
+            OnnxOptions {
+                device_io_bytes: 4096,
+                execution_provider: OnnxExecutionProvider::Cuda { device: 0 },
+                ..Default::default()
+            },
+            "strict CUDA fp32",
+        ),
+        (
+            "fp32",
+            OnnxOptions {
+                cuda_graph: true,
+                execution_provider: OnnxExecutionProvider::Cuda { device: 0 },
+                ..Default::default()
+            },
+            "nonzero stable device I/O",
+        ),
+        (
+            "fp32",
+            OnnxOptions {
+                device_io_bytes: (512 << 20) + 1,
+                ..Default::default()
+            },
+            "budget must be",
+        ),
+        (
+            "fp32",
+            OnnxOptions {
+                device_io_bytes: 4096,
+                execution_provider: OnnxExecutionProvider::Cuda { device: 0 },
+                output_buffer_bytes: 4096,
+                ..Default::default()
+            },
+            "strict CUDA fp32",
+        ),
+    ] {
+        let result = OnnxBackend::load_with_options("must-not-load.onnx", 8, 512, dtype, options);
+        assert!(result.err().unwrap().to_string().contains(reason));
+    }
+}
+
+#[cfg(feature = "onnx-cuda")]
+#[test]
+#[ignore = "actual GPU checks deferred; requires compatible CUDA ORT/GPU and fresh release qualification"]
+fn cuda_device_buffers_and_graph_replay_preserve_scalar_readout_scores_and_owned_outputs() {
+    use huncho_core::calibration::{argmax, calibrate};
+    for capture in [false, true] {
+        let mut cpu = OnnxBackend::load(fixture(), 8, 128, "fp32").unwrap();
+        let mut gpu = OnnxBackend::load_with_options(
+            fixture(),
+            8,
+            128,
+            "fp32",
+            OnnxOptions {
+                device_io_bytes: 1 << 20,
+                cuda_graph: capture,
+                execution_provider: OnnxExecutionProvider::Cuda { device: 0 },
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mut owned = None;
+        for _ in 0..2 {
+            for seq in [1, 3, 16, 31, 64, 128] {
+                let positions = vec![seq - 1, 0, seq / 2];
+                let input =
+                    ForwardInput::new((0..seq).map(|n| (n % 16) as u32).collect(), positions);
+                let expected = cpu.forward(input.clone()).unwrap();
+                let actual = gpu.forward(input).unwrap();
+                assert_eq!(expected.values().data(), actual.values().data());
+                for t in [0.75, 1., 2.40605] {
+                    let scores = |values: &huncho_core::tensor::Tensor| {
+                        (0..3)
+                            .map(|n| values.row(n).unwrap().iter().sum::<f32>() / 8.)
+                            .collect::<Vec<_>>()
+                    };
+                    let a = calibrate(&scores(actual.values()), t).unwrap();
+                    let b = calibrate(&scores(expected.values()), t).unwrap();
+                    assert_eq!(argmax(&a), argmax(&b));
+                    assert!(a.iter().zip(&b).all(|(a, b)| (a - b).abs() <= 1e-4));
+                }
+                if let Some((previous, values)) = &owned {
+                    assert_eq!(
+                        huncho_core::backend::ForwardOutput::values(previous).data(),
+                        values
+                    );
+                }
+                owned = Some((actual, expected.values().data().to_vec()));
+            }
+        }
+    }
 }

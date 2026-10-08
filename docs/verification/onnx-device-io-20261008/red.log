@@ -1,0 +1,11 @@
+   Compiling huncho-backend v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-backend)
+   Compiling ort-sys v2.0.0-rc.13
+   Compiling ort v2.0.0-rc.13
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.20s
+     Running unittests src/lib.rs (target/debug/deps/huncho_backend-305a2c81cf9d41b1)
+
+running 2 tests
+test onnx::device_io::tests::actual_cpu_io_uses_original_addresses_for_changed_data_and_keeps_owned_copies ... error: test failed, to rerun pass `-p huncho-backend --lib`
+
+Caused by:
+  process didn't exit successfully: `/home/grafuls/Sources/huncho/target/debug/deps/huncho_backend-305a2c81cf9d41b1 device_io --test-threads=1` (signal: 11, SIGSEGV: invalid memory reference)

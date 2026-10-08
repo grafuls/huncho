@@ -743,6 +743,12 @@ fn load_onnx(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<dy
         Err(std::env::VarError::NotPresent) => 0,
         Err(_) => return Err(Error::Request("invalid HUNCHO_ONNX_OUTPUT_BUFFER_BYTES".into())),
     };
+    let device_io_bytes = match std::env::var("HUNCHO_ONNX_DEVICE_IO_BYTES") {
+        Ok(value) => value.parse::<usize>().map_err(|_| Error::Request(
+            "HUNCHO_ONNX_DEVICE_IO_BYTES must be an integer from 0 to 536870912".into()))?,
+        Err(std::env::VarError::NotPresent) => 0,
+        Err(_) => return Err(Error::Request("invalid HUNCHO_ONNX_DEVICE_IO_BYTES".into())),
+    };
     let backend = OnnxBackend::load_with_options(
         onnx_path,
         manifest.backbone.hidden_size,
@@ -756,6 +762,8 @@ fn load_onnx(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<dy
             intra_threads,
             native_batch: bool_env("HUNCHO_ONNX_NATIVE_BATCH")?,
             shared_initializers: bool_env("HUNCHO_ONNX_SHARED_INITIALIZERS")?,
+            device_io_bytes,
+            cuda_graph: bool_env("HUNCHO_ONNX_CUDA_GRAPH")?,
         },
     )
     .map_err(|e| Error::Package(format!("failed to load ONNX backend: {e}")))?;

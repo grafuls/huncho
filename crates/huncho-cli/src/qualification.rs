@@ -287,6 +287,8 @@ impl ExecutionIdentity {
             "HUNCHO_ONNX_COMPACT_READOUT",
             "HUNCHO_ONNX_INTEGRATED_HEAD",
             "HUNCHO_ONNX_OUTPUT_BUFFER_BYTES",
+            "HUNCHO_ONNX_DEVICE_IO_BYTES",
+            "HUNCHO_ONNX_CUDA_GRAPH",
             "HUNCHO_ONNX_EP",
             "HUNCHO_ONNX_THREADS",
             "HUNCHO_LLAMA_THREADS",

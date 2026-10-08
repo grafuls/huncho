@@ -1,0 +1,15 @@
+   Compiling prost-derive v0.14.4
+    Checking libc v0.2.189
+    Checking bytes v1.12.1
+    Checking once_cell v1.21.4
+   Compiling openssl v0.10.81
+    Checking huncho-core v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-core)
+    Checking getrandom v0.4.3
+    Checking tempfile v3.27.0
+    Checking prost v0.14.4
+   Compiling native-tls v0.2.18
+   Compiling ureq v3.3.0
+   Compiling ort-sys v2.0.0-rc.13
+    Checking ort v2.0.0-rc.13
+    Checking huncho-backend v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-backend)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.09s
