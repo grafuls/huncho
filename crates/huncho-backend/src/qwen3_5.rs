@@ -2469,6 +2469,12 @@ impl Backend for Qwen3_5Backend {
                 "cpu-kev-equal-suffix-v1".into(),
             );
         }
+        if self.supports_padded_fork_batch() {
+            extra.insert(
+                "cached_branch_padding".into(),
+                "cpu-kev-causal-suffix-v1".into(),
+            );
+        }
         if self.base_weight_cache {
             extra.insert("base_weight_cache".into(), "content-checked-cpu-v1".into());
         }
@@ -2669,84 +2675,20 @@ impl Backend for Qwen3_5Backend {
         inputs: Vec<ForwardInput>,
         work: &mut huncho_core::backend::ForkBatchWork,
     ) -> CoreResult<Vec<ForwardOutput>> {
-        if !self.supports_fork_batch() {
-            return Err(Error::Unsupported(
-                "cached-branch batching requires CPU Kev".into(),
-            ));
-        }
-        let seq = inputs.first().map_or(0, |input| input.tokens.len());
-        let prefix = self
-            .caches
-            .get(&parent.id)
-            .ok_or_else(|| Error::Backend("unknown Qwen3.5 cache handle".into()))?;
-        if self.pending_prefills.contains_key(&parent.id)
-            || prefix.tokens == 0
-            || inputs.is_empty()
-            || inputs.len() > 63
-            || self.caches.len().saturating_add(inputs.len()) > 64
-            || seq == 0
-            || prefix
-                .tokens
-                .checked_add(seq)
-                .map_or(true, |n| n > self.max_context)
-            || inputs.iter().any(|input| {
-                input.tokens.len() != seq
-                    || input.fork_from.is_some()
-                    || input.retain_cache
-                    || input.logit_codes.is_some()
-                    || input.positions.is_empty()
-                    || input.positions.iter().any(|&p| p >= seq)
-                    || input
-                        .tokens
-                        .iter()
-                        .any(|&t| t as usize >= self.input_vocab_size)
-            })
-        {
-            return Err(Error::Backend(
-                "Kev branch batches require a complete parent, 1..=63 equal nonempty valid suffixes and available cache slots".into(),
-            ));
-        }
-        let mut branches = Vec::with_capacity(inputs.len());
-        let result = (|| {
-            for _ in &inputs {
-                branches.push(self.fork(parent)?);
-                work.cache_forks += 1;
-            }
-            // Each row starts from the exact same immutable prefix, including
-            // full KV, GDN recurrence and causal convolution. Tensor::cat owns
-            // the private workspace; no prefix or published branch is mutated.
-            let mut cache = self.caches[&parent.id]
-                .branch_batch(inputs.len())
-                .map_err(|e| Error::Backend(e.to_string()))?;
-            let tokens: Vec<_> = inputs
-                .iter()
-                .flat_map(|i| i.tokens.iter().copied())
-                .collect();
-            let ids = Tensor::from_vec(tokens, (inputs.len(), seq), &self.device)
-                .map_err(|e| Error::Backend(e.to_string()))?;
-            work.forward_calls += 1;
-            work.processed_tokens += (inputs.len() * seq) as u64;
-            work.batch_calls += u64::from(inputs.len() > 1);
-            let hidden = self
-                .model
-                .forward_cached(&ids, &mut cache)
-                .map_err(|e| Error::Backend(e.to_string()))?;
-            inputs
-                .iter()
-                .enumerate()
-                .map(|(row, input)| {
-                    let hidden = hidden
-                        .narrow(0, row, 1)
-                        .map_err(|e| Error::Backend(e.to_string()))?;
-                    self.readout(&hidden, input)
-                })
-                .collect()
-        })();
-        // Cleanup must also happen after allocation/inference/readout failure.
-        for branch in branches {
-            self.caches.remove(&branch.id);
-        }
-        result
+        self.forward_cached_batch(parent, inputs, false, work)
+    }
+
+    fn supports_padded_fork_batch(&self) -> bool {
+        self.supports_fork_batch()
+    }
+
+    fn forward_padded_fork_batch(
+        &mut self,
+        parent: CacheHandle,
+        inputs: Vec<ForwardInput>,
+        work: &mut huncho_core::backend::ForkBatchWork,
+    ) -> CoreResult<Vec<ForwardOutput>> {
+        self.forward_cached_batch(parent, inputs, true, work)
     }
 
     fn supports_padded_batch(&self) -> bool {
@@ -2982,6 +2924,108 @@ impl Qwen3_5Backend {
 }
 
 impl Qwen3_5Backend {
+    fn forward_cached_batch(
+        &mut self,
+        parent: CacheHandle,
+        inputs: Vec<ForwardInput>,
+        padded: bool,
+        work: &mut huncho_core::backend::ForkBatchWork,
+    ) -> CoreResult<Vec<ForwardOutput>> {
+        if !self.supports_fork_batch() {
+            return Err(Error::Unsupported(
+                "cached-branch batching requires CPU Kev".into(),
+            ));
+        }
+        let seq = inputs
+            .iter()
+            .map(|input| input.tokens.len())
+            .max()
+            .unwrap_or(0);
+        let prefix = self
+            .caches
+            .get(&parent.id)
+            .ok_or_else(|| Error::Backend("unknown Qwen3.5 cache handle".into()))?;
+        if self.pending_prefills.contains_key(&parent.id)
+            || prefix.tokens == 0
+            || inputs.is_empty()
+            || inputs.len() > 63
+            || self.caches.len().saturating_add(inputs.len()) > 64
+            || seq == 0
+            || prefix
+                .tokens
+                .checked_add(seq)
+                .map_or(true, |n| n > self.max_context)
+            || inputs.iter().any(|input| {
+                input.tokens.is_empty()
+                    || (!padded && input.tokens.len() != seq)
+                    || input.fork_from.is_some()
+                    || input.retain_cache
+                    || input.logit_codes.is_some()
+                    || input.positions.is_empty()
+                    || input.positions.iter().any(|&p| p >= input.tokens.len())
+                    || input
+                        .tokens
+                        .iter()
+                        .any(|&t| t as usize >= self.input_vocab_size)
+            })
+        {
+            return Err(Error::Backend(
+                "Kev branch batches require a complete parent, 1..=63 nonempty valid suffixes (equal lengths without padding) and available cache slots".into(),
+            ));
+        }
+        let mut branches = Vec::with_capacity(inputs.len());
+        let result = (|| {
+            for _ in &inputs {
+                branches.push(self.fork(parent)?);
+                work.cache_forks += 1;
+            }
+            // Each row starts from the exact same immutable prefix, including
+            // full KV, GDN recurrence and causal convolution. Tensor::cat owns
+            // the private workspace; no prefix or published branch is mutated.
+            let mut cache = self.caches[&parent.id]
+                .branch_batch(inputs.len())
+                .map_err(|e| Error::Backend(e.to_string()))?;
+            let tokens: Vec<_> = inputs
+                .iter()
+                .flat_map(|input| {
+                    input
+                        .tokens
+                        .iter()
+                        .copied()
+                        .chain(std::iter::repeat(0))
+                        .take(seq)
+                })
+                .collect();
+            let ids = Tensor::from_vec(tokens, (inputs.len(), seq), &self.device)
+                .map_err(|e| Error::Backend(e.to_string()))?;
+            work.forward_calls += 1;
+            work.processed_tokens += (inputs.len() * seq) as u64;
+            work.batch_calls += u64::from(inputs.len() > 1);
+            let padding = inputs.len() * seq - inputs.iter().map(|i| i.tokens.len()).sum::<usize>();
+            work.padded_tokens += padding as u64;
+            work.padded_batch_calls += u64::from(padding > 0);
+            let hidden = self
+                .model
+                .forward_cached(&ids, &mut cache)
+                .map_err(|e| Error::Backend(e.to_string()))?;
+            inputs
+                .iter()
+                .enumerate()
+                .map(|(row, input)| {
+                    let hidden = hidden
+                        .narrow(0, row, 1)
+                        .map_err(|e| Error::Backend(e.to_string()))?;
+                    self.readout(&hidden, input)
+                })
+                .collect()
+        })();
+        // Cleanup must also happen after allocation/inference/readout failure.
+        for branch in branches {
+            self.caches.remove(&branch.id);
+        }
+        result
+    }
+
     fn forward_independent_batch(
         &mut self,
         inputs: Vec<ForwardInput>,
@@ -3145,6 +3189,26 @@ mod tests {
             (2, 1, 1)
         );
         assert_eq!(work.processed_tokens, 4);
+        assert_eq!(backend.caches.len(), 1);
+        assert_eq!(backend.caches[&parent.id].tokens, before);
+        let invalid = ForwardInput::new(vec![vocab as u32, 1], vec![0, 1]);
+        let mut padded_work = huncho_core::backend::ForkBatchWork::default();
+        assert!(backend
+            .forward_padded_fork_batch(
+                parent,
+                vec![invalid, ForwardInput::new(vec![1], vec![0])],
+                &mut padded_work
+            )
+            .is_err());
+        assert_eq!(
+            (
+                padded_work.cache_forks,
+                padded_work.forward_calls,
+                padded_work.padded_batch_calls,
+                padded_work.padded_tokens
+            ),
+            (2, 1, 1, 1)
+        );
         assert_eq!(backend.caches.len(), 1);
         assert_eq!(backend.caches[&parent.id].tokens, before);
         backend.input_vocab_size = vocab;

@@ -522,6 +522,15 @@ fn run_suite_impl(
                 .into(),
         ));
     }
+    if options.prefix_cache
+        && options.max_batch_padding_percent > 0
+        && work.fork_padded_batch_calls == 0
+    {
+        return Err(Error::Conformance(
+            "padded cached-branch qualification requires an actual mixed-length prefix batch"
+                .into(),
+        ));
+    }
     if options.max_batch_tokens.is_some() && work.batch_calls == 0 {
         return Err(Error::Conformance("batch qualification requires a supported case that actually batches multiple questions".into()));
     }

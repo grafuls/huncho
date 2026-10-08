@@ -97,6 +97,8 @@ pub struct ForkBatchWork {
     pub forward_calls: u64,
     pub processed_tokens: u64,
     pub batch_calls: u64,
+    pub padded_batch_calls: u64,
+    pub padded_tokens: u64,
 }
 
 /// Hard native batch allocation limits, in addition to the caller token budget.
@@ -273,6 +275,24 @@ pub trait Backend: Send + Sync {
     /// changing valid readouts. Bidirectional/joint heads must exclude padding.
     fn supports_padded_batch(&self) -> bool {
         false
+    }
+
+    fn supports_padded_fork_batch(&self) -> bool {
+        false
+    }
+
+    /// Same parent/ownership contract as `forward_fork_batch`, with mixed-length
+    /// suffixes. Right-padding must be invisible to original markers and final
+    /// decisions. No padded suffix continuation state may survive the call.
+    fn forward_padded_fork_batch(
+        &mut self,
+        _parent: CacheHandle,
+        _inputs: Vec<ForwardInput>,
+        _work: &mut ForkBatchWork,
+    ) -> Result<Vec<ForwardOutput>> {
+        Err(crate::error::Error::Unsupported(
+            "backend does not expose padded cached-branch batching".into(),
+        ))
     }
 
     /// At most 64 independent nonempty rows, with original relative readouts.

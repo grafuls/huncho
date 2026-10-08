@@ -1178,8 +1178,8 @@ This increment does not implement pipeline, multi-node or GPU execution.
 
 ## CPU Kev batches from a shared prefix
 
-`--prefix-cache --max-batch-tokens N` now combines request-local state prefill
-with equal-length native CPU Kev question batches. One immutable parent retains
+`--prefix-cache --max-batch-tokens N` combines request-local state prefill
+with equal-length or explicitly right-padded native CPU Kev question batches. One immutable parent retains
 full-attention KV, GDN recurrence and causal-convolution state. Native rows start
 from private copies of that state, and the original trained pointer head reads
 each row's original markers and final decision. The parent never advances.
@@ -1187,7 +1187,7 @@ No temporary branch handles or suffix cache survive the call, including errors.
 
 A group charges `B * (prefix_tokens + suffix_tokens)` against `N`, even though
 only the suffixes are recomputed. This bounds the private complete-KV workspace;
-it is not a byte/RSS limit. Equal complete contexts are bucketed separately from
+it is not a byte/RSS limit. Complete contexts are length-sorted separately from
 independent prompts, with at most 63 temporary forks and the existing 64 live
 handle cap. Oversized singletons remain intact. Another active prefix may exhaust
 the remaining handle capacity; the backend refuses admission explicitly.
@@ -1196,8 +1196,13 @@ count actual prefill chunks and submitted suffixes, including failed attempts.
 `fork_batch_calls` in reports and `huncho_fork_batch_count` in metrics count
 actual multiple-row prefix batches, separately from independent batches.
 
-The profile is CPU Kev only and defaults off. Mixed-length padding,
-cooperative scheduling and cross-request collation cannot combine with it.
+The profile is CPU Kev only and defaults off. Cooperative scheduling and cross-request collation cannot combine with it.
+Optional `--max-batch-padding-percent 1..100` permits mixed suffix lengths.
+Padding is bounded against submitted suffix positions, while the workspace
+budget still charges complete contexts. Each valid readout and final decision
+uses its original suffix length. No padded continuation state is retained.
+`fork_padded_batch_calls` and `huncho_fork_padded_batch_count` count actual mixed
+prefix batches; fresh qualification requires that work specifically.
 Retained prefixes, chunks, immutable KV pages, CPU kernels, standard FP32 runtime
 LoRA and separately refitted packed CPU backbones keep their own qualification
 requirements. `conform`/`serve` require actual forks **and actual native cached
@@ -1207,4 +1212,5 @@ external delta/full argmax/ECE plus paired independent 1e-4 gates. Fixtures with
 duplicated original typed questions retain frozen probabilities; synthetic
 fixture labels exercise gate plumbing only. Released CPU acceptance and
 workload latency/RSS remain unqualified/unmeasured. No actual GPU checks ran.
-See [CPU evidence](verification/fork-batch-cpu-20261008/README.md).
+See [equal-length evidence](verification/fork-batch-cpu-20261008/README.md) and
+[mixed-length evidence](verification/fork-padding-cpu-20261008/README.md).

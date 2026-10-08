@@ -101,11 +101,11 @@ async fn systemone(
     if state.config.prefix_cache
         && state.config.max_batch_tokens.is_some()
         && (!engine.supports_fork_batch()
-            || state.config.max_batch_padding_percent > 0
+            || (state.config.max_batch_padding_percent > 0 && !engine.supports_padded_fork_batch())
             || engine.batch.is_some())
     {
         return map_error(&Error::Unsupported(
-            "cached-branch batching requires CPU Kev, equal lengths and no cross-request collation"
+            "cached-branch batching requires CPU Kev, supported suffix padding and no cross-request collation"
                 .into(),
         ));
     }
@@ -460,6 +460,9 @@ pub(crate) fn record_execution(metrics: &Metrics, model: &str, stats: &EvalStats
         .inc_by(stats.cross_request_batches);
     metrics.padded_batch_count.inc_by(stats.padded_batch_calls);
     metrics.fork_batch_count.inc_by(stats.fork_batch_calls);
+    metrics
+        .fork_padded_batch_count
+        .inc_by(stats.fork_padded_batch_calls);
     metrics.padded_tokens.inc_by(stats.padded_tokens);
     metrics
         .reused_prefix_tokens

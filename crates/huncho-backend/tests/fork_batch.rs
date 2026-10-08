@@ -75,6 +75,49 @@ fn cached_native_batches_preserve_typed_goldens_rows_pages_and_adapters() {
                 .prefill_cached(&first[..prefix_len], 1 << 20)
                 .unwrap()
                 .handle;
+            let suffixes: Vec<_> = rows
+                .iter()
+                .map(|row| {
+                    let tokens: Vec<u32> = serde_json::from_value(row["tokens"].clone()).unwrap();
+                    let positions: Vec<usize> =
+                        serde_json::from_value(row["positions"].clone()).unwrap();
+                    ForwardInput::new(
+                        tokens[prefix_len..].to_vec(),
+                        positions.iter().map(|p| p - prefix_len).collect(),
+                    )
+                })
+                .collect();
+            let baselines: Vec<_> = suffixes
+                .iter()
+                .map(|i| scalar(&mut backend, parent, i.clone()))
+                .collect();
+            let mut padded_work = ForkBatchWork::default();
+            let padded = backend
+                .forward_padded_fork_batch(parent, suffixes.clone(), &mut padded_work)
+                .unwrap();
+            assert_eq!(
+                (
+                    padded_work.cache_forks,
+                    padded_work.forward_calls,
+                    padded_work.batch_calls,
+                    padded_work.padded_batch_calls
+                ),
+                (3, 1, 1, 1)
+            );
+            let physical = 3 * suffixes.iter().map(|i| i.tokens.len()).max().unwrap() as u64;
+            assert_eq!(padded_work.processed_tokens, physical);
+            assert_eq!(
+                padded_work.padded_tokens,
+                physical - suffixes.iter().map(|i| i.tokens.len() as u64).sum::<u64>()
+            );
+            for ((actual, baseline), row) in padded.iter().zip(baselines).zip(rows) {
+                parity(actual.values().data(), &baseline, 1e-4);
+                let p = calibrate(actual.values().data(), 2.40605).unwrap();
+                let frozen: Vec<f32> =
+                    serde_json::from_value(row["probabilities"].clone()).unwrap();
+                assert_eq!(argmax(&p), argmax(&frozen));
+                assert!(p.iter().zip(frozen).all(|(a, b)| (a - b).abs() <= 1e-3));
+            }
             for row in rows {
                 let tokens: Vec<u32> = serde_json::from_value(row["tokens"].clone()).unwrap();
                 let positions: Vec<usize> =
@@ -334,11 +377,24 @@ fn engine_branch_batches_preserve_original_goldens_usage_budgets_and_nonvacuous_
             run_suite_with_options(&engine, &suite, &Default::default(), &retained).unwrap();
         assert!(report.passed);
         assert!(report.work.persistent_prefix_hits > 0);
+        let mixed = EvalOptions {
+            max_batch_padding_percent: 25,
+            ..opts.clone()
+        };
+        let mut original = suite.clone();
+        for case in &mut original.cases {
+            case.request
+                .questions
+                .retain(|id, _| !id.ends_with("-duplicate"));
+            case.expected.retain(|id, _| !id.ends_with("-duplicate"));
+        }
+        let report =
+            run_suite_with_options(&engine, &original, &Default::default(), &mixed).unwrap();
+        assert!(report.passed, "{dtype}: {report:?}");
+        assert!(report.work.fork_padded_batch_calls > 0);
+        assert!(report.work.padded_tokens > 0);
+        assert!(report.optimization_parity.unwrap().max_prob_delta <= 1e-4);
         for invalid in [
-            EvalOptions {
-                max_batch_padding_percent: 1,
-                ..opts.clone()
-            },
             EvalOptions {
                 cooperative_prefill: true,
                 ..opts.clone()

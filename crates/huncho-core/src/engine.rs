@@ -77,6 +77,7 @@ pub struct EvalStats {
     pub batch_calls: u64,
     /// Native batches of multiple suffix rows from one immutable parent.
     pub fork_batch_calls: u64,
+    pub fork_padded_batch_calls: u64,
     pub padded_batch_calls: u64,
     pub padded_tokens: u64,
     /// Native batches containing sequences from more than one request.
@@ -114,6 +115,7 @@ impl EvalStats {
         self.cache_forks += work.cache_forks;
         self.batch_calls += work.batch_calls;
         self.fork_batch_calls += work.fork_batch_calls;
+        self.fork_padded_batch_calls += work.fork_padded_batch_calls;
         self.padded_batch_calls += work.padded_batch_calls;
         self.padded_tokens += work.padded_tokens;
         self.cross_request_batches += work.cross_request_batches;
@@ -178,6 +180,7 @@ pub struct Engine {
     supports_fork: bool,
     supports_batch: bool,
     supports_fork_batch: bool,
+    supports_padded_fork_batch: bool,
     supports_padded_batch: bool,
     batch_limits: crate::backend::BatchLimits,
     supports_resumable_prefill: bool,
@@ -203,6 +206,7 @@ impl Engine {
         let mut capabilities = backend.capabilities();
         let supports_fork = capabilities.supports_fork;
         let supports_fork_batch = backend.supports_fork_batch();
+        let supports_padded_fork_batch = backend.supports_padded_fork_batch();
         let supports_batch = if manifest.family == Family::F5 {
             backend.supports_request_batch()
         } else {
@@ -236,6 +240,7 @@ impl Engine {
             supports_fork,
             supports_batch,
             supports_fork_batch,
+            supports_padded_fork_batch,
             supports_padded_batch,
             batch_limits,
             supports_resumable_prefill,
@@ -267,6 +272,7 @@ impl Engine {
             || actual.supports_lora != expected.supports_lora
             || backend.supports_batch() != original.supports_batch()
             || backend.supports_fork_batch() != original.supports_fork_batch()
+            || backend.supports_padded_fork_batch() != original.supports_padded_fork_batch()
             || backend.supports_padded_batch() != original.supports_padded_batch()
             || backend.supports_request_batch() != original.supports_request_batch()
             || backend.supports_padded_request_batch() != original.supports_padded_request_batch()
@@ -291,6 +297,7 @@ impl Engine {
             supports_fork: self.supports_fork,
             supports_batch: self.supports_batch,
             supports_fork_batch: self.supports_fork_batch,
+            supports_padded_fork_batch: self.supports_padded_fork_batch,
             supports_padded_batch: self.supports_padded_batch,
             batch_limits: self.batch_limits,
             supports_resumable_prefill: self.supports_resumable_prefill,
@@ -379,6 +386,10 @@ impl Engine {
 
     pub fn supports_fork_batch(&self) -> bool {
         self.supports_prefix_cache() && self.supports_fork_batch
+    }
+
+    pub fn supports_padded_fork_batch(&self) -> bool {
+        self.supports_fork_batch() && self.supports_padded_fork_batch
     }
 
     pub fn supports_padded_batch(&self) -> bool {
@@ -747,13 +758,19 @@ impl Engine {
             && opts.max_batch_tokens.is_some()
             && (!self.supports_fork_batch()
                 || opts.cooperative_prefill
-                || opts.max_batch_padding_percent > 0)
+                || (opts.max_batch_padding_percent > 0 && !self.supports_padded_fork_batch()))
         {
             return Err(Error::Unsupported(
-                "cached-branch batching requires CPU Kev, equal lengths and no cooperative scheduling".into(),
+                "cached-branch batching requires CPU Kev, supported suffix padding and no cooperative scheduling".into(),
             ));
         }
-        if opts.max_batch_padding_percent > 0 && !self.supports_padded_batch() {
+        if opts.max_batch_padding_percent > 0
+            && !(if opts.prefix_cache {
+                self.supports_padded_fork_batch()
+            } else {
+                self.supports_padded_batch()
+            })
+        {
             return Err(Error::Unsupported(
                 "padded batching requires a supported CPU backend with original-length readouts"
                     .into(),

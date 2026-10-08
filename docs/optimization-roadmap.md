@@ -25,14 +25,14 @@ still times out. These variants remain unqualified.
 | O09 fused/bounded compute | CPU SiLU/multiply, causal query blocks and unexpanded grouped K/V available | FlashAttention and further fused native/device kernels |
 | O10 precision/calibration gates | Every real serving runtime requires fresh labeled conformance | Released CPU acceptance remains rejected/pending; no GPU checks |
 | O11 native Kev prefix forks | Available | Released CPU paired/labeled acceptance |
-| O12 dynamic batching | Equal-length collation and bounded CPU Qwen/ModernBERT/masked ONNX feature/whole-schema Clef right-padding and CPU Kev shared-prefix batches available | Integrated-head graph batching and device qualification |
+| O12 dynamic batching | Equal-length collation and bounded CPU Qwen/ModernBERT/masked ONNX feature/whole-schema Clef right-padding and CPU Kev equal/padded shared-prefix batches available | Integrated-head graph batching and device qualification |
 | O13 family head work | CPU Clef vectorized heads/grouped spans, optional Laya final marker queries and integrated ONNX F1 heads available | Released graph exports and Clef/Laya labeled qualification |
 | O14 concurrent execution contexts | CPU shared-weight replicas, including optional ONNX initializers, available | Released concurrent workloads, memory and affinity measurements |
 | O15 device buffers/graph replay | Optional stable CUDA ONNX I/O and bounded graph replay implemented; CPU ownership checks and CUDA compilation pass | Actual GPU capture/execution/calibration and released graph/performance qualification deferred |
 | O16 Candle device propagation | Optional CUDA loaders available | Actual GPU checks deferred |
 | O17 recurrent/conv buffers | CPU implementations available | Released profile acceptance rejected; parallel device kernels open |
 | O18 quantization | Experimental Candle and llama.cpp CPU Q8/Q4 packages available | Portable Q8/Q4 fit/held-out job staged; host currently unreachable; other families open |
-| O19 retained/paged prefixes | Bounded immutable CPU snapshots and copy-on-write CPU KV pages and equal-suffix branch collation available | Direct paged-attention kernels, mixed-prefix collation and tenant policies |
+| O19 retained/paged prefixes | Bounded immutable CPU snapshots and copy-on-write CPU KV pages and equal/padded-suffix branch collation available | Direct paged-attention kernels, mixed-prefix collation and tenant policies |
 | O20 Metal | Skipped by user | Apple work deferred |
 | O21 llama.cpp | CPU F2/F3, full-state forks/chunks, bounded native batches and pending FP32/FP16/Q8/Q4 exports available | Released fitting/qualification and graph-side readout efficiency |
 | O22 shared bases/residency | Immutable CPU bases, lazy residency/preload/idle eviction and standard CPU FP32 F2/F3 runtime LoRA available | Released residency/calibration measurements, mixed-adapter collation and other profiles |
@@ -43,6 +43,25 @@ still times out. These variants remain unqualified.
 | O27 browser WASM/WebGPU | Separate CPU WASM F1 integrated-head SDK, packaging and fresh labeled gates available | Released exports/calibration, other families and browser scheduling; WebGPU deferred |
 
 ## Implemented increments
+
+### Bounded CPU Kev mixed-length prefix batches
+
+O12/O19 now extend shared-prefix native collation to causal right-padded suffixes.
+Original typed marker/final-decision positions remain relative to each real
+suffix, and all padded continuation state is discarded. Complete contexts bound
+private KV workspace while padding limits count only newly submitted suffix
+positions; retained prefix storage cannot disguise padding overhead. Dedicated
+padded-prefix counters and unchanged fresh labeled/paired gates require actual
+mixed cached work.
+
+Original frozen typed Kev requests qualify at fixture FP32/FP16 without changing
+their question lengths or probabilities. Native pages/chunks/kernels/standard
+FP32 runtime LoRA, replica/retention semantics and packed-profile paired checks
+retain their earlier limits. Released calibration/performance remains rejected,
+pending or unmeasured. Mixed-prefix/cross-request collation and cooperative
+branch scheduling remain open. No Apple or actual GPU checks ran.
+[Evidence and limits](verification/fork-padding-cpu-20261008/README.md).
+
 
 ### CPU Kev native batches from one immutable prefix
 

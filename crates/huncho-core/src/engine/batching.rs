@@ -8,6 +8,18 @@ pub(super) fn padded_groups(
     percent: usize,
     limits: BatchLimits,
 ) -> Vec<Vec<(usize, ForwardInput)>> {
+    padded_groups_with_prefix(inputs, budget, percent, limits, 0)
+}
+
+/// Charge complete KV contexts, but bound padding against only newly submitted
+/// suffix positions. Prefix residency cannot hide padding cost.
+pub(super) fn padded_groups_with_prefix(
+    inputs: Vec<(usize, ForwardInput)>,
+    budget: usize,
+    percent: usize,
+    limits: BatchLimits,
+    prefix: usize,
+) -> Vec<Vec<(usize, ForwardInput)>> {
     let mut groups = Vec::new();
     let mut group: Vec<(usize, ForwardInput)> = Vec::new();
     let mut longest = 0;
@@ -17,13 +29,16 @@ pub(super) fn padded_groups(
         let length = input.1.tokens.len();
         let new_longest = longest.max(length);
         let physical = new_longest.checked_mul(group.len() + 1);
+        let workspace = new_longest
+            .checked_add(prefix)
+            .and_then(|n| n.checked_mul(group.len() + 1));
         let new_logical = logical.checked_add(length);
         let cost = input.1.positions.len().saturating_add(1);
         let new_readouts = readouts.checked_add(cost);
         let fits = physical
             .zip(new_logical)
             .is_some_and(|(physical, logical)| {
-                physical <= budget
+                workspace.is_some_and(|n| n <= budget)
                     && new_readouts
                         .is_some_and(|n| limits.max_readouts.map_or(true, |max| n <= max))
                     && (physical - logical) as u128 * 100 <= physical as u128 * percent as u128
@@ -85,6 +100,31 @@ mod tests {
                 .map(Vec::len)
                 .collect::<Vec<_>>(),
             [64, 64, 1]
+        );
+    }
+
+    #[test]
+    fn cached_padding_bounds_suffix_work_separately_from_full_workspace() {
+        let input = || {
+            vec![
+                (0, ForwardInput::new(vec![1; 10], vec![0])),
+                (1, ForwardInput::new(vec![1; 20], vec![0])),
+            ]
+        };
+        let limits = BatchLimits::default();
+        // 10 padded positions / 40 submitted suffixes exceeds 24%, even
+        // though 10 / 240 complete KV slots would look cheap.
+        assert_eq!(
+            padded_groups_with_prefix(input(), 240, 24, limits, 100).len(),
+            2
+        );
+        assert_eq!(
+            padded_groups_with_prefix(input(), 240, 25, limits, 100).len(),
+            1
+        );
+        assert_eq!(
+            padded_groups_with_prefix(input(), 239, 25, limits, 100).len(),
+            2
         );
     }
 

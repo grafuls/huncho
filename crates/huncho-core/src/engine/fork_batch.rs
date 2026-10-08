@@ -1,4 +1,5 @@
 //! Whole-question CPU Kev suffix batches from one immutable state prefix.
+use super::batching::padded_groups_with_prefix;
 use super::*;
 use crate::backend::{BatchLimits, ForkBatchWork, PrefillWork};
 
@@ -53,9 +54,13 @@ impl Engine {
             let mut positions: Vec<_> = prompt.candidates.iter().map(|c| c.position).collect();
             positions.sort_unstable();
             positions.dedup();
-            let input = ForwardInput::new(std::mem::take(&mut prompt.tokens), positions)
+            let mut input = ForwardInput::new(std::mem::take(&mut prompt.tokens), positions)
                 .with_qtype(prompt.qtype);
             if cached {
+                input.tokens = input.tokens.split_off(prefix_len);
+                for position in &mut input.positions {
+                    *position -= prefix_len;
+                }
                 for candidate in &mut prompt.candidates {
                     candidate.position -= prefix_len;
                 }
@@ -96,50 +101,65 @@ impl Engine {
             None => None,
         };
         let mut outputs = vec![None; jobs.len()];
+        let mut separated: BTreeMap<bool, Vec<(usize, ForwardInput)>> = BTreeMap::new();
         for ((cached, _), bucket) in buckets {
+            separated.entry(cached).or_default().extend(bucket);
+        }
+        for (cached, bucket) in separated {
             // Reserve one handle for the parent. Charge full B*(prefix+suffix)
-            // before stripping tokens: KV materialization is not zero-cost.
+            // including retained prefix KV: materialization is not zero-cost.
             let limits = BatchLimits {
                 max_rows: self.batch_limits.max_rows.min(if cached { 63 } else { 64 }),
                 ..self.batch_limits
             };
-            for group in padded_groups(bucket, budget, 0, limits) {
+            for group in padded_groups_with_prefix(
+                bucket,
+                budget,
+                opts.max_batch_padding_percent,
+                limits,
+                if cached { prefix_len } else { 0 },
+            ) {
                 let (indices, mut inputs): (Vec<_>, Vec<_>) = group.into_iter().unzip();
                 let count = inputs.len();
+                let physical = count * inputs.iter().map(|i| i.tokens.len()).max().unwrap();
+                let padding = physical - inputs.iter().map(|i| i.tokens.len()).sum::<usize>();
                 let result = {
                     let mut backend = self
                         .backend
                         .lock()
                         .map_err(|_| Error::Backend("backend lock poisoned".into()))?;
                     if cached {
-                        for input in &mut inputs {
-                            input.tokens = input.tokens.split_off(prefix_len);
-                            for position in &mut input.positions {
-                                *position -= prefix_len;
-                            }
-                        }
                         let mut work = ForkBatchWork::default();
-                        let result = backend.forward_fork_batch(
-                            prefix.as_ref().unwrap().handle,
-                            inputs,
-                            &mut work,
-                        );
+                        let parent = prefix.as_ref().unwrap().handle;
+                        let result = if padding > 0 {
+                            backend.forward_padded_fork_batch(parent, inputs, &mut work)
+                        } else {
+                            backend.forward_fork_batch(parent, inputs, &mut work)
+                        };
                         stats.forward_calls += work.forward_calls;
                         stats.processed_tokens += work.processed_tokens;
                         stats.batch_calls += work.batch_calls;
                         stats.fork_batch_calls += work.batch_calls;
+                        stats.padded_batch_calls += work.padded_batch_calls;
+                        stats.fork_padded_batch_calls += work.padded_batch_calls;
+                        stats.padded_tokens += work.padded_tokens;
                         stats.cache_forks += work.cache_forks;
                         stats.reused_prefix_tokens += work.cache_forks * prefix_len as u64;
                         result
                     } else {
                         stats.forward_calls += 1;
-                        stats.processed_tokens +=
-                            inputs.iter().map(|i| i.tokens.len() as u64).sum::<u64>();
+                        stats.processed_tokens += physical as u64;
+                        stats.padded_tokens += padding as u64;
+                        stats.padded_batch_calls += u64::from(padding > 0);
                         if count == 1 {
                             backend.forward(inputs.pop().unwrap()).map(|out| vec![out])
                         } else {
                             stats.batch_calls += 1;
-                            backend.forward_batch(inputs)
+                            if padding > 0 {
+                                backend.forward_padded_batch(inputs)
+                            } else {
+                                backend.forward_batch(inputs)
+                            }
                         }
                     }
                 }?;

@@ -249,8 +249,9 @@ The latter bounds padding as a percentage of physical positions, not logical
 API usage. Right padding retains causal valid readouts and uses each real final
 decision row. No prefix handles/retention enter these independent padded batches.
 CPU Kev has a separate equal-suffix `forward_fork_batch` path that materializes
-one immutable prefix into isolated complete-state rows; it cannot pad or retain
-suffixes. `--prefix-cache --max-batch-tokens N` charges complete contexts against
+one immutable prefix into isolated complete-state rows; it cannot retain
+suffixes. `forward_padded_fork_batch` additionally handles causal right-padding
+while retaining original marker/final-decision lengths. `--prefix-cache --max-batch-tokens N` charges complete contexts against
 its token budget and requires actual cached-batch qualification. GPU padding is unsupported. CPU ModernBERT/Laya and masked native ONNX feature
 graphs have separate original-length/masked paths. CPU Clef F5 now collates
 complete schemas with `--batch-max-requests`; each causal backbone row is

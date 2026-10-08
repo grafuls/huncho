@@ -272,11 +272,50 @@ fn cached_branch_cli_requires_actual_native_batches_and_fresh_labeled_gates() {
     let output = run_storage_profile(&tiny, "3", "7", "1", "16");
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("actual native batch"));
+    let mut original_labeled = suite.clone();
+    for case in original_labeled["cases"].as_array_mut().unwrap() {
+        for field in ["expected", "targets"] {
+            case[field]
+                .as_object_mut()
+                .unwrap()
+                .retain(|id, _| !id.ends_with("-duplicate"));
+        }
+        case["request"]["questions"]
+            .as_object_mut()
+            .unwrap()
+            .retain(|id, _| !id.ends_with("-duplicate"));
+    }
+    let mixed_path = tmp.path().join("original-mixed-typed-fixture.json");
+    std::fs::write(&mixed_path, serde_json::to_vec(&original_labeled).unwrap()).unwrap();
+    let mut mixed = labeled.clone();
+    mixed.extend(["--max-batch-padding-percent", "25"]);
+    let gold = mixed.iter().position(|s| *s == "--golden").unwrap() + 1;
+    mixed[gold] = mixed_path.to_str().unwrap();
+    let write = mixed
+        .iter()
+        .position(|s| *s == "--write-qualification")
+        .unwrap();
+    mixed.drain(write..write + 2);
+    let output = run_storage_profile(&mixed, "3", "7", "1", "16");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(report["work"]["fork_padded_batch_calls"].as_u64().unwrap() > 0);
+    assert!(report["work"]["padded_tokens"].as_u64().unwrap() > 0);
+    assert!(
+        report["optimization_parity"]["max_prob_delta"]
+            .as_f64()
+            .unwrap()
+            <= 1e-4
+    );
     let mut invalid = serve.to_vec();
-    invalid.extend(["--max-batch-padding-percent", "10"]);
+    invalid.push("--cooperative-prefill");
     let output = run_storage_profile(&invalid, "3", "7", "1", "16");
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("equal lengths"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cooperative prefill"));
 }
 
 #[test]
