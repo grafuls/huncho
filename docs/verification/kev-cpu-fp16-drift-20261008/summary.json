@@ -1,0 +1,57 @@
+{
+  "qualified": false,
+  "source": "8f09121",
+  "disposition": "CPU FP16 diagnostic still exceeds the unchanged probability delta limit on selected worst cases.",
+  "diagnostic_temperature": 2.40605,
+  "diagnostic_cases": [
+    {
+      "id": "choice-eval-211",
+      "cpu_fp16_vs_reference_max_prob_delta_fp64": 0.0025372543865949115
+    },
+    {
+      "id": "noul-eval-255",
+      "cpu_fp16_vs_reference_max_prob_delta_fp64": 0.00044900730735597527
+    },
+    {
+      "id": "noul-eval-625",
+      "cpu_fp16_vs_reference_max_prob_delta_fp64": 0.0005633251844517906
+    },
+    {
+      "id": "noul-eval-1703",
+      "cpu_fp16_vs_reference_max_prob_delta_fp64": 0.0008737914165098948
+    },
+    {
+      "id": "noul-eval-1717",
+      "cpu_fp16_vs_reference_max_prob_delta_fp64": 0.0012607526985718431
+    },
+    {
+      "id": "noul-eval-2870",
+      "cpu_fp16_vs_reference_max_prob_delta_fp64": 0.0028150126422173405
+    },
+    {
+      "id": "score-eval-19651",
+      "cpu_fp16_vs_reference_max_prob_delta_fp64": 0.03170219660729301
+    },
+    {
+      "id": "score-eval-40906",
+      "cpu_fp16_vs_reference_max_prob_delta_fp64": 0.0018881964561535541
+    }
+  ],
+  "max_prob_delta_fp64": 0.03170219660729301,
+  "cases_exceeding_0_001": 5,
+  "limits": [
+    "Eight cases selected from the rejected 1,536-case held-out CPU FP32 suite; forbidden for fitting.",
+    "Baseline CPU FP16, no optional kernels, no new GPU execution. Reference is the previously frozen CUDA FP16 suite.",
+    "Offline FP64 softmax at the source temperature is diagnostic, not full runtime conformance or temperature refit.",
+    "This does not identify the cause of the CPU/reference drift or qualify any CPU runtime, optimization or quantization.",
+    "Capture accounting in this older binary records only the final row, not aggregate physical work.",
+    "No model, calibration, golden vector or threshold changed. No throughput claim."
+  ],
+  "evidence_sha256": {
+    "capture-identity.json": "e1e7394f23ad34e492e8365a8589890e190cdc42649ebf3b58fac11369266403",
+    "diagnostic-logits.jsonl": "dad24803500b6482dc254e57a375e5fa0229482847c4e70f52a42d98c1d10ff5",
+    "job.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "reference.json": "cc88abe512d7bc83aa222200a4c22b4bf64a0710b94c762d4c6852b786af810f",
+    "run.sh": "ffafebcf49e05a030c85217672de7e12dd03f044f0915344109980cf8233a934"
+  }
+}

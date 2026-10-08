@@ -1,0 +1,108 @@
+{
+  "scope": "held-out diagnosis only; forbidden for temperature fitting",
+  "golden_sha256": "82744929277493ed765080346a5cce0015ad9a9c55f6ea61218e6a6fa71beacb",
+  "cases": [
+    {
+      "id": "choice-eval-211",
+      "expected": {
+        "question": {
+          "negative": 0.6616355,
+          "positive": 0.33836448
+        }
+      },
+      "targets": {
+        "question": "negative"
+      }
+    },
+    {
+      "id": "noul-eval-255",
+      "expected": {
+        "question": {
+          "yes": 0.54676425,
+          "no": 0.45323575000000005
+        }
+      },
+      "targets": {
+        "question": "yes"
+      }
+    },
+    {
+      "id": "noul-eval-625",
+      "expected": {
+        "question": {
+          "yes": 0.58597076,
+          "no": 0.41402923999999997
+        }
+      },
+      "targets": {
+        "question": "yes"
+      }
+    },
+    {
+      "id": "noul-eval-1703",
+      "expected": {
+        "question": {
+          "yes": 0.5690142,
+          "no": 0.4309858
+        }
+      },
+      "targets": {
+        "question": "yes"
+      }
+    },
+    {
+      "id": "noul-eval-1717",
+      "expected": {
+        "question": {
+          "yes": 0.3529592,
+          "no": 0.6470408000000001
+        }
+      },
+      "targets": {
+        "question": "no"
+      }
+    },
+    {
+      "id": "noul-eval-2870",
+      "expected": {
+        "question": {
+          "yes": 0.48964104,
+          "no": 0.51035896
+        }
+      },
+      "targets": {
+        "question": "no"
+      }
+    },
+    {
+      "id": "score-eval-19651",
+      "expected": {
+        "question": {
+          "0": 0.18906546,
+          "1": 0.30228683,
+          "2": 0.43155918,
+          "3": 0.06399387,
+          "4": 0.013094656
+        }
+      },
+      "targets": {
+        "question": "0"
+      }
+    },
+    {
+      "id": "score-eval-40906",
+      "expected": {
+        "question": {
+          "0": 0.0064371065,
+          "1": 0.02032508,
+          "2": 0.32094562,
+          "3": 0.5289344,
+          "4": 0.12335775
+        }
+      },
+      "targets": {
+        "question": "2"
+      }
+    }
+  ]
+}

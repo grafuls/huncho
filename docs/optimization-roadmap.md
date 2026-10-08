@@ -4,6 +4,18 @@ This tracks the staged implementation of [the research report](optimization.md).
 
 ## Implemented increments
 
+### CPU FP16 drift diagnosis
+
+The original CPU FP16 path was rerun on the same eight held-out diagnostic
+cases selected from the failed CPU FP32 suite. Five exceed the unchanged
+0.001 probability delta limit; the largest offline FP64 softmax delta at the
+unchanged source temperature is 0.0317022. This is selected-case diagnosis,
+not a complete conformance run or a refit. It shows that switching the CPU
+baseline to FP16 does not remove the observed drift against the older frozen
+CUDA FP16 reference. The cause remains unresolved, and no CPU profile is
+promoted. [Raw logits, identities and analysis](verification/kev-cpu-fp16-drift-20261008/summary.json)
+retain the evidence without corpus text or a new GPU check.
+
 ### Readout, allocation and calibration checks
 
 - O01: request each readout position once, keeping candidate order in the head.
