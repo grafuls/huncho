@@ -41,8 +41,16 @@ fn native_cpu_pointer_matches_frozen_upstream_and_resets_state() {
     let m = manifest();
     let golden: serde_json::Value =
         serde_json::from_slice(&std::fs::read(root.join("golden.json")).unwrap()).unwrap();
-    let mut llama =
-        LlamaCppBackend::load(root, &m, "gguf-f32", LlamaOptions { threads: 2 }).unwrap();
+    let mut llama = LlamaCppBackend::load(
+        root,
+        &m,
+        "gguf-f32",
+        LlamaOptions {
+            threads: 2,
+            ..Default::default()
+        },
+    )
+    .unwrap();
     assert!(llama.capabilities().supports_fork);
     assert!(!llama.supports_batch());
     assert_eq!(llama.capabilities().extra["device"], "CPU");
@@ -96,6 +104,176 @@ fn native_cpu_pointer_matches_frozen_upstream_and_resets_state() {
     let mut cached = ForwardInput::new(vec![1], vec![0]);
     cached.retain_cache = true;
     assert!(llama.forward(cached).is_err());
+}
+
+#[test]
+fn native_independent_batches_isolate_sequences_and_preserve_valid_readouts() {
+    use huncho_core::calibration::argmax;
+    let root = Path::new("tests/fixtures/tiny_kev");
+    for dtype in ["gguf-f32", "gguf-f16"] {
+        let mut m = manifest();
+        let a = &mut m.backbone.artifacts.get_mut(&BackendId::LlamaCpp).unwrap()[0];
+        a.dtype = dtype.into();
+        a.path = format!("../llamacpp/kev-{}.gguf", dtype.trim_start_matches("gguf-"));
+        let mut backend = LlamaCppBackend::load(
+            root,
+            &m,
+            dtype,
+            LlamaOptions {
+                batch_rows: 4,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mut replica = backend.replica().unwrap();
+        assert!(backend.supports_batch());
+        assert_eq!(backend.batch_limits().max_rows, 4);
+        assert_eq!(backend.capabilities().extra["llamacpp_batch_rows"], "4");
+        for length in [5, 47, 512] {
+            let inputs: Vec<_> = (0..4)
+                .map(|row| {
+                    ForwardInput::new(
+                        (0..length)
+                            .map(|i| ((i * 13 + row * 31 + 7) % 380) as u32)
+                            .collect(),
+                        vec![length - 1, 1, length - 1, 0],
+                    )
+                })
+                .collect();
+            let independent: Vec<_> = inputs
+                .iter()
+                .map(|i| backend.forward(i.clone()).unwrap())
+                .collect();
+            let batch = backend.forward_batch(inputs.clone()).unwrap();
+            let other = replica.forward_batch(inputs.clone()).unwrap();
+            for ((actual, expected), other) in batch.iter().zip(&independent).zip(other) {
+                assert_eq!(actual.positions(), expected.positions());
+                assert_eq!(actual.values().data(), other.values().data());
+                let p = calibrate(actual.values().data(), 2.40605).unwrap();
+                let reference = calibrate(expected.values().data(), 2.40605).unwrap();
+                assert_eq!(argmax(&p), argmax(&reference));
+                assert!(p.iter().zip(reference).all(|(a, b)| (a - b).abs() <= 1e-4));
+            }
+            assert!(batch[0]
+                .values()
+                .data()
+                .iter()
+                .zip(batch[1].values().data())
+                .any(|(a, b)| (a - b).abs() > 1e-4));
+            let mut reversed = inputs.clone();
+            reversed.reverse();
+            for (actual, expected) in backend
+                .forward_batch(reversed)
+                .unwrap()
+                .iter()
+                .rev()
+                .zip(&batch)
+            {
+                assert!(actual
+                    .values()
+                    .data()
+                    .iter()
+                    .zip(expected.values().data())
+                    .all(|(a, b)| (a - b).abs() < 2e-4));
+            }
+            let again = backend.forward(inputs[0].clone()).unwrap();
+            assert_eq!(again.values().data(), independent[0].values().data());
+        }
+        let parent = backend.prefill(&[1, 2, 3]).unwrap();
+        let child = backend.fork(parent).unwrap();
+        let input = ForwardInput::new(vec![4, 5, 6], vec![2, 0]);
+        let mut branched = input.clone();
+        branched.fork_from = Some(child);
+        let before = backend.forward(branched.clone()).unwrap();
+        backend.forward_batch(vec![input.clone(); 4]).unwrap();
+        let replay = backend.fork(parent).unwrap();
+        branched.fork_from = Some(replay);
+        assert_eq!(
+            before.values().data(),
+            backend.forward(branched).unwrap().values().data()
+        );
+        for handle in [parent, child, replay] {
+            backend.release_cache(handle).unwrap();
+        }
+        let mut cached = input.clone();
+        cached.fork_from = Some(parent);
+        for invalid in [
+            vec![],
+            vec![input.clone(); 5],
+            vec![input.clone(), ForwardInput::new(vec![1], vec![0])],
+            vec![input.clone(), ForwardInput::new(vec![384; 3], vec![0])],
+            vec![input.clone(), ForwardInput::new(vec![1; 3], vec![3])],
+            vec![input.clone(), cached],
+            vec![ForwardInput::new(vec![1; 3], vec![0; 128]); 2],
+        ] {
+            assert!(backend.forward_batch(invalid).is_err());
+        }
+        assert!(backend
+            .forward_batch(vec![input.clone(), input.with_logit_codes(vec![36])])
+            .is_err());
+    }
+    let m = manifest();
+    for batch_rows in [0, 9] {
+        assert!(LlamaCppBackend::load(
+            root,
+            &m,
+            "gguf-f32",
+            LlamaOptions {
+                batch_rows,
+                ..Default::default()
+            }
+        )
+        .is_err());
+    }
+}
+
+#[test]
+fn native_f3_batches_keep_per_sequence_position_and_code_order() {
+    let root = Path::new("tests/fixtures/tiny_kev");
+    let mut m = manifest();
+    m.family = Family::F3;
+    m.head.kind = HeadKind::CandidateLogit;
+    m.f3 = Some(F3Config {
+        candidate_codes: vec!["A".into(), "B".into()],
+        candidate_token_ids: vec![36, 37],
+        system_prompt: String::new(),
+        prompt_code_sha256: "fixture".into(),
+        max_input_tokens: 512,
+    });
+    for dtype in ["gguf-f32", "gguf-f16"] {
+        let a = &mut m.backbone.artifacts.get_mut(&BackendId::LlamaCpp).unwrap()[0];
+        a.dtype = dtype.into();
+        a.path = format!("../llamacpp/kev-{}.gguf", dtype.trim_start_matches("gguf-"));
+        let mut backend = LlamaCppBackend::load(
+            root,
+            &m,
+            dtype,
+            LlamaOptions {
+                batch_rows: 2,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mut inputs = vec![
+            ForwardInput::new(vec![1, 31, 14, 63, 2], vec![4, 1, 4]),
+            ForwardInput::new(vec![63, 2, 31, 14, 1], vec![0, 4, 0]),
+        ];
+        inputs[1].logit_codes = Some(vec![37, 36, 37]);
+        let reference: Vec<_> = inputs
+            .iter()
+            .map(|i| backend.forward(i.clone()).unwrap())
+            .collect();
+        for (actual, expected) in backend.forward_batch(inputs).unwrap().iter().zip(reference) {
+            assert_eq!(actual.positions(), expected.positions());
+            assert_eq!(actual.values().shape(), expected.values().shape());
+            assert!(actual
+                .values()
+                .data()
+                .iter()
+                .zip(expected.values().data())
+                .all(|(a, b)| (a - b).abs() < 2e-4));
+        }
+    }
 }
 
 #[test]
@@ -275,6 +453,16 @@ fn pinned_cpu_quantization_preserves_fp32_readouts_and_runs_actual_packed_tensor
         )]);
         let mut native =
             LlamaCppBackend::load(dir.path(), &m, dtype, LlamaOptions::default()).unwrap();
+        let mut batched = LlamaCppBackend::load(
+            dir.path(),
+            &m,
+            dtype,
+            LlamaOptions {
+                batch_rows: 2,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         let mut replica = native.replica().unwrap();
         assert!(native
             .capabilities()
@@ -297,6 +485,17 @@ fn pinned_cpu_quantization_preserves_fp32_readouts_and_runs_actual_packed_tensor
                     native.forward(input.clone()).unwrap().values().data()
                 );
                 let actual = calibrate(out.values().data(), 2.40605).unwrap();
+                for output in batched
+                    .forward_batch(vec![input.clone(), input.clone()])
+                    .unwrap()
+                {
+                    let p = calibrate(output.values().data(), 2.40605).unwrap();
+                    assert_eq!(
+                        huncho_core::calibration::argmax(&p),
+                        huncho_core::calibration::argmax(&actual)
+                    );
+                    assert!(p.iter().zip(&actual).all(|(a, b)| (a - b).abs() <= 1e-4));
+                }
                 if input.positions.iter().all(|&p| p >= 3) {
                     let parent = native.prefill(&input.tokens[..3]).unwrap();
                     let branch = native.fork(parent).unwrap();

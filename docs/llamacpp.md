@@ -70,8 +70,32 @@ retention uses a caller budget of 0–512 MiB and at most 16 exact token prefixe
 evicts FIFO, and defaults to zero. Clearing retention keeps live handles valid.
 Oversized snapshots fail explicitly; no tokens or cache state are truncated.
 This is CPU state-copy reuse, not paging or native multi-sequence attention.
-Copying a large recurrent state can outweigh prefill savings. No native request
-batches, cooperative chunks or multi-adapter attachment are exposed yet.
+Copying a large recurrent state can outweigh prefill savings. Cooperative
+chunks and runtime multi-adapter attachment remain open.
+
+`HUNCHO_LLAMA_BATCH_ROWS=2..8` explicitly allocates independent native sequence
+slots; default `1` exposes no batch path and preserves the original context.
+This multiplies KV/recurrent capacity and increases graph scratch memory, even
+when an individual call uses fewer rows. Native equal-length batches assign
+each token one sequence ID and its own zero-based position, so attention and
+recurrence cannot cross requests. Selected pointer/LM readouts use their
+original row positions and candidate order. Each call clears all native state;
+saved immutable prefix snapshots survive batch/independent interleaving.
+
+The engine additionally honors this runtime's configured sequence limit and
+256 charged readouts across the entire call (candidate positions plus a possible
+final decision per row). It splits groups before those bounds and the caller's
+token budget, preserving oversized singletons. No padding or cached branch
+batching is exposed. Physical work is one native prefill per batch, with unchanged
+logical wire usage. The sequence count and native profile enter qualification
+metadata and environment identity; batch serving still requires actual nonzero
+batches, paired/external gates and complete held-out observed labels.
+
+```bash
+HUNCHO_DEVICE=cpu HUNCHO_LLAMA_BATCH_ROWS=4 huncho conform \
+  --model /path/to/gguf-package --backend llamacpp \
+  --golden /path/to/unchanged-heldout.json --max-batch-tokens 8192 --json
+```
 
 ```bash
 HUNCHO_DEVICE=cpu HUNCHO_LLAMA_THREADS=4 huncho conform \
@@ -170,7 +194,15 @@ also records successful official conversion/native loads with the synthetic
 backbone and released tokenizer, pending entries and rejection of unrefitted
 serving. This is a packaging check with only two packed fixture projections.
 
+FP32/FP16 native batch tests cover distinct sequences, final/earlier/repeated
+readouts, four full-length 512-token prompts, row reversal, isolated replicas,
+pointer and selected/full F3 logits, prefix replay after batches, invalid rows
+and allocation bounds. CLI conformance repeats every unchanged upstream fixture
+case under a distinct ID to exercise cross-request equal shapes; it retains
+unlabeled diagnostic status and rejects invalid slot configuration. This checks
+native integration and arithmetic, not observed outcome calibration.
+
 No full released-model fit/held-out qualification, CPU performance claim or
-GPU/Apple check is included. Larger contexts, native multi-sequence batching, graph-side
+GPU/Apple check is included. Larger contexts, graph-side
 candidate projection, ONNX-independent heads and additional model families
 remain separate roadmap work.

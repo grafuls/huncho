@@ -69,6 +69,23 @@ pub struct PrefillWork {
     pub chunked_prefills: u64,
 }
 
+/// Hard native batch allocation limits, in addition to the caller token budget.
+/// Each input is conservatively charged `positions.len() + 1` readout rows,
+/// including a possible final decision row. Oversized singletons run independently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BatchLimits {
+    pub max_rows: usize,
+    pub max_readouts: Option<usize>,
+}
+impl Default for BatchLimits {
+    fn default() -> Self {
+        Self {
+            max_rows: 64,
+            max_readouts: None,
+        }
+    }
+}
+
 impl ForwardInput {
     pub fn new(tokens: Vec<u32>, positions: Vec<usize>) -> Self {
         ForwardInput {
@@ -185,6 +202,10 @@ pub trait Backend: Send + Sync {
     /// backbone call. This does not imply padding or cached-branch batching.
     fn supports_batch(&self) -> bool {
         false
+    }
+
+    fn batch_limits(&self) -> BatchLimits {
+        BatchLimits::default()
     }
 
     /// Run up to 64 independent equal-length sequences, returning one output

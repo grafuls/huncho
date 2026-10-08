@@ -32,7 +32,7 @@ also show drift. Packed CPU fitting/held-out evaluation is still running.
 | O18 quantization | Experimental Candle and llama.cpp CPU Q8/Q4 packages available | Portable Q8/Q4 fit/held-out job running; other families open |
 | O19 retained/paged prefixes | Bounded immutable CPU snapshots available | Paging, branch collation and tenant policies |
 | O20 Metal | Skipped by user | Apple work deferred |
-| O21 llama.cpp | CPU F2/F3, bounded full-state F2 prefix forks and pending FP32/FP16/Q8/Q4 exports available | Native batches and released fitting/qualification |
+| O21 llama.cpp | CPU F2/F3, full-state F2 forks, bounded native batches and pending FP32/FP16/Q8/Q4 exports available | Cooperative chunks and released fitting/qualification |
 | O22 shared bases/residency | Immutable CPU bases shared across isolated merges | Lazy resident loading/eviction and runtime LoRA dispatch |
 | O23 vLLM custom readouts | Open | Actual no-decode family implementation and qualification |
 | O24 distributed/sharded inference | Open | Implementation; actual multi-GPU qualification deferred |
@@ -41,6 +41,32 @@ also show drift. Packed CPU fitting/held-out evaluation is still running.
 | O27 browser WASM/WebGPU | Open | Separate actual browser runtime, packaging and gates |
 
 ## Implemented increments
+
+### Bounded native llama.cpp batches
+
+`HUNCHO_LLAMA_BATCH_ROWS=2..8` adds explicit isolated native sequence slots for
+equal-length CPU F2/F3 batches. Default one preserves the previous context/path.
+KV/recurrent and scratch allocations grow with slot count; model/head weights
+remain immutable and shared with replicas. Every token uses an explicit sequence
+ID and original position. Readouts scatter using original marker/decision/code
+order; no pooling, generated tokens, padding or branch collation is introduced.
+
+Backend batch limits now also constrain the engine planner. This runtime limits
+the whole call to 256 charged readouts and its configured slots, in addition to
+the caller's physical token budget. Groups split without discarding candidates;
+large singletons remain independent. Native batch errors clear scratch state,
+and immutable prefix handles survive successful or failed independent batches.
+Qualification identity binds sequence count and native profile. External,
+paired, nonvacuous batch and complete observed-label serving gates remain fixed.
+
+Actual CPU FP32/FP16 fixture tests exercise four distinct full-context sequences,
+pointer and full/selected F3 logits, repeated/reverse readouts, row permutation,
+replicas, prefix replay and invalid/bounded calls. CLI checks use repeated
+unchanged fixture cases to create cross-request equal shapes and preserve the
+unlabeled diagnostic disposition. No released calibration or speed claim follows.
+The full `llamacpp,clef,qualification` workspace passes, and actual native Q8/Q4
+batch diagnostics pass at the unchanged fixture temperature. Packed entries
+remain unrefitted numerical fixtures; these checks do not permit serving them.
 
 ### Bounded CPU mixed-length batches
 

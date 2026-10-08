@@ -29,10 +29,16 @@ const MAX_OUTPUTS: usize = 256;
 pub struct LlamaOptions {
     /// Fixed CPU worker count per context, including prefill (1..=256).
     pub threads: usize,
+    /// Native independent sequence slots (1..=8). One preserves the default
+    /// context; larger values explicitly multiply KV/recurrent allocations.
+    pub batch_rows: usize,
 }
 impl Default for LlamaOptions {
     fn default() -> Self {
-        Self { threads: 1 }
+        Self {
+            threads: 1,
+            batch_rows: 1,
+        }
     }
 }
 
@@ -78,6 +84,8 @@ pub struct LlamaCppBackend {
     tokens: Vec<i32>,
     outputs: Vec<i8>,
     positions: Vec<i32>,
+    sequence_ids: Vec<i32>,
+    sequence_counts: Vec<i32>,
     prefixes: cache::Prefixes,
 }
 
@@ -97,12 +105,13 @@ impl LlamaCppBackend {
             ));
         }
         if !(1..=256).contains(&options.threads)
+            || !(1..=8).contains(&options.batch_rows)
             || manifest.backbone.max_context == 0
             || manifest.backbone.max_context > 65536
             || manifest.prompt_contract.max_options >= MAX_OUTPUTS
         {
             return Err(Error::Request(
-                "llama.cpp requires 1..256 CPU threads, 1..65536 context and at most 255 options"
+                "llama.cpp requires 1..256 CPU threads, 1..8 batch rows, 1..65536 context and at most 255 options"
                     .into(),
             ));
         }
@@ -206,6 +215,13 @@ impl LlamaCppBackend {
         if let Some(profile) = quantization {
             extra.insert("weight_quantization".into(), profile);
         }
+        if options.batch_rows > 1 {
+            extra.insert("llamacpp_batch_rows".into(), options.batch_rows.to_string());
+            extra.insert(
+                "llamacpp_batch_execution".into(),
+                "cpu-independent-sequences-v1".into(),
+            );
+        }
         Ok(Self {
             context,
             readout: Arc::new(readout),
@@ -222,6 +238,8 @@ impl LlamaCppBackend {
             tokens: Vec::new(),
             outputs: Vec::new(),
             positions: Vec::new(),
+            sequence_ids: Vec::new(),
+            sequence_counts: Vec::new(),
             prefixes: cache::Prefixes::default(),
         })
     }
@@ -235,12 +253,16 @@ impl Context {
         options: LlamaOptions,
     ) -> Result<Self> {
         let mut params = unsafe { ffi::llama_context_default_params() };
-        params.n_ctx = context as u32;
-        params.n_batch = context as u32;
-        params.n_ubatch = context as u32;
-        params.n_seq_max = 1;
-        params.n_outputs_max = MAX_OUTPUTS.min(context) as u32;
-        params.n_outputs_max_per_seq = params.n_outputs_max;
+        let total = context
+            .checked_mul(options.batch_rows)
+            .ok_or_else(|| Error::Request("llama.cpp context allocation overflow".into()))?;
+        params.n_ctx = total as u32;
+        params.n_batch = total as u32;
+        params.n_ubatch = total as u32;
+        params.n_seq_max = options.batch_rows as u32;
+        // Bound vocabulary/hidden output allocations across the whole call.
+        params.n_outputs_max = MAX_OUTPUTS.min(total) as u32;
+        params.n_outputs_max_per_seq = MAX_OUTPUTS.min(context) as u32;
         params.n_threads = options.threads as i32;
         params.n_threads_batch = options.threads as i32;
         params.pooling_type = ffi::LLAMA_POOLING_TYPE_NONE;
@@ -290,6 +312,8 @@ impl Backend for LlamaCppBackend {
             tokens: Vec::new(),
             outputs: Vec::new(),
             positions: Vec::new(),
+            sequence_ids: Vec::new(),
+            sequence_counts: Vec::new(),
             prefixes: cache::Prefixes::default(),
         }))
     }
@@ -322,6 +346,117 @@ impl Backend for LlamaCppBackend {
         work: &mut PrefillWork,
     ) -> Result<CachedPrefill> {
         self.cached_prefill(tokens, max_bytes, work)
+    }
+    fn supports_batch(&self) -> bool {
+        self.options.batch_rows > 1
+    }
+    fn batch_limits(&self) -> huncho_core::backend::BatchLimits {
+        huncho_core::backend::BatchLimits {
+            max_rows: self.options.batch_rows,
+            max_readouts: Some(MAX_OUTPUTS),
+        }
+    }
+    fn forward_batch(&mut self, inputs: Vec<ForwardInput>) -> Result<Vec<ForwardOutput>> {
+        if !self.supports_batch() {
+            return Err(Error::Unsupported(
+                "llama.cpp batches require explicit sequence slots".into(),
+            ));
+        }
+        if inputs.is_empty() || inputs.len() > self.options.batch_rows {
+            return Err(Error::Request(
+                "llama.cpp batch exceeds configured sequence slots".into(),
+            ));
+        }
+        let length = inputs[0].tokens.len();
+        let readouts = inputs.iter().try_fold(0usize, |n, input| {
+            n.checked_add(input.positions.len())
+                .and_then(|n| n.checked_add(1))
+        });
+        if length == 0
+            || length > self.capabilities.max_context
+            || readouts.map_or(true, |n| n > MAX_OUTPUTS)
+            || inputs.iter().any(|input| {
+                input.tokens.len() != length
+                    || input.positions.is_empty()
+                    || input.positions.iter().any(|&p| p >= length)
+                    || input
+                        .tokens
+                        .iter()
+                        .any(|&t| t as usize >= self.context.model.vocab)
+                    || input.retain_cache
+                    || input.fork_from.is_some()
+                    || input.logit_codes.as_ref().is_some_and(|codes| {
+                        codes.is_empty()
+                            || codes
+                                .iter()
+                                .any(|&c| c as usize >= self.context.model.vocab)
+                            || matches!(self.readout.as_ref(), Readout::Pointer(_))
+                    })
+            })
+        {
+            return Err(Error::Request("llama.cpp batches require equal-length independent valid rows and at most 256 charged readouts".into()));
+        }
+        self.clear_memory()?;
+        let result = (|| {
+            self.tokens.clear();
+            self.positions.clear();
+            self.sequence_ids.clear();
+            self.sequence_counts.clear();
+            self.outputs.clear();
+            let total = length * inputs.len();
+            self.outputs.resize(total, 0);
+            self.sequence_counts.resize(total, 1);
+            for (row, input) in inputs.iter().enumerate() {
+                self.tokens.extend(input.tokens.iter().map(|&t| t as i32));
+                self.positions.extend((0..length).map(|p| p as i32));
+                self.sequence_ids
+                    .extend(std::iter::repeat(row as i32).take(length));
+                for &position in &input.positions {
+                    self.outputs[row * length + position] = 1;
+                }
+                if matches!(self.readout.as_ref(), Readout::Pointer(_)) {
+                    self.outputs[row * length + length - 1] = 1;
+                }
+            }
+            // Every token has exactly one explicit isolated sequence ID. All
+            // backing Vecs are complete and remain stable until decode returns.
+            let mut ids: Vec<_> = (0..total)
+                .map(|i| unsafe { self.sequence_ids.as_mut_ptr().add(i) })
+                .collect();
+            let batch = ffi::llama_batch {
+                n_tokens: total as i32,
+                token: self.tokens.as_mut_ptr(),
+                embd: ptr::null_mut(),
+                pos: self.positions.as_mut_ptr(),
+                n_seq_id: self.sequence_counts.as_mut_ptr(),
+                seq_id: ids.as_mut_ptr(),
+                logits: self.outputs.as_mut_ptr(),
+            };
+            let code = unsafe { ffi::llama_decode(self.context.pointer.as_ptr(), batch) };
+            if code != 0 {
+                return Err(Error::Backend(format!(
+                    "llama.cpp batch prefill failed with status {code}"
+                )));
+            }
+            let outputs = inputs
+                .iter()
+                .enumerate()
+                .map(|(row, input)| self.read_output(input, row * length))
+                .collect::<Result<Vec<_>>>()?;
+            if outputs
+                .iter()
+                .any(|o| o.values().data().iter().any(|v| !v.is_finite()))
+            {
+                return Err(Error::Backend(
+                    "llama.cpp returned non-finite batch logits".into(),
+                ));
+            }
+            Ok(outputs)
+        })();
+        if result.is_err() {
+            let _ = self.clear_memory();
+        }
+        result
     }
     fn forward(&mut self, input: ForwardInput) -> Result<ForwardOutput> {
         let n = input.tokens.len();
@@ -376,7 +511,7 @@ impl Backend for LlamaCppBackend {
                 offset,
                 matches!(self.readout.as_ref(), Readout::Pointer(_)),
             )?;
-            let output = self.read_output(&input)?;
+            let output = self.read_output(&input, 0)?;
             if output.values().data().iter().any(|v| !v.is_finite()) {
                 return Err(Error::Backend(
                     "llama.cpp returned non-finite raw logits".into(),
@@ -437,15 +572,15 @@ impl LlamaCppBackend {
         Ok(())
     }
 
-    fn read_output(&self, input: &ForwardInput) -> Result<ForwardOutput> {
+    fn read_output(&self, input: &ForwardInput, token_offset: usize) -> Result<ForwardOutput> {
         let n = input.tokens.len();
         let values = match self.readout.as_ref() {
             Readout::Pointer(head) => {
                 let hidden = self.context.model.hidden;
-                let decide = embedding(&self.context, n - 1)?;
+                let decide = embedding(&self.context, token_offset + n - 1)?;
                 let mut options = Vec::with_capacity(input.positions.len() * hidden);
                 for &position in &input.positions {
-                    options.extend(embedding(&self.context, position)?);
+                    options.extend(embedding(&self.context, token_offset + position)?);
                 }
                 let decide =
                     Tensor::from_vec(decide, (1, hidden), &Device::Cpu).map_err(candle_error)?;
@@ -466,7 +601,10 @@ impl LlamaCppBackend {
                 let mut values = Vec::new();
                 for &position in &input.positions {
                     let pointer = unsafe {
-                        ffi::llama_get_logits_ith(self.context.pointer.as_ptr(), position as i32)
+                        ffi::llama_get_logits_ith(
+                            self.context.pointer.as_ptr(),
+                            (token_offset + position) as i32,
+                        )
                     };
                     if pointer.is_null() {
                         return Err(Error::Backend(

@@ -221,6 +221,14 @@ Mixed-length serving requires fresh complete labeled external/paired conformance
 and actual mixed-batch/padding coverage. Token, padded-token and mixed-batch
 counters describe submitted work; they do not demonstrate a speedup.
 
+CPU llama.cpp F2/F3 also supports native equal-length batches when explicitly
+loaded with `HUNCHO_LLAMA_BATCH_ROWS=2..8`. Default one keeps the original
+independent context. The planner honors the allocated sequence count and 256
+charged readouts per call as well as the token budget. Each native sequence has
+its own attention/recurrent state; saved prefix snapshots remain isolated.
+Slot count increases context memory and is bound to fresh qualification.
+See [llama.cpp execution limits](llamacpp.md).
+
 `huncho convert --backend candle` writes a manifest whose artifact is
 `model.safetensors`. The weights/config are fetched separately (e.g. `hf
 download convaiinnovations/laya model.safetensors` and copy

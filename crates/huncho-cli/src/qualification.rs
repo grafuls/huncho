@@ -277,6 +277,7 @@ impl ExecutionIdentity {
             "HUNCHO_ONNX_EP",
             "HUNCHO_ONNX_THREADS",
             "HUNCHO_LLAMA_THREADS",
+            "HUNCHO_LLAMA_BATCH_ROWS",
             "HUNCHO_ONNX_NATIVE_BATCH",
             "HUNCHO_ONNX_SHARED_INITIALIZERS",
             "HUNCHO_CPU_DELTA_RULE",

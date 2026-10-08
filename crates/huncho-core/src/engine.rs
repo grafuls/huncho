@@ -155,6 +155,7 @@ pub struct Engine {
     supports_fork: bool,
     supports_batch: bool,
     supports_padded_batch: bool,
+    batch_limits: crate::backend::BatchLimits,
     supports_resumable_prefill: bool,
     response_cache: Option<Arc<Mutex<ResponseCache>>>,
     prompt_cache: Option<Arc<Mutex<PromptCache>>>,
@@ -179,6 +180,10 @@ impl Engine {
         let supports_fork = capabilities.supports_fork;
         let supports_batch = backend.supports_batch();
         let supports_padded_batch = backend.supports_padded_batch();
+        let batch_limits = backend.batch_limits();
+        if !(1..=64).contains(&batch_limits.max_rows) || batch_limits.max_readouts == Some(0) {
+            return Err(Error::Backend("invalid native batch limits".into()));
+        }
         let supports_resumable_prefill = backend.supports_resumable_prefill();
         let device = capabilities
             .extra
@@ -198,6 +203,7 @@ impl Engine {
             supports_fork,
             supports_batch,
             supports_padded_batch,
+            batch_limits,
             supports_resumable_prefill,
             response_cache: None,
             prompt_cache: None,
@@ -227,6 +233,7 @@ impl Engine {
             || actual.supports_lora != expected.supports_lora
             || backend.supports_batch() != original.supports_batch()
             || backend.supports_padded_batch() != original.supports_padded_batch()
+            || backend.batch_limits() != original.batch_limits()
             || backend.supports_resumable_prefill() != original.supports_resumable_prefill()
         {
             return Err(Error::Backend(
@@ -247,6 +254,7 @@ impl Engine {
             supports_fork: self.supports_fork,
             supports_batch: self.supports_batch,
             supports_padded_batch: self.supports_padded_batch,
+            batch_limits: self.batch_limits,
             supports_resumable_prefill: self.supports_resumable_prefill,
             response_cache: self.response_cache.clone(),
             prompt_cache: self.prompt_cache.clone(),
@@ -934,30 +942,12 @@ impl Engine {
             jobs.push((id, question, prompt));
         }
         let mut outputs: Vec<Option<crate::backend::ForwardOutput>> = vec![None; jobs.len()];
-        let groups = if opts.max_batch_padding_percent > 0 {
-            padded_groups(
-                buckets.into_values().flatten().collect(),
-                budget,
-                opts.max_batch_padding_percent,
-            )
-        } else {
-            buckets
-                .into_iter()
-                .flat_map(|(length, bucket)| {
-                    let rows = (budget / length.max(1)).clamp(1, 64);
-                    let mut pending = bucket.into_iter();
-                    let mut groups = Vec::new();
-                    loop {
-                        let group: Vec<_> = pending.by_ref().take(rows).collect();
-                        if group.is_empty() {
-                            break;
-                        }
-                        groups.push(group);
-                    }
-                    groups
-                })
-                .collect()
-        };
+        let groups = padded_groups(
+            buckets.into_values().flatten().collect(),
+            budget,
+            opts.max_batch_padding_percent,
+            self.batch_limits,
+        );
         for group in groups {
             // An oversized singleton still runs independently, never silently
             // truncates. Exact-length bucketing needs no padding/mask changes.

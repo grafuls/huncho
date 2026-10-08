@@ -328,13 +328,24 @@ fn load_llamacpp(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Bo
         Err(std::env::VarError::NotPresent) => 1,
         Err(_) => return Err(Error::Package("invalid HUNCHO_LLAMA_THREADS".into())),
     };
+    let batch_rows = match std::env::var("HUNCHO_LLAMA_BATCH_ROWS") {
+        Ok(value) => value
+            .parse::<usize>()
+            .map_err(|_| Error::Package("HUNCHO_LLAMA_BATCH_ROWS must be in 1..8".into()))?,
+        Err(std::env::VarError::NotPresent) => 1,
+        Err(_) => return Err(Error::Package("invalid HUNCHO_LLAMA_BATCH_ROWS".into())),
+    };
     Ok(Box::new(huncho_backend::LlamaCppBackend::load(
         dir,
         manifest,
         dtype,
-        huncho_backend::llamacpp::LlamaOptions { threads },
+        huncho_backend::llamacpp::LlamaOptions {
+            threads,
+            batch_rows,
+        },
     )?))
 }
+
 #[cfg(not(feature = "llamacpp"))]
 fn load_llamacpp(_manifest: &ModelManifest, _dtype: &str, _dir: &Path) -> Result<Box<dyn Backend>> {
     Err(Error::Unsupported(

@@ -7,10 +7,14 @@ use std::{
     process::{Command, Output},
 };
 fn command(args: &[&str]) -> Output {
+    command_profile(args, 1)
+}
+fn command_profile(args: &[&str], batch_rows: usize) -> Output {
     Command::new(env!("CARGO_BIN_EXE_huncho"))
         .args(args)
         .env("HUNCHO_DEVICE", "cpu")
         .env("HUNCHO_LLAMA_THREADS", "2")
+        .env("HUNCHO_LLAMA_BATCH_ROWS", batch_rows.to_string())
         .env("RAYON_NUM_THREADS", "1")
         .env("CANDLE_NUM_THREADS", "1")
         .env_remove("HUNCHO_BACKEND")
@@ -160,6 +164,80 @@ fn real_cpu_runtime_selects_exact_dtype_and_keeps_numerical_and_labeled_acceptan
     assert!(prefix["work"]["cache_forks"].as_u64().unwrap() > 0);
     assert!(prefix["work"]["persistent_prefix_hits"].as_u64().unwrap() > 0);
     assert!(prefix["outcome_calibration"].is_null());
+    // Repeat every unchanged fixture case under a new ID to exercise equal
+    // shapes across distinct requests. No predictions or targets are added.
+    let data: Value = serde_json::from_slice(&std::fs::read(&golden).unwrap()).unwrap();
+    let mut repeated = Vec::new();
+    for case in data["cases"].as_array().unwrap() {
+        for copy in 0..2 {
+            let mut case = case.clone();
+            case["id"] = json!(format!("{}-{copy}", case["id"]));
+            repeated.push(case);
+        }
+    }
+    let batch_golden = temp.path().join("batch-golden.json");
+    std::fs::write(
+        &batch_golden,
+        serde_json::to_vec(&json!({"schema_version":"1.0","family":"F2","cases":repeated}))
+            .unwrap(),
+    )
+    .unwrap();
+    let batch_receipt = temp.path().join("batch-receipt.json");
+    let batch = command_profile(
+        &[
+            "conform",
+            "--model",
+            pkg.to_str().unwrap(),
+            "--golden",
+            batch_golden.to_str().unwrap(),
+            "--max-batch-tokens",
+            "2048",
+            "--batch-max-requests",
+            "2",
+            "--write-qualification",
+            batch_receipt.to_str().unwrap(),
+            "--json",
+        ],
+        2,
+    );
+    assert!(
+        batch.status.success(),
+        "{}",
+        String::from_utf8_lossy(&batch.stderr)
+    );
+    let batch: Value = serde_json::from_slice(&batch.stdout).unwrap();
+    assert_eq!(batch["passed"], true);
+    assert_eq!(
+        batch["execution_metadata"]["llamacpp_batch_execution"],
+        "cpu-independent-sequences-v1"
+    );
+    assert_eq!(batch["execution_metadata"]["llamacpp_batch_rows"], "2");
+    assert!(
+        batch["optimization_parity"]["max_prob_delta"]
+            .as_f64()
+            .unwrap()
+            <= 1e-4
+    );
+    assert_eq!(batch["optimization_parity"]["argmax_agreement"], 1.);
+    assert!(batch["work"]["batch_calls"].as_u64().unwrap() > 0);
+    assert!(batch["work"]["cross_request_batches"].as_u64().unwrap() > 0);
+    assert_eq!(batch["work"]["padded_tokens"], 0);
+    assert!(batch["outcome_calibration"].is_null());
+    let audit: Value = serde_json::from_slice(&std::fs::read(batch_receipt).unwrap()).unwrap();
+    assert_eq!(audit["outcome_gates_passed"], false);
+    fails(
+        command_profile(
+            &[
+                "bench",
+                "--model",
+                pkg.to_str().unwrap(),
+                "--iterations",
+                "1",
+            ],
+            0,
+        ),
+        "1..8 batch rows",
+    );
     let audit: Value = serde_json::from_slice(&std::fs::read(&receipt).unwrap()).unwrap();
     assert_eq!(audit["outcome_gates_passed"], false);
     assert!(std::fs::read_to_string(&receipt)
