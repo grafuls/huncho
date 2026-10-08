@@ -287,6 +287,7 @@ fn load_clef(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<dy
     Ok(Box::new(huncho_backend::ClefBackend::load(
         dir, manifest, dtype, huncho_backend::clef::device_from_env()?,
     )?.with_vectorized_head(bool_env("HUNCHO_CLEF_VECTOR_HEAD")?)
+        .with_grouped_pooling(bool_env("HUNCHO_CLEF_GROUPED_POOL")?)?
         .with_cpu_delta_rule(bool_env("HUNCHO_CPU_DELTA_RULE")?)?
         .with_cpu_causal_conv(bool_env("HUNCHO_CPU_CAUSAL_CONV")?)?))
 }

@@ -688,3 +688,26 @@ uses two distinct record IDs, three typed questions per record, both packed
 schemes and unchanged fixture token rows to require all six forwards and every
 submitted token position. Old in-flight fitting binaries retain their original
 identity; their partial work counters cannot support aggregate speed claims.
+
+## Grouped Clef option gathers and summaries (2026-10-08)
+
+The next O13 increment adds `HUNCHO_CLEF_GROUPED_POOL=1` on CPU. One compact
+lexical gather replaces one gather/cast per option; individual variable-length
+span means keep their original reduction axes. Routed option summaries are
+bucketed by exact cardinality, scored with BMM, softmaxed within each question
+and scattered into original field order. No token/candidate padding, schema
+splitting, vocabulary projection or cross-request F5 batch is introduced.
+This composes with the existing vectorized projections, while each option
+defaults off independently.
+
+Changed BMM/reduction shapes are an arithmetic profile, recorded as
+`joint_pool_execution=grouped-spans-summary-v1` in backend identity and receipts.
+The shared startup gate requires complete observed outcomes and all unchanged
+numerical/ECE checks, including when the source entry says `fit`. CPU fp32/fp16
+tests cover the original upstream requests and a mixed schema with 1/2/3/4
+options, repeated nonadjacent cardinality groups, multi-token descriptions,
+both projection profiles, three unchanged temperatures, option labels and
+logical usage. Probability agreement must remain <=1e-4 with matching argmax.
+This does not qualify the released Clef checkpoint or demonstrate throughput.
+The larger compact lexical temporary is a memory tradeoff; shared backbone and
+joint-field attention are unchanged. Actual GPU checks remain deferred.

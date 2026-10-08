@@ -286,3 +286,10 @@ while preserving schema routing and candidate order. Changed GEMM/reduction
 shapes require labeled startup qualification; metadata records
 `joint_head_execution=vectorized-v1`. CPU fixture parity passes at fp32/fp16;
 full released-model and GPU acceptance remain open.
+
+The independent `HUNCHO_CLEF_GROUPED_POOL=1` CPU profile gathers option lexical
+rows once and batches summary scoring by exact option count. Original span
+means, candidate order and complete-request F5 routing are preserved. It adds
+`joint_pool_execution=grouped-spans-summary-v1` and requires fresh complete
+labeled qualification. Both options default off; grouped gathers can increase
+temporary memory and have no released-model speed claim.

@@ -86,6 +86,23 @@ template `clef-native-v1`.
 
 ## Validation
 
+`HUNCHO_CLEF_GROUPED_POOL=1` enables CPU-only grouped option pooling (default
+off). It gathers all option token embeddings once, then keeps each original
+span mean. Summary scoring groups questions by their exact option count and
+restores original field order; it introduces no padding or schema splitting.
+It composes with `HUNCHO_CLEF_VECTOR_HEAD=1`. The compact lexical gather can
+retain more temporary rows than the scalar loop, so latency and peak memory
+depend on the schema. Backbone and joint-field attention still run once for
+the complete request.
+
+Metadata records `joint_pool_execution=grouped-spans-summary-v1`. Changed BMM
+and reduction shapes require fresh complete labeled startup qualification,
+even with a fitted source temperature. CPU fp32/fp16 fixtures exercise all
+typed questions, multi-token options, singleton and repeated nonadjacent
+cardinality groups, both projection modes and unchanged temperatures. This is
+fixture parity; full-checkpoint calibration and throughput remain unqualified.
+No GPU checks are performed for this profile.
+
 ```bash
 cargo test --workspace --features huncho-cli/clef --offline
 ./target/release/huncho conform --model Cloudflare/clef \

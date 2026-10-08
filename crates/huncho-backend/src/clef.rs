@@ -38,6 +38,7 @@ pub struct ClefBackend {
     device: Device,
     head_dtype: DType,
     vectorized_head: bool,
+    grouped_pooling: bool,
 }
 impl ClefBackend {
     pub fn load(dir: &Path, manifest: &ModelManifest, dtype: &str, device: Device) -> Result<Self> {
@@ -153,6 +154,7 @@ impl ClefBackend {
             device: device.clone(),
             head_dtype,
             vectorized_head: false,
+            grouped_pooling: false,
             capabilities: Capabilities {
                 id: BackendId::Clef,
                 dtype: dtype.into(),
@@ -166,6 +168,26 @@ impl ClefBackend {
                 ..Default::default()
             },
         })
+    }
+
+    /// Optional CPU option-span gathering and exact-cardinality summary BMMs.
+    /// This changes reduction/GEMM shapes and requires labeled qualification.
+    pub fn with_grouped_pooling(mut self, enabled: bool) -> Result<Self> {
+        if enabled && !self.device.is_cpu() {
+            return Err(Error::Unsupported(
+                "grouped Clef pooling currently supports CPU only".into(),
+            ));
+        }
+        self.grouped_pooling = enabled;
+        if enabled {
+            self.capabilities.extra.insert(
+                "joint_pool_execution".into(),
+                "grouped-spans-summary-v1".into(),
+            );
+        } else {
+            self.capabilities.extra.remove("joint_pool_execution");
+        }
+        Ok(self)
     }
 
     /// Optional CPU backbone recurrence profile; joint-head math is unchanged.
@@ -251,7 +273,13 @@ impl Backend for ClefBackend {
             .map_err(backend_error)?;
         let scores = self
             .head
-            .forward(&hidden, &self.lexical_weight, &record, self.vectorized_head)
+            .forward(
+                &hidden,
+                &self.lexical_weight,
+                &record,
+                self.vectorized_head,
+                self.grouped_pooling,
+            )
             .map_err(backend_error)?;
         let mut logits = BTreeMap::new();
         for (q, scores) in record.questions.iter().zip(scores) {

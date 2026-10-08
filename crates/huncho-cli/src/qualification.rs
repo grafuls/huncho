@@ -265,6 +265,7 @@ impl ExecutionIdentity {
             "HUNCHO_PROJECTION_CHUNK_ROWS",
             "HUNCHO_ATTENTION_FP32",
             "HUNCHO_CLEF_VECTOR_HEAD",
+            "HUNCHO_CLEF_GROUPED_POOL",
             "HUNCHO_ONNX_COMPACT_READOUT",
             "HUNCHO_ONNX_OUTPUT_BUFFER_BYTES",
             "HUNCHO_ONNX_EP",

@@ -76,6 +76,93 @@ fn vectorized_clef_head_preserves_probabilities_and_original_option_order_on_cpu
 }
 
 #[test]
+fn grouped_clef_pooling_preserves_mixed_cardinalities_and_span_boundaries_on_cpu() {
+    let root = Path::new(FIXTURE);
+    let manifest = ModelManifest::load(root.join("huncho-model.json")).unwrap();
+    let golden: Value =
+        serde_json::from_slice(&std::fs::read(root.join("golden.json")).unwrap()).unwrap();
+    let mut requests: Vec<SystemOneRequest> = golden["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|case| serde_json::from_value(case["request"].clone()).unwrap())
+        .collect();
+    // The two-option buckets are deliberately separated by other cardinalities.
+    // Multi-token descriptions exercise individual span means after one gather.
+    requests.push(serde_json::from_value(serde_json::json!({
+        "model": "tiny-clef", "state": {"issue": "two duplicate charges", "amount": 17},
+        "questions": {
+            "z_binary": {"type": "noul", "instructions": "Refund both charges?"},
+            "a_single": {"type": "choice", "instructions": "Only team?",
+                "criteria": {"billing": "The billing team handles duplicate charges"}},
+            "m_three": {"type": "score", "instructions": "How urgent?",
+                "criteria": ["Can wait for next week", "Reply later today", "Reply immediately"]},
+            "b_pair": {"type": "choice", "instructions": "Which department?",
+                "criteria": {"returns": "Process returned items", "billing": "Refund the extra charge"}},
+            "n_four": {"type": "score", "instructions": "How many days?",
+                "criteria": ["Today", "Tomorrow morning", "Two business days", "Next week"]}
+        }
+    })).unwrap());
+    for dtype in ["fp32", "fp16"] {
+        let mut scalar = ClefBackend::load(root, &manifest, dtype, candle::Device::Cpu).unwrap();
+        for vectorized in [false, true] {
+            let mut grouped = ClefBackend::load(root, &manifest, dtype, candle::Device::Cpu)
+                .unwrap()
+                .with_grouped_pooling(true)
+                .unwrap()
+                .with_vectorized_head(vectorized);
+            assert_eq!(
+                grouped.capabilities().extra["joint_pool_execution"],
+                "grouped-spans-summary-v1"
+            );
+            for request in &requests {
+                let actual = grouped.forward_request(request, 4096).unwrap();
+                let expected = scalar.forward_request(request, 4096).unwrap();
+                assert_eq!(actual.input_tokens, expected.input_tokens);
+                assert_eq!(
+                    actual.logits.keys().collect::<Vec<_>>(),
+                    expected.logits.keys().collect::<Vec<_>>()
+                );
+                for (id, logits) in &actual.logits {
+                    assert_eq!(
+                        logits.keys().collect::<Vec<_>>(),
+                        expected.logits[id].keys().collect::<Vec<_>>()
+                    );
+                    let actual: Vec<_> = logits.values().copied().collect();
+                    let expected: Vec<_> = expected.logits[id].values().copied().collect();
+                    assert!(
+                        actual
+                            .iter()
+                            .zip(&expected)
+                            .all(|(a, b)| (a - b).abs() <= 3e-5),
+                        "{dtype} vectorized={vectorized} {id}: {actual:?} vs {expected:?}"
+                    );
+                    for temperature in [0.75, 1.0, 2.40605] {
+                        let a = huncho_core::calibration::calibrate(&actual, temperature).unwrap();
+                        let b =
+                            huncho_core::calibration::calibrate(&expected, temperature).unwrap();
+                        assert_eq!(
+                            huncho_core::calibration::argmax(&a),
+                            huncho_core::calibration::argmax(&b)
+                        );
+                        assert!(a.iter().zip(&b).all(|(a, b)| (a - b).abs() <= 1e-4));
+                    }
+                }
+                assert!(grouped
+                    .forward_request(request, actual.input_tokens as usize - 1)
+                    .is_err());
+            }
+            assert!(!grouped
+                .with_grouped_pooling(false)
+                .unwrap()
+                .capabilities()
+                .extra
+                .contains_key("joint_pool_execution"));
+        }
+    }
+}
+
+#[test]
 fn buffered_clef_cpu_kernels_match_independent_joint_logits() {
     for (delta, conv) in [(true, false), (false, true), (true, true)] {
         assert_buffered_clef_profile(delta, conv);

@@ -4,6 +4,7 @@ use candle_nn::{
     embedding, layer_norm, linear, linear_no_bias, Embedding, LayerNorm, Linear, VarBuilder,
 };
 use huncho_core::prompt::clef::EncodedRecord;
+use std::collections::BTreeMap;
 
 #[derive(serde::Deserialize)]
 pub(super) struct HeadConfig {
@@ -205,6 +206,7 @@ impl JointHead {
         lexical_weight: &Tensor,
         record: &EncodedRecord,
         vectorized: bool,
+        grouped_pooling: bool,
     ) -> candle::Result<Vec<Vec<f32>>> {
         let hidden = self.hidden_norm.forward(hidden)?;
         let memory = self.memory.forward(&hidden)?;
@@ -218,6 +220,12 @@ impl JointHead {
                 .collect::<candle::Result<Vec<_>>>()?,
             0,
         )?;
+        let grouped_lexical = if grouped_pooling {
+            Some(lexical_means(lexical_weight, record, hidden.dtype())?)
+        } else {
+            None
+        };
+        let mut option_offset = 0;
         let mut lexical = Vec::new();
         let mut option_queries = Vec::new();
         let mut contexts = Vec::new();
@@ -230,19 +238,24 @@ impl JointHead {
                     .collect::<candle::Result<Vec<_>>>()?,
                 0,
             )?;
-            let mut vectors = Vec::new();
-            for &(start, end) in &q.option_spans {
-                let ids = Tensor::new(&record.input_ids[start..end], hidden.device())?;
-                // Cast just the gathered rows; keep the full vocabulary in its
-                // compact backbone dtype and never compute vocabulary logits.
-                vectors.push(
-                    lexical_weight
-                        .index_select(&ids, 0)?
-                        .to_dtype(hidden.dtype())?
-                        .mean(0)?,
-                );
-            }
-            let vectors = Tensor::stack(&vectors, 0)?;
+            let vectors = if let Some(lexical) = &grouped_lexical {
+                lexical.narrow(0, option_offset, q.option_ids.len())?
+            } else {
+                let mut vectors = Vec::new();
+                for &(start, end) in &q.option_spans {
+                    let ids = Tensor::new(&record.input_ids[start..end], hidden.device())?;
+                    // Cast just the gathered rows; keep the full vocabulary in its
+                    // compact backbone dtype and never compute vocabulary logits.
+                    vectors.push(
+                        lexical_weight
+                            .index_select(&ids, 0)?
+                            .to_dtype(hidden.dtype())?
+                            .mean(0)?,
+                    );
+                }
+                Tensor::stack(&vectors, 0)?
+            };
+            option_offset += q.option_ids.len();
             if vectorized {
                 contexts.push(context);
             } else {
@@ -287,23 +300,39 @@ impl JointHead {
             routed = layer.forward(&routed, &memory)?;
         }
         let base = self.question.forward(&questions)?;
+        let counts: Vec<_> = record
+            .questions
+            .iter()
+            .map(|q| q.option_ids.len())
+            .collect();
+        let summaries = if grouped_pooling {
+            Some(grouped_summaries(&routed, &base, &counts)?)
+        } else {
+            None
+        };
         let mut offset = 0;
         let mut split = Vec::new();
-        let mut summaries = Vec::new();
+        let mut scalar_summaries = Vec::new();
         for (i, q) in record.questions.iter().enumerate() {
             let options = routed.narrow(0, offset, q.option_ids.len())?;
             offset += q.option_ids.len();
-            let weights = candle_nn::ops::softmax(
-                &(options.matmul(&base.i(i)?.unsqueeze(1)?)?.squeeze(1)?
-                    / (base.dim(1)? as f64).sqrt())?,
-                0,
-            )?;
-            summaries.push(options.broadcast_mul(&weights.unsqueeze(1)?)?.sum(0)?);
+            if !grouped_pooling {
+                let weights = candle_nn::ops::softmax(
+                    &(options.matmul(&base.i(i)?.unsqueeze(1)?)?.squeeze(1)?
+                        / (base.dim(1)? as f64).sqrt())?,
+                    0,
+                )?;
+                scalar_summaries.push(options.broadcast_mul(&weights.unsqueeze(1)?)?.sum(0)?);
+            }
             split.push(options);
         }
+        let summaries = match summaries {
+            Some(summaries) => summaries,
+            None => Tensor::stack(&scalar_summaries, 0)?,
+        };
         let type_ids: Vec<_> = record.questions.iter().map(|q| q.question_type).collect();
         let type_ids = Tensor::new(type_ids.as_slice(), hidden.device())?;
-        let mut fields = ((base + self.summary_norm.forward(&Tensor::stack(&summaries, 0)?)?)?
+        let mut fields = ((base + self.summary_norm.forward(&summaries)?)?
             .broadcast_add(&self.global.forward(&global.unsqueeze(0)?)?)?
             + self.types.forward(&type_ids)?)?;
         for layer in &self.layers {
@@ -381,6 +410,81 @@ impl JointHead {
         let joint = ((cosine * self.joint_scale)? + residual)?;
         (prior + (joint * self.gate)?)?.to_dtype(DType::F32)
     }
+}
+
+/// Gather/cast option lexical rows once, preserving every original token and
+/// per-span mean reduction. No full vocabulary projection or host copy.
+fn lexical_means(weight: &Tensor, record: &EncodedRecord, dtype: DType) -> candle::Result<Tensor> {
+    let mut ids = Vec::new();
+    let mut lengths = Vec::new();
+    for question in &record.questions {
+        for &(start, end) in &question.option_spans {
+            if start >= end || end > record.input_ids.len() {
+                candle::bail!("invalid lexical option span")
+            }
+            ids.extend_from_slice(&record.input_ids[start..end]);
+            lengths.push(end - start);
+        }
+    }
+    let ids = Tensor::new(ids.as_slice(), weight.device())?;
+    let gathered = weight.index_select(&ids, 0)?.to_dtype(dtype)?;
+    let mut means = Vec::with_capacity(lengths.len());
+    let mut offset = 0;
+    for length in lengths {
+        means.push(gathered.narrow(0, offset, length)?.mean(0)?);
+        offset += length;
+    }
+    Tensor::stack(&means, 0)
+}
+
+/// Bucket by exact option count. Each BMM/softmax/reduction remains local to a
+/// question; no padding, candidate masking or cross-request joint schema.
+fn grouped_summaries(options: &Tensor, base: &Tensor, counts: &[usize]) -> candle::Result<Tensor> {
+    let mut buckets = BTreeMap::<usize, Vec<(usize, usize)>>::new();
+    let mut offset = 0;
+    for (index, &count) in counts.iter().enumerate() {
+        if count == 0 {
+            candle::bail!("empty joint option group")
+        }
+        buckets.entry(count).or_default().push((index, offset));
+        offset += count;
+    }
+    if offset != options.dim(0)? || base.dim(0)? != counts.len() {
+        candle::bail!("joint summary shape mismatch")
+    }
+    let mut summaries = vec![None; counts.len()];
+    for (count, rows) in buckets {
+        let block = Tensor::stack(
+            &rows
+                .iter()
+                .map(|&(_, offset)| options.narrow(0, offset, count))
+                .collect::<candle::Result<Vec<_>>>()?,
+            0,
+        )?;
+        let anchors = Tensor::stack(
+            &rows
+                .iter()
+                .map(|&(index, _)| base.i(index))
+                .collect::<candle::Result<Vec<_>>>()?,
+            0,
+        )?;
+        let scores =
+            (block.matmul(&anchors.unsqueeze(2)?)?.squeeze(2)? / (base.dim(1)? as f64).sqrt())?;
+        let weights = candle_nn::ops::softmax(&scores, 1)?;
+        let pooled = block.broadcast_mul(&weights.unsqueeze(2)?)?.sum(1)?;
+        for (row, (index, _)) in rows.iter().enumerate() {
+            summaries[*index] = Some(pooled.i(row)?);
+        }
+    }
+    Tensor::stack(
+        &summaries
+            .into_iter()
+            .map(|summary| {
+                summary.ok_or_else(|| candle::Error::Msg("missing joint summary".into()))
+            })
+            .collect::<candle::Result<Vec<_>>>()?,
+        0,
+    )
 }
 
 fn normalize(x: &Tensor, eps: f64) -> candle::Result<Tensor> {
