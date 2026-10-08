@@ -169,6 +169,22 @@ impl ClefBackend {
     }
 
     /// Opt in to grouped joint-head projections after model/device qualification.
+    /// Optional CPU backbone recurrence profile; joint-head math is unchanged.
+    pub fn with_cpu_delta_rule(mut self, enabled: bool) -> Result<Self> {
+        if enabled && !self.device.is_cpu() {
+            return Err(Error::Unsupported("buffered delta rule is CPU-only".into()));
+        }
+        self.model.set_cpu_delta_rule(enabled);
+        if enabled {
+            self.capabilities
+                .extra
+                .insert("delta_rule_execution".into(), "cpu-buffered-v1".into());
+        } else {
+            self.capabilities.extra.remove("delta_rule_execution");
+        }
+        Ok(self)
+    }
+
     pub fn with_vectorized_head(mut self, enabled: bool) -> Self {
         self.vectorized_head = enabled;
         if enabled {

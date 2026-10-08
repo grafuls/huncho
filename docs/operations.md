@@ -611,3 +611,32 @@ and total tensor tokens. This opt-in profile requires labeled pinned goldens
 and fresh startup conformance; enabled scheduling must perform actual batch work
 and pass the tighter independent-forward parity gate. CPU deterministic
 fixtures pass; real exported Laya graphs and CUDA batching remain unqualified.
+
+### Buffered CPU Gated DeltaNet recurrence
+
+`HUNCHO_CPU_DELTA_RULE=1` opts Kev/F2, Qwen/F3 and Clef/F5 into a CPU-only recurrence
+profile. The profile retains FP32 recurrent state and the original ascending
+key-reduction order. It casts inputs once, fuses decay with the memory
+projection, and fuses the state update with the output projection. A small
+scratch vector replaces per-token tensor intermediates. Noncontiguous input
+views and prefix state are supported; initial state remains immutable.
+
+The mode defaults off, rejects non-CPU devices, and cannot change while live
+forks or persistent snapshots remain. `delta_rule_execution=cpu-buffered-v1`
+is part of execution identity and requires a complete labeled
+`--qualification-golden MODEL=PATH` before serving, even with fitted calibration.
+The upstream temperature is retained unless an independently fitted and gated
+variant is selected. CPU fp32/fp16 fixture probabilities and cache/batch parity
+pass, and Clef whole-request fixture logits retain exact bits. Released
+Kev/Nimble/Clef acceptance remains open.
+
+A retained [recurrence microbenchmark](verification/delta-cpu-20261008/recurrence-microbenchmark.json)
+measures about 10 times faster recurrence for one local CPU shape, with equal
+output/state float bits. It excludes all projections, dense attention, heads,
+tokenization and serving; it is not a model latency or cost claim. Reproduce
+the CPU-only kernel comparison with:
+
+```sh
+cargo test --offline --release -p huncho-backend --features candle --lib \
+  delta_cpu::tests::recurrence_cpu_timing -- --ignored --nocapture
+```

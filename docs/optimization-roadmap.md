@@ -407,3 +407,33 @@ These are deterministic ONNX fixtures rather than trained Laya acceptance or
 a production speed measurement. CUDA batching has not run on hardware. O08
 still has device-resident head work open, and graph-side compact selections and
 native batches intentionally use separate contracts in this increment.
+
+## Buffered CPU delta-rule increment (2026-10-08)
+
+O17 now includes a real optional CPU recurrence implementation in
+`crates/huncho-backend/src/delta_cpu.rs`. It reads tensor storage through
+validated strides, preserves FP32 state and ascending key reduction, casts
+whole inputs once, and uses two matrix passes per head/token: decay plus memory
+projection, then state update plus output projection. This removes the original
+per-token tensor allocations without FMA substitution, parallel prefix changes
+or reduced-precision state. A caller's initial state is copied rather than
+mutated; retained forks and snapshots remain isolated.
+
+`HUNCHO_CPU_DELTA_RULE=1` / `Qwen3_5Backend::with_cpu_delta_rule(true)` is default
+off and CPU-only for F2/F3; Clef exposes the same CPU profile for F5. Kernel changes are blocked while any prefix state
+is retained, and metadata/receipts bind the profile. Fresh complete labeled
+startup conformance remains mandatory. Unit tests match original-loop output
+and final-state float bits across FP32/FP16 inputs, noncontiguous views, nonzero
+state and split continuation. Kev fixture independent logits match bits;
+upstream probabilities, batches, forks and persistent prefixes pass existing
+gates. F3 compact/full vocabulary fixture probabilities also pass, and F5 joint
+logits retain their float bits. No full Kev/Nimble/Clef or GPU profile is promoted.
+
+The local alternating release microbenchmark averages 15.057 ms for the tensor
+loop and 1.445 ms for buffered recurrence at `[1,8,256,32,32]`, about 10 times
+faster for that kernel, with bit-equal output/state. This is one CPU kernel
+measurement, excluding the rest of model inference, without frequency isolation.
+The [audit](verification/delta-cpu-20261008/recurrence-microbenchmark.json) retains
+all timings, CPU/affinity/thread environment, compiler, source and binary
+identities, with released-model qualification explicitly false. Remaining O17
+work includes fused convolution, GPU/chunk delta kernels and their qualification.

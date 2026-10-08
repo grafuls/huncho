@@ -286,7 +286,8 @@ fn load_backend(
 fn load_clef(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<dyn Backend>> {
     Ok(Box::new(huncho_backend::ClefBackend::load(
         dir, manifest, dtype, huncho_backend::clef::device_from_env()?,
-    )?.with_vectorized_head(bool_env("HUNCHO_CLEF_VECTOR_HEAD")?)))
+    )?.with_vectorized_head(bool_env("HUNCHO_CLEF_VECTOR_HEAD")?)
+        .with_cpu_delta_rule(bool_env("HUNCHO_CPU_DELTA_RULE")?)?))
 }
 
 #[cfg(not(feature = "clef"))]
@@ -306,7 +307,8 @@ fn load_candle(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<
             huncho_backend::device::device_from_env()?,
         )?
         .with_projection_chunk_rows(projection_chunk_rows_from_env()?)?
-        .with_fp32_attention(fp32_attention_from_env()?)?;
+        .with_fp32_attention(fp32_attention_from_env()?)?
+        .with_cpu_delta_rule(bool_env("HUNCHO_CPU_DELTA_RULE")?)?;
         return Ok(Box::new(backend));
     }
     // F3 (Bespoke-Nimble) packages are candidate-logit PEFT adapters over a
@@ -334,7 +336,8 @@ fn load_candle(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<
         })?;
         let backend = backend
             .with_projection_chunk_rows(projection_chunk_rows_from_env()?)?
-            .with_fp32_attention(fp32_attention_from_env()?)?;
+            .with_fp32_attention(fp32_attention_from_env()?)?
+            .with_cpu_delta_rule(bool_env("HUNCHO_CPU_DELTA_RULE")?)?;
         return Ok(Box::new(backend) as Box<dyn Backend>);
     }
     let artifact = manifest

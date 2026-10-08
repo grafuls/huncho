@@ -75,6 +75,51 @@ fn vectorized_clef_head_preserves_probabilities_and_original_option_order_on_cpu
     }
 }
 
+#[test]
+fn buffered_clef_cpu_recurrence_matches_independent_joint_logits() {
+    let root = Path::new(FIXTURE);
+    let manifest = ModelManifest::load(root.join("huncho-model.json")).unwrap();
+    let golden: Value =
+        serde_json::from_slice(&std::fs::read(root.join("golden.json")).unwrap()).unwrap();
+    for dtype in ["fp32", "fp16"] {
+        let mut reference = ClefBackend::load(root, &manifest, dtype, candle::Device::Cpu).unwrap();
+        let mut buffered = ClefBackend::load(root, &manifest, dtype, candle::Device::Cpu)
+            .unwrap()
+            .with_cpu_delta_rule(true)
+            .unwrap();
+        assert_eq!(
+            buffered.capabilities().extra["delta_rule_execution"],
+            "cpu-buffered-v1"
+        );
+        for case in golden["cases"].as_array().unwrap() {
+            let request: SystemOneRequest =
+                serde_json::from_value(case["request"].clone()).unwrap();
+            let expected = reference.forward_request(&request, 4096).unwrap();
+            let actual = buffered.forward_request(&request, 4096).unwrap();
+            assert_eq!(actual.input_tokens, expected.input_tokens);
+            assert_eq!(
+                actual.logits.keys().collect::<Vec<_>>(),
+                expected.logits.keys().collect::<Vec<_>>()
+            );
+            for (id, logits) in &actual.logits {
+                assert_eq!(
+                    logits.keys().collect::<Vec<_>>(),
+                    expected.logits[id].keys().collect::<Vec<_>>()
+                );
+                let bits = |values: &std::collections::BTreeMap<String, f32>| {
+                    values.values().map(|v| v.to_bits()).collect::<Vec<_>>()
+                };
+                assert_eq!(bits(logits), bits(&expected.logits[id]));
+            }
+        }
+        let reference_again = buffered.with_cpu_delta_rule(false).unwrap();
+        assert!(!reference_again
+            .capabilities()
+            .extra
+            .contains_key("delta_rule_execution"));
+    }
+}
+
 #[cfg(feature = "cuda")]
 #[test]
 #[ignore = "requires an NVIDIA GPU and compatible CUDA kernels"]

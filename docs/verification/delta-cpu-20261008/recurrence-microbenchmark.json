@@ -1,0 +1,87 @@
+{
+  "scope": "CPU recurrence only; FP32; nonzero state",
+  "shape": [
+    1,
+    8,
+    256,
+    32,
+    32
+  ],
+  "tensor_ms": [
+    16.427739,
+    13.382121,
+    13.408288,
+    16.003536,
+    14.467252,
+    16.650835
+  ],
+  "buffered_ms": [
+    1.3967610000000001,
+    1.388442,
+    1.391323,
+    1.464059,
+    1.524684,
+    1.504111
+  ],
+  "output_and_state_float_bits_equal": true,
+  "qualified_release": false,
+  "mean_tensor_ms": 15.0566285,
+  "mean_buffered_ms": 1.4448966666666667,
+  "recurrence_only_speed_ratio": 10.420557294754643,
+  "command": [
+    "target/release/deps/huncho_backend-84b449610932bcbf",
+    "delta_cpu::tests::recurrence_cpu_timing",
+    "--ignored",
+    "--nocapture"
+  ],
+  "parent_commit": "79b6308e0104aaa5797a2ad2d3eb77a86a8faac7",
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Fedora 1.97.1-1.fc44)",
+  "binary_sha256": "53784ba307ebbaa8f22c6a4d07b4e57cdb184165de1eb56ad15bf9a77fd59e62",
+  "source_sha256": {
+    "crates/huncho-backend/src/delta_cpu.rs": "72cb19d22fc09fbed88b05c100b4c66d4c79dc1f2811a5b494128503c2780ff5",
+    "crates/huncho-backend/src/qwen3_5.rs": "474cf2af068a42a280e9a8a1e31f332d90d1dcfc215bde28f1f0a876539e2fd8",
+    "crates/huncho-backend/Cargo.toml": "1982ea0897b308e0aff4816e0f7211783f8f745e462ed03ce539d083dd63ade9",
+    "Cargo.lock": "4f7b3919bba75f8773feb06b26431f1f3bbe7af55c56e2e84264fbba7de53dd1"
+  },
+  "kernel": "6.19.10-300.fc44.x86_64",
+  "cpu_models": [
+    "Intel(R) Core(TM) Ultra 7 165H"
+  ],
+  "cpu_affinity": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21
+  ],
+  "thread_environment": {
+    "RAYON_NUM_THREADS": null,
+    "CANDLE_NUM_THREADS": null,
+    "OMP_NUM_THREADS": null,
+    "MKL_NUM_THREADS": null
+  },
+  "limitations": [
+    "One local CPU; warm alternating microbenchmark; no full backbone, head, tokenization or HTTP scheduling",
+    "No frequency isolation or statistical release performance acceptance",
+    "No GPU execution",
+    "Model, dtype and runtime still require pinned labeled conformance; default disabled"
+  ],
+  "build_command": "cargo test --offline --release -p huncho-backend --features candle --lib delta_cpu::tests::recurrence_cpu_timing -- --ignored --nocapture"
+}

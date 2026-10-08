@@ -521,6 +521,7 @@ struct LinearAttn {
     dt_bias: Tensor,
     dtype: DType,
     eps: f32,
+    cpu_delta_rule: bool,
 }
 
 impl LinearAttn {
@@ -567,6 +568,7 @@ impl LinearAttn {
             dt_bias,
             dtype,
             eps: cfg.rms_norm_eps,
+            cpu_delta_rule: false,
         })
     }
 
@@ -675,7 +677,11 @@ impl LinearAttn {
         // The recurrence accumulates in fp32; cast the result back to the model
         // dtype so the following gated norm and out projection stay consistent.
         let initial_state = cache.as_ref().and_then(|cache| cache.recurrent.as_ref());
-        let (out, recurrent) = recurrent_gated_delta(&q, &k, &v, &g, &beta, initial_state)?;
+        let (out, recurrent) = if self.cpu_delta_rule {
+            crate::delta_cpu::recurrent(&q, &k, &v, &g, &beta, initial_state)?
+        } else {
+            recurrent_gated_delta(&q, &k, &v, &g, &beta, initial_state)?
+        };
         let out = out.to_dtype(self.dtype)?.transpose(1, 2)?; // [B, seq, num_v_heads, head_v]
                                                               // Apply the per-head gated RMSNorm over the last (head_v) dim, then
                                                               // flatten the value heads for the output projection.
@@ -691,7 +697,7 @@ impl LinearAttn {
 }
 
 /// Per-token gated delta rule (matches `torch_recurrent_gated_delta_rule`).
-fn recurrent_gated_delta(
+pub(crate) fn recurrent_gated_delta(
     query: &Tensor,
     key: &Tensor,
     value: &Tensor,
@@ -972,6 +978,7 @@ pub struct Model {
     attention_inputs: Mutex<AttentionInputCache>,
     projection_chunk_rows: usize,
     fp32_attention: bool,
+    cpu_delta_rule: bool,
 }
 
 impl Model {
@@ -1007,6 +1014,7 @@ impl Model {
             attention_inputs: Mutex::new(AttentionInputCache::default()),
             projection_chunk_rows: 0,
             fp32_attention: false,
+            cpu_delta_rule: false,
         })
     }
 
@@ -1049,6 +1057,15 @@ impl Model {
         for layer in &mut self.layers {
             if let Some(attention) = &mut layer.self_attn {
                 attention.fp32_compute = enabled;
+            }
+        }
+    }
+
+    pub(crate) fn set_cpu_delta_rule(&mut self, enabled: bool) {
+        self.cpu_delta_rule = enabled;
+        for layer in &mut self.layers {
+            if let Some(attention) = &mut layer.linear_attn {
+                attention.cpu_delta_rule = enabled;
             }
         }
     }
@@ -1200,6 +1217,22 @@ enum Readout {
 }
 
 impl Qwen3_5Backend {
+    /// Optional CPU recurrence buffers; cache state remains immutable FP32.
+    /// Requires qualification for the loaded model, dtype and CPU runtime.
+    pub fn with_cpu_delta_rule(mut self, enabled: bool) -> CoreResult<Self> {
+        if enabled && !self.device.is_cpu() {
+            return Err(Error::Unsupported("buffered delta rule is CPU-only".into()));
+        }
+        if enabled != self.model.cpu_delta_rule
+            && (!self.caches.is_empty() || !self.prefixes.values.is_empty())
+        {
+            return Err(Error::Unsupported(
+                "release retained Qwen caches before changing delta-rule kernels".into(),
+            ));
+        }
+        self.model.set_cpu_delta_rule(enabled);
+        Ok(self)
+    }
     /// Experimental attention compute profile. Weights and retained KV keep
     /// their original dtype; only dense attention matmuls/softmax use FP32.
     /// Changing arithmetic requires qualification for this execution identity.
@@ -1563,6 +1596,9 @@ impl Backend for Qwen3_5Backend {
         }
         if self.model.fp32_attention {
             extra.insert("attention_compute_dtype".into(), "fp32".into());
+        }
+        if self.model.cpu_delta_rule {
+            extra.insert("delta_rule_execution".into(), "cpu-buffered-v1".into());
         }
         if self.device.is_cuda() && matches!(self.head, Readout::LanguageModel(_)) {
             extra.insert("device_path".into(), "qwen-f3-cuda".into());

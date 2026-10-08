@@ -261,6 +261,7 @@ impl ExecutionIdentity {
             "HUNCHO_ONNX_EP",
             "HUNCHO_ONNX_THREADS",
             "HUNCHO_ONNX_NATIVE_BATCH",
+            "HUNCHO_CPU_DELTA_RULE",
             "ORT_DYLIB_PATH",
             "LD_LIBRARY_PATH",
             "LD_PRELOAD",

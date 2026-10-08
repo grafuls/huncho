@@ -412,6 +412,7 @@ fn qualify_optimizations(registry: &ModelRegistry, args: &ServeArgs) -> anyhow::
             "onnx_execution_provider",
             "onnx_intra_threads",
             "onnx_native_batch",
+            "delta_rule_execution",
         ]
         .iter()
         .any(|key| engine.execution_metadata().contains_key(*key));
@@ -772,6 +773,7 @@ mod qualification_tests {
             ("onnx_execution_provider", "cuda-strict-tf32-off-v1"),
             ("onnx_intra_threads", "4"),
             ("onnx_native_batch", "equal-length-v1"),
+            ("delta_rule_execution", "cpu-buffered-v1"),
         ] {
             let registry = registry_with_execution_metadata(
                 0.0,
@@ -893,6 +895,29 @@ mod tests {
             serde_json::to_vec(&manifest).unwrap(),
         )
         .unwrap();
+        // Routing-only test setup simulates an already-fitted package. Keep
+        // the checked-in numerical fixture Pending and the startup gate strict.
+        let clef_root = root.path().join("clef");
+        fs::create_dir(&clef_root).unwrap();
+        let fixture = Path::new("../huncho-backend/tests/fixtures/tiny_clef");
+        for file in [
+            "config.json",
+            "model.safetensors",
+            "joint_head_config.json",
+            "joint_head.safetensors",
+            "tokenizer.json",
+        ] {
+            fs::copy(fixture.join(file), clef_root.join(file)).unwrap();
+        }
+        let mut clef_manifest =
+            huncho_core::manifest::ModelManifest::load(fixture.join("huncho-model.json")).unwrap();
+        clef_manifest.calibration.default.status = huncho_core::manifest::CalibrationStatus::Fit;
+        let clef_manifest_path = clef_root.join("huncho-model.json");
+        fs::write(
+            &clef_manifest_path,
+            serde_json::to_vec(&clef_manifest).unwrap(),
+        )
+        .unwrap();
         let crate::Command::Serve(args) = crate::Cli::try_parse_from([
             "huncho",
             "serve",
@@ -905,7 +930,7 @@ mod tests {
             "--manifest",
             "../../examples/mock-model/huncho-model.json",
             "--manifest",
-            "../huncho-backend/tests/fixtures/tiny_clef/huncho-model.json",
+            clef_manifest_path.to_str().unwrap(),
         ])
         .unwrap()
         .command

@@ -8,7 +8,12 @@ use std::path::Path;
 
 #[test]
 fn candidate_only_projection_preserves_probabilities_at_existing_temperatures() {
-    assert_candidate_projection_parity(candle::Device::Cpu);
+    assert_candidate_projection_parity(candle::Device::Cpu, false);
+}
+
+#[test]
+fn buffered_cpu_recurrence_preserves_f3_candidate_projection_probabilities() {
+    assert_candidate_projection_parity(candle::Device::Cpu, true);
 }
 
 #[cfg(feature = "cuda")]
@@ -17,10 +22,10 @@ fn candidate_only_projection_preserves_probabilities_at_existing_temperatures() 
 fn cuda_candidate_projection_keeps_the_vocabulary_head_on_the_execution_device() {
     let device = huncho_backend::device::device_from_env().unwrap();
     assert!(device.is_cuda(), "GPU test must run on CUDA");
-    assert_candidate_projection_parity(device);
+    assert_candidate_projection_parity(device, false);
 }
 
-fn assert_candidate_projection_parity(device: candle::Device) {
+fn assert_candidate_projection_parity(device: candle::Device, buffered: bool) {
     let root = Path::new("tests/fixtures/tiny_kev");
     let golden: serde_json::Value =
         serde_json::from_slice(&std::fs::read(root.join("golden.json")).unwrap()).unwrap();
@@ -51,7 +56,17 @@ fn assert_candidate_projection_parity(device: candle::Device) {
     for dtype in ["fp32", "fp16"] {
         let mut backend =
             Qwen3_5Backend::load_on_device(package.path(), Some(root), 512, dtype, device.clone())
+                .unwrap()
+                .with_cpu_delta_rule(buffered)
                 .unwrap();
+        assert_eq!(
+            backend
+                .capabilities()
+                .extra
+                .get("delta_rule_execution")
+                .map(String::as_str),
+            buffered.then_some("cpu-buffered-v1")
+        );
         let mut cpu = Qwen3_5Backend::load(package.path(), Some(root), 512, dtype).unwrap();
         assert_eq!(
             backend

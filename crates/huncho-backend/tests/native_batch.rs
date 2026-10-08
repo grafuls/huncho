@@ -89,6 +89,72 @@ fn qwen_pointer_batches_preserve_probabilities_and_reject_cache_branches() {
     assert_pointer_batch_parity(Device::Cpu);
 }
 
+#[test]
+fn buffered_cpu_recurrence_preserves_kev_reference_batches_and_prefixes() {
+    let root = Path::new("tests/fixtures/tiny_kev");
+    let golden: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(root.join("golden.json")).unwrap()).unwrap();
+    for dtype in ["fp32", "fp16"] {
+        let load =
+            || Qwen3_5Backend::load_kev(root, root, &root.join("head.pt"), 512, dtype).unwrap();
+        let mut reference = load();
+        let mut buffered = load().with_cpu_delta_rule(true).unwrap();
+        assert_eq!(
+            buffered.capabilities().extra["delta_rule_execution"],
+            "cpu-buffered-v1"
+        );
+        for case in golden["cases"].as_array().unwrap() {
+            let rows = case["rows"].as_array().unwrap();
+            let tokens: Vec<u32> = serde_json::from_value(rows[0]["tokens"].clone()).unwrap();
+            let prefix = rows[0]["prefix_len"].as_u64().unwrap() as usize;
+            let parent = buffered
+                .prefill_cached(&tokens[..prefix], 1024 * 1024)
+                .unwrap()
+                .handle;
+            for row in rows {
+                let tokens: Vec<u32> = serde_json::from_value(row["tokens"].clone()).unwrap();
+                let positions: Vec<usize> =
+                    serde_json::from_value(row["positions"].clone()).unwrap();
+                let input = ForwardInput::new(tokens.clone(), positions.clone());
+                let expected = reference.forward(input.clone()).unwrap();
+                let actual = buffered.forward(input.clone()).unwrap();
+                let bits = |values: &[f32]| values.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+                assert_eq!(bits(actual.values().data()), bits(expected.values().data()));
+                let upstream: Vec<f32> =
+                    serde_json::from_value(row["probabilities"].clone()).unwrap();
+                let actual_probs = calibrate(actual.values().data(), 2.40605).unwrap();
+                assert_eq!(argmax(&actual_probs), argmax(&upstream));
+                assert!(actual_probs
+                    .iter()
+                    .zip(&upstream)
+                    .all(|(a, b)| (a - b).abs() <= 1e-3));
+                for output in buffered.forward_batch(vec![input.clone(), input]).unwrap() {
+                    assert_parity(output.values().data(), actual.values().data());
+                }
+                let handle = buffered.fork(parent).unwrap();
+                let mut suffix = ForwardInput::new(
+                    tokens[prefix..].to_vec(),
+                    positions.iter().map(|p| p - prefix).collect(),
+                );
+                suffix.fork_from = Some(handle);
+                let cached = buffered.forward(suffix).unwrap();
+                assert_parity(cached.values().data(), actual.values().data());
+                buffered.release_cache(handle).unwrap();
+            }
+            buffered.release_cache(parent).unwrap();
+        }
+        assert!(buffered.with_cpu_delta_rule(false).is_err());
+        let mut retained = load();
+        retained.prefill(&[1, 2]).unwrap();
+        assert!(retained.with_cpu_delta_rule(true).is_err());
+        let mut cleared = load();
+        let parent = cleared.prefill_cached(&[1, 2], 1024 * 1024).unwrap().handle;
+        cleared.release_cache(parent).unwrap();
+        cleared.clear_prefix_cache().unwrap();
+        cleared.with_cpu_delta_rule(true).unwrap();
+    }
+}
+
 #[cfg(feature = "clef")]
 #[test]
 fn kev_cpu_cross_request_collation_qualifies_unchanged_upstream_vectors() {
