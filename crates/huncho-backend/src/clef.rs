@@ -10,7 +10,7 @@ use huncho_core::{
     prompt::clef,
     tokenizer::HfTokenizer,
 };
-use std::{collections::BTreeMap, path::Path};
+use std::{collections::BTreeMap, path::Path, sync::Arc};
 #[path = "clef_head.rs"]
 mod head;
 
@@ -30,10 +30,10 @@ pub fn default_dtype() -> Result<&'static str> {
 }
 
 pub struct ClefBackend {
-    model: Model,
-    head: head::JointHead,
+    model: Arc<Model>,
+    head: Arc<head::JointHead>,
     lexical_weight: Tensor,
-    tokenizer: HfTokenizer,
+    tokenizer: Arc<HfTokenizer>,
     capabilities: Capabilities,
     device: Device,
     head_dtype: DType,
@@ -147,10 +147,10 @@ impl ClefBackend {
             .min(config.max_position_embeddings)
             .min(manifest.prompt_contract.max_len);
         Ok(Self {
-            model,
-            head,
+            model: Arc::new(model),
+            head: Arc::new(head),
             lexical_weight,
-            tokenizer,
+            tokenizer: Arc::new(tokenizer),
             device: device.clone(),
             head_dtype,
             vectorized_head: false,
@@ -167,6 +167,14 @@ impl ClefBackend {
                 ]),
                 ..Default::default()
             },
+        })
+    }
+
+    fn model_mut(&mut self) -> Result<&mut Model> {
+        Arc::get_mut(&mut self.model).ok_or_else(|| {
+            Error::Unsupported(
+                "configure Clef backbone kernels before creating shared replicas".into(),
+            )
         })
     }
 
@@ -195,7 +203,9 @@ impl ClefBackend {
         if enabled && !self.device.is_cpu() {
             return Err(Error::Unsupported("buffered delta rule is CPU-only".into()));
         }
-        self.model.set_cpu_delta_rule(enabled);
+        if enabled != self.capabilities.extra.contains_key("delta_rule_execution") {
+            self.model_mut()?.set_cpu_delta_rule(enabled);
+        }
         if enabled {
             self.capabilities
                 .extra
@@ -213,7 +223,14 @@ impl ClefBackend {
                 "buffered causal convolution is CPU-only".into(),
             ));
         }
-        self.model.set_cpu_causal_conv(enabled);
+        if enabled
+            != self
+                .capabilities
+                .extra
+                .contains_key("causal_conv_execution")
+        {
+            self.model_mut()?.set_cpu_causal_conv(enabled);
+        }
         if enabled {
             self.capabilities
                 .extra
@@ -239,6 +256,25 @@ impl ClefBackend {
 }
 
 impl Backend for ClefBackend {
+    fn replica(&self) -> Result<Box<dyn Backend>> {
+        if !self.device.is_cpu() {
+            return Err(Error::Unsupported(
+                "shared Clef replicas currently support CPU only".into(),
+            ));
+        }
+        Ok(Box::new(Self {
+            model: self.model.clone(),
+            head: self.head.clone(),
+            lexical_weight: self.lexical_weight.clone(),
+            tokenizer: self.tokenizer.clone(),
+            capabilities: self.capabilities.clone(),
+            device: self.device.clone(),
+            head_dtype: self.head_dtype,
+            vectorized_head: self.vectorized_head,
+            grouped_pooling: self.grouped_pooling,
+        }))
+    }
+
     fn id(&self) -> BackendId {
         BackendId::Clef
     }
@@ -259,7 +295,7 @@ impl Backend for ClefBackend {
     ) -> Result<RequestOutput> {
         let record = clef::encode(
             request,
-            &self.tokenizer,
+            self.tokenizer.as_ref(),
             max_context.min(self.capabilities.max_context),
         )?;
         let ids = Tensor::new(record.input_ids.as_slice(), &self.device)
@@ -298,5 +334,52 @@ impl Backend for ClefBackend {
     }
     fn fork(&mut self, _handle: CacheHandle) -> Result<CacheHandle> {
         Err(Error::Unsupported("Clef does not expose a KV cache".into()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cpu_replicas_share_backbone_head_and_tokenizer_and_freeze_backbone_profiles() {
+        let root = Path::new("tests/fixtures/tiny_clef");
+        let manifest = ModelManifest::load(root.join("huncho-model.json")).unwrap();
+        let mut backend = ClefBackend::load(root, &manifest, "fp32", Device::Cpu)
+            .unwrap()
+            .with_cpu_delta_rule(true)
+            .unwrap()
+            .with_cpu_causal_conv(true)
+            .unwrap()
+            .with_grouped_pooling(true)
+            .unwrap()
+            .with_vectorized_head(true);
+        let replica = backend.replica().unwrap();
+        assert_eq!(Arc::strong_count(&backend.model), 2);
+        assert_eq!(Arc::strong_count(&backend.head), 2);
+        assert_eq!(Arc::strong_count(&backend.tokenizer), 2);
+        assert_eq!(replica.capabilities().extra, backend.capabilities().extra);
+        assert!(backend.model_mut().is_err());
+        // Keeping an existing profile is harmless even after sharing weights.
+        backend = backend
+            .with_cpu_delta_rule(true)
+            .unwrap()
+            .with_cpu_causal_conv(true)
+            .unwrap();
+        drop(replica);
+        assert!(backend.model_mut().is_ok());
+        let changed = backend
+            .with_cpu_delta_rule(false)
+            .unwrap()
+            .with_cpu_causal_conv(false)
+            .unwrap();
+        assert!(!changed
+            .capabilities()
+            .extra
+            .contains_key("delta_rule_execution"));
+        assert!(!changed
+            .capabilities()
+            .extra
+            .contains_key("causal_conv_execution"));
     }
 }

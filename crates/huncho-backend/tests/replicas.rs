@@ -4,6 +4,83 @@ use huncho_backend::{CandleBackend, Qwen3_5Backend};
 use huncho_core::backend::{Backend, ForwardInput};
 use std::path::Path;
 
+#[cfg(feature = "clef")]
+#[test]
+fn cpu_clef_replicas_preserve_whole_request_joint_logits_concurrently() {
+    use huncho_backend::ClefBackend;
+    use huncho_core::{contract::SystemOneRequest, manifest::ModelManifest};
+    let root = Path::new("tests/fixtures/tiny_clef");
+    let manifest = ModelManifest::load(root.join("huncho-model.json")).unwrap();
+    let golden: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(root.join("golden.json")).unwrap()).unwrap();
+    let requests: Vec<SystemOneRequest> = golden["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|case| serde_json::from_value(case["request"].clone()).unwrap())
+        .collect();
+    for dtype in ["fp32", "fp16"] {
+        let mut primary = ClefBackend::load(root, &manifest, dtype, candle::Device::Cpu)
+            .unwrap()
+            .with_cpu_delta_rule(true)
+            .unwrap()
+            .with_cpu_causal_conv(true)
+            .unwrap()
+            .with_grouped_pooling(true)
+            .unwrap()
+            .with_vectorized_head(true);
+        let expected: Vec<_> = requests
+            .iter()
+            .map(|request| primary.forward_request(request, 4096).unwrap())
+            .collect();
+        let replicas: Vec<_> = (0..3).map(|_| primary.replica().unwrap()).collect();
+        std::thread::scope(|scope| {
+            let jobs: Vec<_> = replicas
+                .into_iter()
+                .map(|mut replica| {
+                    let requests = &requests;
+                    let expected = &expected;
+                    scope.spawn(move || {
+                        for (request, expected) in requests.iter().zip(expected) {
+                            let actual = replica.forward_request(request, 4096).unwrap();
+                            assert_eq!(actual.input_tokens, expected.input_tokens);
+                            let bits = |logits: &std::collections::BTreeMap<
+                                String,
+                                std::collections::BTreeMap<String, f32>,
+                            >| {
+                                logits
+                                    .iter()
+                                    .map(|(id, options)| {
+                                        (
+                                            id.clone(),
+                                            options
+                                                .iter()
+                                                .map(|(option, logit)| {
+                                                    (option.clone(), logit.to_bits())
+                                                })
+                                                .collect::<Vec<_>>(),
+                                        )
+                                    })
+                                    .collect::<Vec<_>>()
+                            };
+                            assert_eq!(bits(&actual.logits), bits(&expected.logits));
+                            // F5 contexts keep complete schemas, and cannot use the
+                            // per-question forward/cache interfaces by accident.
+                            assert!(replica
+                                .forward(ForwardInput::new(vec![1], vec![0]))
+                                .is_err());
+                            assert!(!replica.capabilities().supports_fork);
+                        }
+                    })
+                })
+                .collect();
+            for job in jobs {
+                job.join().unwrap();
+            }
+        });
+    }
+}
+
 fn concurrent_unchanged_outputs(mut primary: Box<dyn Backend>, input: ForwardInput) {
     let expected = primary.forward(input.clone()).unwrap();
     let expected: Vec<u32> = expected

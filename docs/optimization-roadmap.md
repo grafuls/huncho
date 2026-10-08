@@ -630,7 +630,7 @@ cancellation ownership. Existing default and native prefix/batch checks pass.
 
 Released Kev/Laya/Nimble pool qualification and workload throughput/RSS/affinity
 measurements remain open. Each concurrent job retains its own activations and
-state and can contend for cores/memory bandwidth. ONNX/Clef replica loaders,
+state and can contend for cores/memory bandwidth. ONNX replica loading,
 replica-aware benchmark summaries and cross-request worker scaling remain open;
 GPU and Apple checks are not performed.
 
@@ -711,3 +711,22 @@ logical usage. Probability agreement must remain <=1e-4 with matching argmax.
 This does not qualify the released Clef checkpoint or demonstrate throughput.
 The larger compact lexical temporary is a memory tradeoff; shared backbone and
 joint-field attention are unchanged. Actual GPU checks remain deferred.
+
+## CPU Clef execution replicas (2026-10-08)
+
+O14 now also covers native F5. Clef shares its loaded backbone, joint head and
+tokenizer through Arc storage; lexical tensors retain their shared storage.
+The existing bounded pool leases each context for the complete schema and
+requires fresh complete labeled qualification for every context. Backbone
+kernel configuration is frozen while replicas share it; unchanged settings
+remain harmless. Per-context option/projection profiles copy their original
+metadata, and no mutable activation, schema or output is retained between jobs.
+
+Native tests prove shared ownership and profile guards, then run three contexts
+concurrently on upstream requests for CPU fp32/fp16 with both buffered kernels
+and grouped head profiles. Independent raw logits and logical usage retain
+their float bits. Unsupported per-question forward/cache calls still fail,
+and F5 remains whole-request inference. This enables overlap without loading
+duplicate model weights; activation memory, shared CPU thread contention and
+full released-model calibration/throughput remain workload qualification tasks.
+No GPU execution or Apple work is performed.

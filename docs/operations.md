@@ -646,8 +646,8 @@ cargo test --offline --release -p huncho-backend --features candle --lib \
 ## Bounded shared-weight CPU replicas
 
 `--replicas N` leases one independently locked context per complete model job,
-with a maximum of eight. Native CPU ModernBERT/Laya, Qwen F2/F3, packed CPU Kev
-and the offline mock support it. ONNX, Clef, GPU contexts and unsupported
+with a maximum of eight. Native CPU ModernBERT/Laya, Qwen F2/F3, packed CPU Kev,
+Clef/F5 and the offline mock support it. ONNX, GPU contexts and unsupported
 backends fail explicitly when more than one replica is requested. The default
 remains one. CLI cross-request collation cannot be combined with replicas;
 per-request native batches, prefix reuse and bounded preprocessing can be used

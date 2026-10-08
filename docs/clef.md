@@ -86,6 +86,16 @@ template `clef-native-v1`.
 
 ## Validation
 
+CPU Clef supports the shared-weight `--replicas 1..8` serving pool. Backbone,
+joint head, lexical embeddings and tokenizer share storage; each job evaluates
+one complete schema with its own activations. It does not split fields or
+enable cross-request F5 tensor batching. Configure backbone kernels before
+creating replicas; later shared-backbone changes are rejected. Every context
+must pass fresh complete labeled startup qualification concurrently. Fixture
+replicas retain identical raw float bits for fp32/fp16 under concurrent calls,
+including grouped pooling/projections and buffered CPU kernels. Released Clef
+pool calibration, throughput and RSS measurements remain outstanding.
+
 `HUNCHO_CLEF_GROUPED_POOL=1` enables CPU-only grouped option pooling (default
 off). It gathers all option token embeddings once, then keeps each original
 span mean. Summary scoring groups questions by their exact option count and
