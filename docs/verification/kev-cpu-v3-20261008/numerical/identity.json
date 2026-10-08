@@ -1,0 +1,171 @@
+{
+  "schema_version": "1.0",
+  "started_utc": "2026-10-08T11:38:27.173700+00:00",
+  "binary": "/var/tmp/huncho-cpu-v3-20261008/source/target/release/huncho",
+  "binary_sha256": "81f216e7e5a492a881fbee74813d18949b0aa5fe3c7aeeedb13d5b614f34da16",
+  "script_sha256": "c8e9fc73d486f1d158411115d2189a7a3cbce814d91f30cbc896102275ddecf2",
+  "golden_sha256": "9cd9d07e96d816d278d6235e28bd5c64d86fa402f7ea3e5d6c2e2ee63ca8593f",
+  "package": "/root/.cache/huggingface/hub/models--jaredpalmer--kev-4b/snapshots/6cfce5c2fa4b4bd64026336ab649c5ca78857d52",
+  "package_files": {
+    "huncho-model.json": "b32072ebd7b54e2ed6c9c02df247e2812a8d65d3bade46bdb8b2d7211ac665a4",
+    "head.pt": "dd633435998ecc751ac538717a3742e32149500fabf7d7276287dbf0693f347c",
+    "tokenizer.json": "06b9509352d2af50381ab2247e083b80d32d5c0aba91c272ca9ff729b6a0e523",
+    "adapter_config.json": "8a05dfd6c5e7f61a62e6db5d8de8093a8dbbd105aa7ee7b5e7b73f6249f45617",
+    "adapter_model.safetensors": "90e817356246e7f18bfa7ca3d31794cd4fbeb3332a66a84cb51d9ceae925f2b2"
+  },
+  "adapter": {
+    "repo": "jaredpalmer/kev-4b",
+    "revision": "6cfce5c2fa4b4bd64026336ab649c5ca78857d52",
+    "rank": 16
+  },
+  "backbone_source": {
+    "kind": "hf",
+    "repo": "Qwen/Qwen3.5-4B-Base",
+    "revision": "1001bb4d826a52d1f399e183466143f4da7b741b"
+  },
+  "calibration": {
+    "default": {
+      "temperature": 2.40605,
+      "confidence": "peak",
+      "status": "fit"
+    },
+    "entries": {}
+  },
+  "resolved_calibration": {
+    "temperature": 2.40605,
+    "confidence": "peak",
+    "status": "fit"
+  },
+  "device_selection": "cpu",
+  "dtype": "fp32",
+  "projection_chunk_rows": 0,
+  "fp32_attention": false,
+  "kernel": "5.14.0-427.13.1.el9_4.x86_64",
+  "cpu_delta_rule": true,
+  "cpu_causal_conv": true,
+  "prefill_chunk_tokens": 0,
+  "cpu_kernel_build": "x86_64:avx,avx2,f16c,fma",
+  "persistent_prefix_bytes": 268435456,
+  "batch_max_requests": null,
+  "cpu_affinity": [
+    1,
+    3,
+    5,
+    7,
+    9,
+    11,
+    13,
+    15,
+    17,
+    19,
+    21,
+    23,
+    25,
+    27,
+    29,
+    31
+  ],
+  "prepare_all": false,
+  "numerical_only": true,
+  "results": [
+    {
+      "mode": "independent",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds_including_load": 101.00378952399478,
+      "report_sha256": "61073e27c4452509c7ddbd5a4ea2052b5251c4731c30e93a9a494d6e9b179800",
+      "max_prob_delta": 2.5629997e-06,
+      "argmax_agreement": 1.0,
+      "ece_drift": 5.9604645e-08,
+      "optimization_parity": null,
+      "outcome_calibration": null,
+      "work": {
+        "forward_calls": 19,
+        "prefill_calls": 0,
+        "chunked_prefills": 0,
+        "processed_tokens": 1951,
+        "reused_prefix_tokens": 0,
+        "cache_forks": 0,
+        "batch_calls": 0,
+        "cross_request_batches": 0,
+        "persistent_prefix_hits": 0,
+        "result_cache_hits": 0,
+        "prompt_cache_hits": 0,
+        "prepared_questions": 0
+      }
+    },
+    {
+      "mode": "prefix",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds_including_load": 178.81303631899937,
+      "report_sha256": "3bf8fd052f14a896d780127c94c7afcb81ac84f5442e69bd7899b9a2fc46ae9d",
+      "max_prob_delta": 3.8146973e-06,
+      "argmax_agreement": 1.0,
+      "ece_drift": 1.6391277e-07,
+      "optimization_parity": {
+        "max_prob_delta": 1.2516975e-06,
+        "argmax_agreement": 1.0
+      },
+      "outcome_calibration": null,
+      "work": {
+        "forward_calls": 38,
+        "prefill_calls": 5,
+        "chunked_prefills": 0,
+        "processed_tokens": 1196,
+        "reused_prefix_tokens": 3240,
+        "cache_forks": 36,
+        "batch_calls": 0,
+        "cross_request_batches": 0,
+        "persistent_prefix_hits": 5,
+        "result_cache_hits": 0,
+        "prompt_cache_hits": 0,
+        "prepared_questions": 0
+      }
+    },
+    {
+      "mode": "batch",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds_including_load": 181.94539810498827,
+      "report_sha256": "22f2b30c46a56492df1d9f1dab57790837e45e09ee8c2e8bae45d3b331c3a4cb",
+      "max_prob_delta": 2.5629997e-06,
+      "argmax_agreement": 1.0,
+      "ece_drift": 5.9604645e-08,
+      "optimization_parity": {
+        "max_prob_delta": 0.0,
+        "argmax_agreement": 1.0
+      },
+      "outcome_calibration": null,
+      "work": {
+        "forward_calls": 16,
+        "prefill_calls": 0,
+        "chunked_prefills": 0,
+        "processed_tokens": 1951,
+        "reused_prefix_tokens": 0,
+        "cache_forks": 0,
+        "batch_calls": 3,
+        "cross_request_batches": 0,
+        "persistent_prefix_hits": 0,
+        "result_cache_hits": 0,
+        "prompt_cache_hits": 0,
+        "prepared_questions": 0
+      }
+    }
+  ],
+  "qualified": false,
+  "limits": [
+    "Acceptance applies to the supplied independent vectors and observed outcomes only.",
+    "The runner records pins/hashes but cannot prove training overlap or fit/evaluation separation.",
+    "No speed or universal calibration claim; base revisions are recorded, base shards are not rehashed.",
+    "Single-question suites cannot qualify prefix or batch paths; use separate representative fan-out cases."
+  ],
+  "source_archive_sha256": "27f07534d5616be60fd3904b54c759da519b9110f8b2a331ab9e37e17cdbe0ce",
+  "boot_id": "923553ba-2a89-483d-87eb-290074af3523",
+  "rayon_num_threads": "16",
+  "thread_environment": {
+    "RAYON_NUM_THREADS": "16",
+    "CANDLE_NUM_THREADS": "16"
+  },
+  "finished_utc": "2026-10-08T11:46:09.885025+00:00"
+}

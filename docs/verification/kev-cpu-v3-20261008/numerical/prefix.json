@@ -1,0 +1,76 @@
+{
+  "model": "kev-4b",
+  "backend": "candle",
+  "dtype": "fp32",
+  "device": "CPU",
+  "execution_metadata": {
+    "causal_conv_execution": "cpu-buffered-v1",
+    "cpu_kernel_build": "x86_64:avx,avx2,f16c,fma",
+    "delta_rule_execution": "cpu-buffered-v1"
+  },
+  "reference_readout": false,
+  "prefix_cache": true,
+  "persistent_prefix_bytes": 268435456,
+  "max_batch_tokens": null,
+  "prepare_all": false,
+  "work": {
+    "forward_calls": 38,
+    "prefill_calls": 5,
+    "chunked_prefills": 0,
+    "processed_tokens": 1196,
+    "reused_prefix_tokens": 3240,
+    "cache_forks": 36,
+    "batch_calls": 0,
+    "cross_request_batches": 0,
+    "persistent_prefix_hits": 5,
+    "result_cache_hits": 0,
+    "prompt_cache_hits": 0,
+    "prepared_questions": 0
+  },
+  "cases": [
+    {
+      "id": "short",
+      "max_prob_delta": 4.7683716e-7,
+      "argmax_match": true,
+      "ece": 0.04397877
+    },
+    {
+      "id": "negated",
+      "max_prob_delta": 4.656613e-8,
+      "argmax_match": true,
+      "ece": 0.025849938
+    },
+    {
+      "id": "structured",
+      "max_prob_delta": 0.0000038146973,
+      "argmax_match": true,
+      "ece": 0.15609299
+    },
+    {
+      "id": "long",
+      "max_prob_delta": 3.5762787e-7,
+      "argmax_match": true,
+      "ece": 0.04253574
+    },
+    {
+      "id": "equal-length",
+      "max_prob_delta": 4.7683716e-7,
+      "argmax_match": true,
+      "ece": 0.048810136
+    },
+    {
+      "id": "single",
+      "max_prob_delta": 2.0861626e-7,
+      "argmax_match": true,
+      "ece": 0.3058223
+    }
+  ],
+  "max_prob_delta": 0.0000038146973,
+  "argmax_agreement": 1.0,
+  "ece": 1.6391277e-7,
+  "passed": true,
+  "optimization_parity": {
+    "max_prob_delta": 0.0000012516975,
+    "argmax_agreement": 1.0
+  }
+}

@@ -655,3 +655,23 @@ conversion/source immutability and offline fit/serving rejection checks pass.
 Conversion still materializes merged FP32 weights; dense non-projection file
 copies remain. Full-model peak RSS/load latency and labeled acceptance are not
 inferred from this structural memory improvement.
+
+
+## Full Kev compiled-CPU numerical evidence (2026-10-08)
+
+The isolated x86-64-v3 binary at source `ed6d7c6` runs CPU FP32 with both buffered
+recurrence and convolution on the unchanged six-case/19-question suite. All
+three fixed numerical gates pass: independent external delta 2.5629997e-6;
+prefix external delta 3.8146973e-6 and paired delta 1.2516975e-6; batch paired
+delta zero. Argmax agreement is complete throughout. Persistent-prefix
+qualification observes five actual hits and five fresh prefills; batches
+observe three actual native calls. Temperatures remain unchanged at 2.40605.
+
+[Retained identity and complete reports](verification/kev-cpu-v3-20261008/numerical/identity.json)
+bind the archive/binary/package/golden hashes and the exact compiled profile.
+The native CPU tests and job script are retained, including an initial mistyped
+test-target invocation and its corrected rerun. No GPU command executes.
+These cases have no observed outcomes and remain `qualified=false`. Elapsed
+times include loads, warm-up and paired work while other CPU jobs run; they are
+not an isolated speed comparison, labeled acceptance or replica/chunk profile
+qualification. Separate held-out CPU and packed fitting jobs remain active.

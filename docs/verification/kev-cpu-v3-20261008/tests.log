@@ -1,0 +1,129 @@
+   Compiling serde_core v1.0.229
+   Compiling syn v3.0.6
+   Compiling cc v1.5.1
+   Compiling serde_json v1.0.151
+   Compiling smallvec v1.16.2
+   Compiling getrandom v0.4.3
+   Compiling log v0.4.34
+   Compiling tracing-core v0.1.36
+   Compiling unicode-normalization-alignments v0.1.12
+   Compiling tempfile v3.27.0
+   Compiling tracing v0.1.44
+   Compiling onig_sys v69.9.3
+   Compiling esaxx-rs v0.1.10
+   Compiling synstructure v0.14.0
+   Compiling bytemuck_derive v1.12.1
+   Compiling serde_derive v1.0.229
+   Compiling thiserror-impl v2.0.21
+   Compiling zerofrom-derive v0.1.8
+   Compiling yoke-derive v0.8.3
+   Compiling indexmap v2.14.2
+   Compiling monostate v0.1.18
+   Compiling hashbrown v0.16.1
+   Compiling zerofrom v0.1.8
+   Compiling yoke v0.8.3
+   Compiling bytemuck v1.25.2
+   Compiling thiserror v2.0.21
+   Compiling num-complex v0.4.6
+   Compiling half v2.7.1
+   Compiling dyn-stack v0.13.2
+   Compiling zip v8.6.0
+   Compiling pulp v0.22.3
+   Compiling float8 v0.7.0
+   Compiling serde v1.0.229
+   Compiling spm_precompiled v0.1.4
+   Compiling ahash v0.8.12
+   Compiling compact_str v0.9.1
+   Compiling dary_heap v0.3.9
+   Compiling safetensors v0.8.0
+   Compiling serde_plain v1.0.2
+   Compiling gemm-common v0.19.0
+   Compiling gemm-f32 v0.19.0
+   Compiling gemm-f64 v0.19.0
+   Compiling gemm-c64 v0.19.0
+   Compiling gemm-c32 v0.19.0
+   Compiling gemm-f16 v0.19.0
+   Compiling gemm v0.19.0
+   Compiling onig v6.5.3
+   Compiling tokenizers v0.22.2
+   Compiling tokenizers v0.20.4
+   Compiling candle-core v0.11.0
+   Compiling huncho-core v0.1.0 (/var/tmp/huncho-cpu-v3-20261008/source/crates/huncho-core)
+   Compiling candle-nn v0.11.0
+   Compiling candle-transformers v0.11.0
+   Compiling huncho-backend v0.1.0 (/var/tmp/huncho-cpu-v3-20261008/source/crates/huncho-backend)
+    Finished `release` profile [optimized] target(s) in 2m 23s
+     Running unittests src/lib.rs (target/release/deps/huncho_backend-4d0ea000299bbea4)
+
+running 32 tests
+test candle::tests::config_parses_flat_rope_theta ... ok
+test candle::tests::config_parses_rope_parameters_object ... ok
+test candle::tests::remap_encoder_to_model ... ok
+test conv_cpu::tests::convolution_cpu_timing ... ignored, CPU convolution microbenchmark; no released-model speed claim
+test candle::tests::remap_drops_non_encoder ... ok
+test candle::tests::remap_keeps_model_prefix ... ok
+test delta_cpu::tests::recurrence_cpu_timing ... ignored, CPU recurrence microbenchmark; no released-model speed claim
+test cpu_profile::tests::identity_tracks_compiled_kernels_instead_of_host_detection ... ok
+test device::device_tests::auto_falls_back_when_cuda_initialization_or_kernels_fail ... ok
+test device::device_tests::auto_returns_successful_device ... ok
+test conv_cpu::tests::convolution_matches_original_tap_order_across_dtypes_short_sequences_and_strides ... ok
+test device::device_tests::cpu_never_initializes_cuda ... ok
+test device::device_tests::explicit_cuda_keeps_ordinal_and_never_falls_back ... ok
+test device::device_tests::invalid_devices_fail_before_initialization ... ok
+test device::device_tests::newly_ported_paths_require_explicit_cuda_and_never_hide_failure ... ok
+test mock::tests::deterministic_output ... ok
+test mock::tests::fork_is_isolated ... ok
+test qwen3_5::quantized::tests::conversion_checks_only_visible_finite_cpu_fp32_values ... ok
+test qwen3_5::tests::trace_kev_prefix_precision ... ignored, requires explicit pinned model/suite paths and qualification hardware
+test kev::tests::rejects_head_backbone_dimension_mismatch ... ok
+test qwen3_5::tests::lo_merge_changes_weights ... ok
+test kev::tests::rejects_invalid_calibration_and_unsupported_encoding ... ok
+test qwen3_5::tests::pointer_loading_filters_unused_vocabulary_weights_before_materialization ... ok
+test qwen3_5::tests::attention_input_reuse_is_offset_aware_and_bounded ... ok
+test qwen3_5::quantized::tests::loaded_projection_modules_release_dense_weights_and_retain_only_packed_blocks ... ok
+test delta_cpu::tests::buffered_recurrence_matches_tensor_order_and_preserves_initial_storage ... ok
+test qwen3_5::tests::projection_chunks_preserve_order_bias_dtype_and_partial_rows ... ok
+test qwen3_5::tests::forward_produces_finite_hidden ... ok
+test qwen3_5::tests::backend_returns_logits_shape ... ok
+test qwen3_5::tests::forward_is_causal ... ok
+test candle::tests::extraction_matches_manual_slice ... ok
+test qwen3_5::tests::convolution_cache_tail_retains_only_its_visible_elements_on_cpu ... ok
+
+test result: ok. 29 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/chunked_prefill.rs (target/release/deps/chunked_prefill-d618cbfc48dd559b)
+
+running 2 tests
+test engine_qualification_requires_actual_chunking_and_keeps_original_goldens_and_usage ... ok
+test chunked_cpu_prefill_preserves_original_probabilities_and_accounts_for_actual_calls ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+
+     Running tests/native_batch.rs (target/release/deps/native_batch-f951e5ee5fe5bcd7)
+
+running 5 tests
+test modernbert_batches_preserve_rows_and_candidate_positions ... ok
+test kev_cpu_cross_request_collation_qualifies_unchanged_upstream_vectors ... ok
+test qwen_pointer_batches_preserve_probabilities_and_reject_cache_branches ... ok
+test buffered_cpu_kernels_preserve_kev_reference_batches_and_prefixes ... ok
+test execution_profiles_preserve_fixture_readouts_and_cache_semantics ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s
+
+     Running tests/prefix_cache.rs (target/release/deps/prefix_cache-7dbeac4618df11c7)
+
+running 4 tests
+test cache_handles_are_owned_bounded_and_transactional ... ok
+test persistent_prefixes_are_exact_bounded_and_isolate_active_handles_on_cpu ... ok
+test engine_fanout_preserves_wire_usage_and_releases_on_later_errors ... ok
+test native_forks_chunks_and_short_prefixes_preserve_probabilities ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.38s
+
+     Running tests/quantized_kev.rs (target/release/deps/quantized_kev-2816d70e32dfa800)
+
+running 1 test
+test durable_quantized_artifacts_run_packed_kernels_and_preserve_native_cache_and_batch_isolation ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.45s
+
