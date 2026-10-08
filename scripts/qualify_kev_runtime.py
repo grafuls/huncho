@@ -58,6 +58,8 @@ def verify_report(report, args, suite, mode):
         expected_metadata["projection_chunk_rows"] = str(args.projection_chunk_rows)
     if args.fp32_attention:
         expected_metadata["attention_compute_dtype"] = "fp32"
+    if args.cpu_delta_rule:
+        expected_metadata["delta_rule_execution"] = "cpu-buffered-v1"
     if metadata != expected_metadata:
         raise ValueError("reported kernel profile differs from the requested execution")
     device = report.get("device", "")
@@ -70,8 +72,12 @@ def verify_report(report, args, suite, mode):
     if report.get("prefix_cache") != (mode == "prefix") or report.get("max_batch_tokens") != (
             args.batch_tokens if mode == "batch" else None):
         raise ValueError("report did not evaluate the requested optimization")
-    if report.get("prepare_all", False) != args.prepare_all:
+    if report.get("prepare_all", False) != (args.prepare_all or (mode == "batch" and args.batch_max_requests is not None)):
         raise ValueError("report did not evaluate the requested preparation path")
+    if report.get("persistent_prefix_bytes", 0) != (args.persistent_prefix_bytes if mode == "prefix" else 0):
+        raise ValueError("report did not evaluate the requested persistent prefix budget")
+    if report.get("cross_request_max_requests") != (args.batch_max_requests if mode == "batch" else None):
+        raise ValueError("report did not evaluate the requested cross-request batch size")
     if not args.numerical_only and (report.get("outcome_calibration") or {}).get("questions") != sum(
             len(case["request"]["questions"]) for case in suite["cases"]):
         raise ValueError("complete observed-outcome metrics are required")
@@ -80,6 +86,10 @@ def verify_report(report, args, suite, mode):
             raise ValueError("optimized execution requires independent-forward parity")
     if args.prepare_all and report.get("work", {}).get("prepared_questions", 0) <= 0:
         raise ValueError("suite did not exercise request preparation")
+    if mode == "prefix" and args.persistent_prefix_bytes > 0 and report.get("work", {}).get("persistent_prefix_hits", 0) <= 0:
+        raise ValueError("suite did not exercise persistent prefix reuse")
+    if mode == "batch" and args.batch_max_requests is not None and report.get("work", {}).get("cross_request_batches", 0) <= 0:
+        raise ValueError("suite did not exercise cross-request collation")
     if mode != "independent":
         counter = "cache_forks" if mode == "prefix" else "batch_calls"
         if report.get("work", {}).get(counter, 0) <= 0:
@@ -100,6 +110,19 @@ def verify_report(report, args, suite, mode):
 
 
 def run(args):
+    if args.cpu_delta_rule and args.device != "cpu":
+        raise ValueError("buffered delta recurrence is CPU-only")
+    if args.persistent_prefix_bytes < 0:
+        raise ValueError("persistent prefix byte budget must be nonnegative")
+    if args.batch_max_requests is not None and not 2 <= args.batch_max_requests <= 64:
+        raise ValueError("cross-request batch size must be 2..64")
+    modes = args.modes.split(",")
+    if not modes or len(set(modes)) != len(modes) or set(modes) - {"independent", "prefix", "batch"}:
+        raise ValueError("modes must be distinct independent, prefix or batch entries")
+    if args.persistent_prefix_bytes and "prefix" not in modes:
+        raise ValueError("persistent prefix budget requires the prefix mode")
+    if args.batch_max_requests is not None and "batch" not in modes:
+        raise ValueError("cross-request batch size requires the batch mode")
     suite = json.loads(args.golden.read_text())
     validate_suite(suite, args.numerical_only)
     manifest_path = args.package / "huncho-model.json"
@@ -112,9 +135,6 @@ def run(args):
         raise ValueError("labeled acceptance requires an explicitly fitted calibration entry")
     if not 0 <= args.projection_chunk_rows <= 4096 or args.batch_tokens <= 0:
         raise ValueError("projection rows must be 0..4096 and the batch token budget must be positive")
-    modes = args.modes.split(",")
-    if not modes or len(set(modes)) != len(modes) or set(modes) - {"independent", "prefix", "batch"}:
-        raise ValueError("modes must be distinct independent, prefix or batch entries")
     if args.output.exists() and any(args.output.iterdir()):
         raise ValueError("output directory must be new or empty; previous evidence is never overwritten")
     args.output.mkdir(parents=True, exist_ok=True)
@@ -133,6 +153,10 @@ def run(args):
         "calibration": calibration, "resolved_calibration": entry, "device_selection": args.device,
         "dtype": args.dtype, "projection_chunk_rows": args.projection_chunk_rows,
         "fp32_attention": args.fp32_attention, "kernel": platform.release(),
+        "cpu_delta_rule": args.cpu_delta_rule,
+        "persistent_prefix_bytes": args.persistent_prefix_bytes,
+        "batch_max_requests": args.batch_max_requests,
+        "cpu_affinity": sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else None,
         "prepare_all": args.prepare_all,
         "numerical_only": args.numerical_only, "results": [], "qualified": False,
         "limits": ["Acceptance applies to the supplied independent vectors and observed outcomes only.",
@@ -149,8 +173,11 @@ def run(args):
         identity["gpu_inventory"] = subprocess.check_output(["nvidia-smi", "--query-gpu=name,uuid,driver_version", "--format=csv,noheader"], text=True).strip()
     env = os.environ.copy()
     env.update(HUNCHO_DEVICE=args.device, HUNCHO_PROJECTION_CHUNK_ROWS=str(args.projection_chunk_rows),
-        HUNCHO_ATTENTION_FP32=str(args.fp32_attention).lower())
+        HUNCHO_ATTENTION_FP32=str(args.fp32_attention).lower(),
+        HUNCHO_CPU_DELTA_RULE=str(args.cpu_delta_rule).lower())
     identity["rayon_num_threads"] = env.get("RAYON_NUM_THREADS")
+    identity["thread_environment"] = {key: env[key] for key in
+        ["RAYON_NUM_THREADS", "CANDLE_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"] if key in env}
     try:
         for mode in modes:
             command = [str(binary), "conform", "--model", str(args.package.resolve()), "--backend", "candle",
@@ -159,8 +186,12 @@ def run(args):
                 command.append("--prepare-all")
             if mode == "prefix":
                 command.append("--prefix-cache")
+                if args.persistent_prefix_bytes:
+                    command.extend(["--persistent-prefix-bytes", str(args.persistent_prefix_bytes)])
             if mode == "batch":
                 command.extend(["--max-batch-tokens", str(args.batch_tokens)])
+                if args.batch_max_requests is not None:
+                    command.extend(["--batch-max-requests", str(args.batch_max_requests)])
             start = time.monotonic()
             with (args.output / f"{mode}.json").open("w") as output, (args.output / f"{mode}.log").open("w") as log:
                 result = subprocess.run(command, env=env, stdout=output, stderr=log)
@@ -173,6 +204,7 @@ def run(args):
                 "report_sha256": sha256(args.output / f"{mode}.json"), "max_prob_delta": report["max_prob_delta"],
                 "argmax_agreement": report["argmax_agreement"], "ece_drift": report["ece"],
                 "optimization_parity": report.get("optimization_parity"), "outcome_calibration": report.get("outcome_calibration")}
+            record["work"] = report.get("work", {})
             identity["results"].append(record)
             print(json.dumps(record), flush=True)
         if sha256(args.golden) != golden_hash or sha256(manifest_path) != manifest_hash or sha256(binary) != identity["binary_sha256"]:
@@ -198,6 +230,9 @@ def main():
     parser.add_argument("--dtype", choices=["fp32", "fp16"], required=True)
     parser.add_argument("--projection-chunk-rows", type=int, default=0)
     parser.add_argument("--fp32-attention", action="store_true")
+    parser.add_argument("--cpu-delta-rule", action="store_true")
+    parser.add_argument("--persistent-prefix-bytes", type=int, default=0)
+    parser.add_argument("--batch-max-requests", type=int)
     parser.add_argument("--prepare-all", action="store_true")
     parser.add_argument("--batch-tokens", type=int, default=4096)
     parser.add_argument("--modes", default="independent,prefix,batch")

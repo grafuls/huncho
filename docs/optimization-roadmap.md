@@ -456,3 +456,18 @@ the unchanged 1e-4 paired gate at three temperatures. Existing native batch,
 prefix, immutable snapshot and original upstream checks cover the complete
 readout path. The generic storage-copy change has only CPU validation here;
 actual GPU checks remain deferred.
+
+## CPU runtime qualification runner (2026-10-08)
+
+`scripts/qualify_kev_runtime.py` now accepts `--cpu-delta-rule`,
+`--persistent-prefix-bytes` and `--batch-max-requests`. It verifies the exact
+reported kernel metadata, cache budget, effective preparation path and batch
+size, plus actual retained-prefix hits or cross-request batch work. CPU-only
+profiles and invalid mode/budget combinations are rejected before accessing a
+model or device. Reports retain physical-work counters, CPU affinity and thread
+environment. Fixed numerical and paired thresholds remain unchanged;
+`--numerical-only` still cannot produce labeled acceptance. These changes make
+the new implementations testable on the pinned Kev checkpoint without using a
+GPU. Ten runner tests cover profile substitution, vacuous cache/collation work,
+early rejection and unchanged subprocess evidence; the broader standard-library
+Python suite also passes.

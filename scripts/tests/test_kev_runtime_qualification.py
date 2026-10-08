@@ -22,7 +22,8 @@ def suite():
 
 def options(**overrides):
     args = SimpleNamespace(device="cpu", dtype="fp16", projection_chunk_rows=64,
-        fp32_attention=True, batch_tokens=4096, numerical_only=False, prepare_all=False)
+        fp32_attention=True, batch_tokens=4096, numerical_only=False, prepare_all=False,
+        cpu_delta_rule=False, persistent_prefix_bytes=0, batch_max_requests=None)
     vars(args).update(overrides)
     return args
 
@@ -37,6 +38,50 @@ def report():
 
 
 class RuntimeQualificationTests(unittest.TestCase):
+    def test_cpu_profile_must_match_exact_reported_metadata(self):
+        data = report()
+        args = options(cpu_delta_rule=True)
+        with self.assertRaisesRegex(ValueError, "kernel profile"):
+            qualifier.verify_report(data, args, suite(), "prefix")
+        data["execution_metadata"]["delta_rule_execution"] = "cpu-buffered-v1"
+        self.assertTrue(qualifier.verify_report(data, args, suite(), "prefix"))
+        with self.assertRaisesRegex(ValueError, "kernel profile"):
+            qualifier.verify_report(data, options(), suite(), "prefix")
+
+    def test_persistent_prefix_reuse_requires_real_hits_and_exact_budget(self):
+        args = options(persistent_prefix_bytes=1024)
+        data = dict(report(), persistent_prefix_bytes=1024)
+        with self.assertRaisesRegex(ValueError, "persistent prefix reuse"):
+            qualifier.verify_report(data, args, suite(), "prefix")
+        data["work"]["persistent_prefix_hits"] = 1
+        self.assertTrue(qualifier.verify_report(data, args, suite(), "prefix"))
+        data["persistent_prefix_bytes"] = 2048
+        with self.assertRaisesRegex(ValueError, "prefix budget"):
+            qualifier.verify_report(data, args, suite(), "prefix")
+
+    def test_cross_request_collation_requires_real_batches_and_exact_size(self):
+        args = options(batch_max_requests=4)
+        data = dict(report(), prefix_cache=False, max_batch_tokens=4096,
+            cross_request_max_requests=4, prepare_all=True)
+        data["work"]["batch_calls"] = 1
+        with self.assertRaisesRegex(ValueError, "cross-request collation"):
+            qualifier.verify_report(data, args, suite(), "batch")
+        data["work"]["cross_request_batches"] = 1
+        self.assertTrue(qualifier.verify_report(data, args, suite(), "batch"))
+        for change in [{"prepare_all": False}, {"cross_request_max_requests": 2}, {"optimization_parity": None}]:
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                qualifier.verify_report(dict(data, **change), args, suite(), "batch")
+
+    def test_invalid_cpu_profile_and_cache_modes_fail_before_any_file_or_device_access(self):
+        for change in [
+            {"device": "cuda", "cpu_delta_rule": True},
+            {"persistent_prefix_bytes": -1}, {"persistent_prefix_bytes": 1, "modes": "independent"},
+            {"batch_max_requests": 1}, {"batch_max_requests": 65},
+            {"batch_max_requests": 2, "modes": "prefix"},
+        ]:
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                qualifier.run(options(modes="independent,prefix,batch", **change) if "modes" not in change else options(**change))
+
     def test_preparation_requires_actual_work_and_unchanged_paired_gates(self):
         data = report()
         data.update(prefix_cache=False, prepare_all=True)
@@ -101,6 +146,7 @@ class RuntimeQualificationTests(unittest.TestCase):
             binary.write_text(f"#!{sys.executable}\nimport json, os, sys\n"
                 "assert os.environ['HUNCHO_PROJECTION_CHUNK_ROWS'] == '64'\n"
                 "assert os.environ['HUNCHO_ATTENTION_FP32'] == 'true'\n"
+                "assert os.environ['HUNCHO_CPU_DELTA_RULE'] == 'false'\n"
                 "assert sys.argv[sys.argv.index('--backend')+1] == 'candle'\n"
                 f"print({json.dumps(child_report)!r})\n")
             binary.chmod(0o700)
