@@ -1,8 +1,10 @@
 //! Browser transport for the actual shared Rust prompt/calibration pipeline.
 use huncho_core::backend::{Backend, CacheHandle, Capabilities, ForwardInput, ForwardOutput};
-use huncho_core::conformance::{run_external_marker_suite, GoldenSuite};
+use huncho_core::conformance::{
+    run_external_marker_batched_suite, run_external_marker_suite, GoldenSuite,
+};
 use huncho_core::contract::{SystemOneRequest, SystemOneResponse};
-use huncho_core::engine::{Engine, EvalOptions, EvalStats, ExternalEvaluation};
+use huncho_core::engine::{Engine, EvalOptions, EvalStats, ExternalEvaluation, MarkerBatchProfile};
 use huncho_core::error::{Error, Result};
 use huncho_core::head::HeadParams;
 use huncho_core::manifest::{BackendId, CalibrationStatus, Family, HeadKind, ModelManifest};
@@ -43,8 +45,9 @@ impl Backend for ExternalGraph {
 #[wasm_bindgen]
 pub struct MarkerEngine {
     engine: Engine,
-    plans: BTreeMap<u32, ExternalEvaluation>,
+    plans: BTreeMap<u32, (ExternalEvaluation, bool)>,
     next_plan: u32,
+    batch: Option<MarkerBatchProfile>,
 }
 
 #[wasm_bindgen]
@@ -88,10 +91,29 @@ impl MarkerEngine {
             return Err(js("unsupported browser execution identity"));
         }
         metadata.insert("device".into(), "WASM".into());
-        metadata.insert(
-            "external_marker_scores".into(),
-            "graph-integrated-f1-v1".into(),
-        );
+        let batch = if metadata.get("external_marker_scores").map(String::as_str)
+            == Some("graph-integrated-f1-batch-v1")
+        {
+            let number = |key: &str| -> std::result::Result<usize, JsValue> {
+                metadata
+                    .get(key)
+                    .ok_or_else(|| js("missing browser batch profile"))?
+                    .parse()
+                    .map_err(js)
+            };
+            let profile = MarkerBatchProfile {
+                max_batch_tokens: number("browser_batch_tokens")?,
+                max_batch_padding_percent: number("browser_batch_padding_percent")?,
+            };
+            profile.validate().map_err(js)?;
+            Some(profile)
+        } else {
+            metadata.insert(
+                "external_marker_scores".into(),
+                "graph-integrated-f1-v1".into(),
+            );
+            None
+        };
         let caps = Capabilities {
             id: BackendId::Onnx,
             dtype: "fp32".into(),
@@ -114,6 +136,7 @@ impl MarkerEngine {
             engine,
             plans: BTreeMap::new(),
             next_plan: 1,
+            batch,
         })
     }
 
@@ -121,6 +144,23 @@ impl MarkerEngine {
         &mut self,
         request_json: &str,
         extensions: bool,
+    ) -> std::result::Result<String, JsValue> {
+        self.prepare_plan(request_json, extensions, self.batch.is_some())
+    }
+
+    pub fn prepare_independent(
+        &mut self,
+        request_json: &str,
+        extensions: bool,
+    ) -> std::result::Result<String, JsValue> {
+        self.prepare_plan(request_json, extensions, false)
+    }
+
+    fn prepare_plan(
+        &mut self,
+        request_json: &str,
+        extensions: bool,
+        batched: bool,
     ) -> std::result::Result<String, JsValue> {
         if request_json.len() > 1024 * 1024 || self.plans.len() >= 8 {
             return Err(js("browser request/pending-plan budget exceeded"));
@@ -148,8 +188,15 @@ impl MarkerEngine {
             .next_plan
             .checked_add(1)
             .ok_or_else(|| js("browser plan ids exhausted"))?;
-        let json = serialize(&serde_json::json!({"handle":handle,"readouts":plan.readouts()}))?;
-        self.plans.insert(handle, plan);
+        let groups = if batched {
+            Some(plan.marker_batches(self.batch.unwrap()).map_err(js)?)
+        } else {
+            None
+        };
+        let json = serialize(
+            &serde_json::json!({"handle":handle,"readouts":plan.readouts(),"groups":groups}),
+        )?;
+        self.plans.insert(handle, (plan, batched));
         Ok(json)
     }
 
@@ -158,7 +205,7 @@ impl MarkerEngine {
         handle: u32,
         scores_json: &str,
     ) -> std::result::Result<String, JsValue> {
-        let plan = self
+        let (plan, batched) = self
             .plans
             .remove(&handle)
             .ok_or_else(|| js("unknown or consumed browser plan"))?;
@@ -166,10 +213,13 @@ impl MarkerEngine {
             return Err(js("browser scores exceed memory limits"));
         }
         let scores: Vec<Vec<f32>> = serde_json::from_str(scores_json).map_err(js)?;
-        let (response, work) = self
-            .engine
-            .finish_external_markers(plan, scores)
-            .map_err(js)?;
+        let (response, work) = if batched {
+            self.engine
+                .finish_external_marker_batches(plan, self.batch.unwrap(), scores)
+        } else {
+            self.engine.finish_external_markers(plan, scores)
+        }
+        .map_err(js)?;
         serialize(&serde_json::json!({"response":response, "work":work}))
     }
 
@@ -219,6 +269,11 @@ impl MarkerEngine {
         responses_json: &str,
         work_json: &str,
     ) -> std::result::Result<String, JsValue> {
+        if self.batch.is_some() {
+            return Err(js(
+                "browser batches require fresh independent and tensor qualification",
+            ));
+        }
         if golden_json.len() > 32 * 1024 * 1024
             || responses_json.len() > 32 * 1024 * 1024
             || work_json.len() > 64 * 1024
@@ -229,5 +284,45 @@ impl MarkerEngine {
         let responses: Vec<SystemOneResponse> = serde_json::from_str(responses_json).map_err(js)?;
         let work: EvalStats = serde_json::from_str(work_json).map_err(js)?;
         serialize(&run_external_marker_suite(&self.engine, &suite, &responses, work).map_err(js)?)
+    }
+
+    pub fn qualify_batched(
+        &self,
+        golden_json: &str,
+        responses_json: &str,
+        work_json: &str,
+        independent_json: &str,
+        independent_work_json: &str,
+    ) -> std::result::Result<String, JsValue> {
+        if golden_json.len() > 32 * 1024 * 1024
+            || responses_json.len() > 32 * 1024 * 1024
+            || independent_json.len() > 32 * 1024 * 1024
+            || work_json.len() > 64 * 1024
+            || independent_work_json.len() > 64 * 1024
+        {
+            return Err(js("browser batch qualification exceeds memory budgets"));
+        }
+        let profile = self
+            .batch
+            .ok_or_else(|| js("no immutable browser batch profile"))?;
+        let suite: GoldenSuite = serde_json::from_str(golden_json).map_err(js)?;
+        let responses: Vec<SystemOneResponse> = serde_json::from_str(responses_json).map_err(js)?;
+        let work: EvalStats = serde_json::from_str(work_json).map_err(js)?;
+        let independent: Vec<SystemOneResponse> =
+            serde_json::from_str(independent_json).map_err(js)?;
+        let independent_work: EvalStats =
+            serde_json::from_str(independent_work_json).map_err(js)?;
+        serialize(
+            &run_external_marker_batched_suite(
+                &self.engine,
+                &suite,
+                &responses,
+                work,
+                &independent,
+                independent_work,
+                profile,
+            )
+            .map_err(js)?,
+        )
     }
 }

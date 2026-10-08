@@ -1,0 +1,22 @@
+
+> @huncho/browser@0.1.0 test
+> node tests/browser.mjs
+
+node:internal/modules/run_main:123
+    triggerUncaughtException(
+    ^
+
+AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+10 !== 12
+
+    at file:///home/grafuls/Sources/huncho/browser/tests/browser.mjs:200:10 {
+  generatedMessage: true,
+  code: 'ERR_ASSERTION',
+  actual: 10,
+  expected: 12,
+  operator: 'strictEqual',
+  diff: 'simple'
+}
+
+Node.js v22.23.1

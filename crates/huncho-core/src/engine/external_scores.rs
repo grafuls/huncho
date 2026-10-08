@@ -10,6 +10,30 @@ pub struct MarkerReadout {
     pub qtype: u32,
 }
 
+/// Immutable CPU external graph collation profile; no prefix/retention policy.
+#[derive(Debug, Clone, Copy)]
+pub struct MarkerBatchProfile {
+    pub max_batch_tokens: usize,
+    pub max_batch_padding_percent: usize,
+}
+impl MarkerBatchProfile {
+    pub fn validate(self) -> Result<()> {
+        if !(1..=65536).contains(&self.max_batch_tokens) || self.max_batch_padding_percent > 100 {
+            return Err(Error::Request(
+                "external marker batches require 1..65536 tokens and padding percent 0..100".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Original readout indices in one tensor call, with its physical row length.
+#[derive(Debug, serde::Serialize)]
+pub struct MarkerBatch {
+    pub readouts: Vec<usize>,
+    pub sequence: usize,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,6 +210,179 @@ mod tests {
         );
     }
     #[test]
+    fn external_batches_keep_logical_usage_and_share_fixed_labeled_and_paired_gates() {
+        use crate::conformance::{
+            answer_probabilities, run_external_marker_batched_suite, GoldenCase, GoldenSuite,
+        };
+        let (engine, calls) = engine(Family::F1);
+        let request = request();
+        let expected = engine.eval(&request, &EvalOptions::default()).unwrap();
+        let suite = GoldenSuite {
+            schema_version: "1.0".into(),
+            family: "F1".into(),
+            hash: None,
+            cases: vec![GoldenCase {
+                id: "synthetic-batch-gate-fixture".into(),
+                request: request.clone(),
+                expected: expected
+                    .answers
+                    .iter()
+                    .map(|(id, answer)| (id.clone(), answer_probabilities(answer).unwrap()))
+                    .collect(),
+                targets: BTreeMap::from([
+                    ("a_noul".into(), "yes".into()),
+                    ("m_score".into(), "1".into()),
+                    ("z_choice".into(), "billing".into()),
+                ]),
+            }],
+        };
+        let profile = MarkerBatchProfile {
+            max_batch_tokens: 4096,
+            max_batch_padding_percent: 100,
+        };
+        let plan = engine
+            .prepare_external_markers(request.clone(), EvalOptions::default())
+            .unwrap();
+        let groups = plan.marker_batches(profile).unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].readouts.len(), 3);
+        let raw = scores(&plan);
+        let (response, work) = engine
+            .finish_external_marker_batches(plan, profile, raw)
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&response).unwrap(),
+            serde_json::to_value(&expected).unwrap()
+        );
+        assert_eq!(work.forward_calls, 1);
+        assert_eq!(work.batch_calls, 1);
+        assert_eq!(work.padded_batch_calls, 1);
+        assert!(work.padded_tokens > 0);
+        assert_eq!(
+            work.processed_tokens - work.padded_tokens,
+            response.usage.input_tokens
+        );
+        let plan = engine
+            .prepare_external_markers(request.clone(), EvalOptions::default())
+            .unwrap();
+        let raw = scores(&plan);
+        let (independent, independent_work) = engine.finish_external_markers(plan, raw).unwrap();
+        let qualify = |responses: &[SystemOneResponse],
+                       work: EvalStats,
+                       independent: &[SystemOneResponse],
+                       scalar: EvalStats| {
+            run_external_marker_batched_suite(
+                &engine,
+                &suite,
+                responses,
+                work,
+                independent,
+                scalar,
+                profile,
+            )
+        };
+        let report = qualify(
+            &[response.clone()],
+            work.clone(),
+            &[independent.clone()],
+            independent_work.clone(),
+        )
+        .unwrap();
+        assert!(report.passed);
+        assert_eq!(report.optimization_parity.unwrap().max_prob_delta, 0.);
+        assert_eq!(report.max_batch_padding_percent, 100);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            3,
+            "external qualification must never replay a native backend"
+        );
+        let mut fake = work.clone();
+        fake.processed_tokens -= 1;
+        assert!(qualify(
+            &[response.clone()],
+            fake,
+            &[independent.clone()],
+            independent_work.clone()
+        )
+        .is_err());
+        assert!(qualify(
+            &[response.clone()],
+            work.clone(),
+            &[],
+            independent_work.clone()
+        )
+        .is_err());
+        let mut wrong = response.clone();
+        wrong.usage.input_tokens += 1;
+        assert!(qualify(
+            &[wrong],
+            work.clone(),
+            &[independent.clone()],
+            independent_work.clone()
+        )
+        .is_err());
+        // A change below the external 1e-3 limit must still fail paired 1e-4.
+        let mut changed = response;
+        if let Answer::Choice { probabilities, .. } = changed.answers.get_mut("z_choice").unwrap() {
+            *probabilities.get_mut("shipping").unwrap() += 0.0002;
+            *probabilities.get_mut("billing").unwrap() -= 0.0002;
+        }
+        assert!(
+            !qualify(&[changed], work, &[independent], independent_work)
+                .unwrap()
+                .passed
+        );
+    }
+
+    #[test]
+    fn external_marker_groups_bound_padding_rows_markers_and_vacuous_profiles() {
+        let (engine, _) = engine(Family::F1);
+        let mut request = request();
+        let question = request.questions["z_choice"].clone();
+        request.questions.clear();
+        for i in 0..129 {
+            request.questions.insert(format!("q{i}"), question.clone());
+        }
+        let plan = engine
+            .prepare_external_markers(request, EvalOptions::default())
+            .unwrap();
+        let profile = MarkerBatchProfile {
+            max_batch_tokens: 65536,
+            max_batch_padding_percent: 0,
+        };
+        let groups = plan.marker_batches(profile).unwrap();
+        assert_eq!(
+            groups
+                .iter()
+                .map(|group| group.readouts.len())
+                .collect::<Vec<_>>(),
+            [64, 64, 1]
+        );
+        let mut indices: Vec<_> = groups
+            .into_iter()
+            .flat_map(|group| group.readouts)
+            .collect();
+        indices.sort_unstable();
+        assert_eq!(indices, (0..129).collect::<Vec<_>>());
+        for (tokens, padding) in [(0, 0), (65537, 0), (1, 101)] {
+            assert!(plan
+                .marker_batches(MarkerBatchProfile {
+                    max_batch_tokens: tokens,
+                    max_batch_padding_percent: padding,
+                })
+                .is_err());
+        }
+        let work = plan
+            .marker_work(Some(MarkerBatchProfile {
+                max_batch_tokens: 1,
+                max_batch_padding_percent: 0,
+            }))
+            .unwrap();
+        assert_eq!(work.forward_calls, 129);
+        assert_eq!(work.batch_calls, 0);
+        assert_eq!(work.padded_tokens, 0);
+    }
+    #[test]
     fn malformed_foreign_nonfinite_and_unsupported_external_inputs_fail_closed() {
         let (one, calls) = engine(Family::F1);
         let (two, _) = engine(Family::F1);
@@ -255,9 +452,98 @@ impl ExternalEvaluation {
     pub fn readouts(&self) -> &[MarkerReadout] {
         &self.readouts
     }
+
+    pub fn marker_batches(&self, profile: MarkerBatchProfile) -> Result<Vec<MarkerBatch>> {
+        profile.validate()?;
+        let mut inputs: Vec<_> = self
+            .readouts
+            .iter()
+            .enumerate()
+            .map(|(i, input)| {
+                (
+                    i,
+                    ForwardInput::new(input.tokens.clone(), input.positions.clone()),
+                )
+            })
+            .collect();
+        inputs.sort_by_key(|(_, input)| input.tokens.len());
+        Ok(batching::padded_groups(
+            inputs,
+            profile.max_batch_tokens,
+            profile.max_batch_padding_percent,
+            crate::backend::BatchLimits {
+                max_rows: 64,
+                max_readouts: Some(8192),
+            },
+        )
+        .into_iter()
+        .map(|group| MarkerBatch {
+            sequence: group
+                .iter()
+                .map(|(_, input)| input.tokens.len())
+                .max()
+                .unwrap(),
+            readouts: group.into_iter().map(|(i, _)| i).collect(),
+        })
+        .collect())
+    }
+
+    /// Expected physical calls/rectangles, derived from the immutable plan.
+    /// The async caller still owns actual graph execution/provenance.
+    pub fn marker_work(&self, profile: Option<MarkerBatchProfile>) -> Result<EvalStats> {
+        let groups = match profile {
+            Some(profile) => self.marker_batches(profile)?,
+            None => self
+                .readouts
+                .iter()
+                .enumerate()
+                .map(|(i, input)| MarkerBatch {
+                    readouts: vec![i],
+                    sequence: input.tokens.len(),
+                })
+                .collect(),
+        };
+        let mut work = EvalStats {
+            prepared_questions: self.readouts.len() as u64,
+            ..Default::default()
+        };
+        for group in groups {
+            let physical = group
+                .sequence
+                .checked_mul(group.readouts.len())
+                .ok_or_else(|| {
+                    Error::Request("external marker rectangle overflows token counters".into())
+                })?;
+            let logical: usize = group
+                .readouts
+                .iter()
+                .map(|&i| self.readouts[i].tokens.len())
+                .sum();
+            let padding = physical - logical;
+            work.forward_calls += 1;
+            work.batch_calls += u64::from(group.readouts.len() > 1);
+            work.padded_batch_calls += u64::from(padding > 0);
+            work.processed_tokens += physical as u64;
+            work.padded_tokens += padding as u64;
+        }
+        Ok(work)
+    }
 }
 
 impl Engine {
+    /// Consume raw per-question scores from the declared actual tensor groups.
+    /// Wire usage stays logical; physical counters include every padded slot.
+    pub fn finish_external_marker_batches(
+        &self,
+        plan: ExternalEvaluation,
+        profile: MarkerBatchProfile,
+        scores: Vec<Vec<f32>>,
+    ) -> Result<(SystemOneResponse, EvalStats)> {
+        let work = plan.marker_work(Some(profile))?;
+        let (response, _) = self.finish_external_markers(plan, scores)?;
+        Ok((response, work))
+    }
+
     /// Prepare F1 integrated-head inputs without any backend call or lock.
     /// The external runtime must supply raw scalar head logits at each marker.
     /// Scheduling/retention options are deliberately outside this first ABI.

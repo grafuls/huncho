@@ -7,10 +7,11 @@ response. There is no sampler or decode loop. Native Cargo's default build
 does not include this package or its browser dependencies.
 
 This increment accepts F1 FP32 packages with a **graph-integrated scalar option
-head**. The graph includes the trained head; a generic hidden-state encoder
+head**, using either per-question or native row/marker tensor calls. The graph
+includes the trained head; a generic hidden-state encoder
 export is insufficient. This does not automatically export Laya's `act_head`
 or qualify released Kev. All weights must be embedded in one ONNX file.
-External weights, quantization, other families, batching and browser prefixes
+External weights, quantization, other families, cross-request tensor collation and browser prefixes
 remain open. Apple work is skipped; WebGPU and actual GPU checks are deferred.
 
 ## Build and package
@@ -36,6 +37,12 @@ core, SDK and runtime assets, and prints the descriptor SHA-256. Packaging sets
 or localhost with JavaScript/WASM MIME types and a policy permitting verified
 Blob module imports and WASM execution. Protect the application/SDK as trusted
 code. Obtain the descriptor hash from your trusted build output.
+
+For a dynamic row/marker head graph, also supply
+`--head graph-integrated-f1-batch-v1 --max-batch-tokens 8192` and optionally
+`--max-batch-padding-percent 25`. These options freeze into the hashed
+descriptor; evaluations cannot override them. Padding requires a graph with
+an original-length attention mask. Defaults retain scalar per-question calls.
 
 ```js
 import { HunchoBrowser } from '/models/example/index.mjs';
@@ -91,6 +98,25 @@ duplicating it creates separate WASM runtimes and additional residency.
 | `attention_mask` | Optional INT64 `[1, sequence]` | All ones; no padding |
 | `scores` | FP32 `[markers, 1]`, sole output | Raw trained-head score at each supplied position |
 
+Native batch descriptors use the distinct `graph-integrated-f1-batch-v1` ABI:
+
+| Name | Type and shape | Meaning |
+|---|---|---|
+| `tokens` | INT64 `[batch, sequence]` | Original question rows, with explicit right padding when enabled |
+| `positions` | INT64 `[markers, 2]` | Each raw score's row and original marker position |
+| `qtype` | INT64 `[batch]` | Original question type for each row |
+| `attention_mask` | Optional INT64 `[batch, sequence]` | Ones for every real token, including real token ID zero; zeros for padding |
+| `scores` | FP32 `[markers, 1]`, sole output | Raw scores in supplied coordinate order |
+
+Batch/sequence/marker axes are dynamic. Groups contain at most 64 rows/8,192
+markers. The shared core stably sorts original readouts by length, bounds each
+multi-row rectangle by the configured 1..65,536 token budget and padding
+percentage 0..100, and scatters owned scores back into original questions.
+Oversized singletons preserve the declared <=4,096 context without truncation;
+they may exceed a smaller configured batch budget. Wire usage counts original
+logical tokens. Physical counters include every padded slot and actual tensor
+call. Grouping never combines requests or splits a question's candidate set.
+
 Sequence/marker axes must be dynamic. Input names/types/ranks and output shape
 are validated. Nonfinite scores fail before calibration. The graph owns type
 routing; this ABI performs no vocabulary pooling, host MLP or mean fallback.
@@ -106,6 +132,15 @@ every question through a fresh actual ORT session. Shared fixed gates require
 delta <=0.001, complete argmax agreement and ECE drift <=0.02. No public `eval`
 instance is returned on failure, including fitted packages. Qualification and
 serving use no response/prompt cache; every new session reruns conformance.
+Native batch loading also executes each question separately through the same
+graph at batch one and applies the unchanged paired probability delta <=1e-4
+and full argmax gate. Actual multi-row work is mandatory, and positive padding
+profiles require real mixed-length padded work. The core independently derives
+expected tensor/independent work and logical usage from original requests;
+scalar counters, cached results or a vacuous batch profile cannot authorize
+serving. Reports count optimized work separately from extra qualification-only
+independent forwards. Page and dedicated-worker native batches each run their
+own complete fresh labeled/paired suite.
 
 `engine.qualification` returns a report copy with the browser user agent,
 asset hashes, exact runtime version, CPU provider, single-thread fixed SIMD
@@ -135,7 +170,7 @@ Worker execution frees the page from synchronous model/tokenizer CPU work; it
 does not reduce arithmetic or promise a throughput/latency improvement. Each
 instance owns another complete runtime/session, and JSON/message transport
 adds copying/serialization cost. No worker pool or shared weights are implied.
-An HTTP server, native browser batches/prefixes and multithread tuning remain
+An HTTP server, cross-request browser batches/prefixes and multithread tuning remain
 separate increments.
 
 ## CPU-only tests
@@ -145,6 +180,7 @@ With optional `onnx==1.20.1` and NumPy tooling, and an existing Chrome executabl
 ```sh
 python tests/generate_fixture.py
 cargo run --locked --manifest-path wasm/Cargo.toml --example reference -- tests/generated
+python tests/generate_batch_fixture.py
 sh scripts/build.sh
 npm test
 ```
@@ -157,7 +193,13 @@ It checks gate/signature/hash refusal, plan cleanup, queues, snapshots,
 disposal and actual bundled deployment. Dedicated-worker tests execute the
 real CPU WASM graph, verify bitwise page/worker wire parity and fresh labeled
 reports, and cover hash/outcome refusal, bounded snapshots, draining, fatal
-worker failures and explicit termination. Generated artifacts/dependencies are
+worker failures and explicit termination. Native equal/masked tensor tests
+retain original fixture probabilities and independent Rust references, compare
+fresh per-question forwards, check row/type scatter and physical/logical work,
+and reject drift below the external limit that exceeds the paired bound.
+The batch exporter writes only new graphs from recorded frozen weights;
+the extra equal-row suite duplicates existing synthetic choice vectors/labels
+without recomputing probabilities. Generated artifacts/dependencies are
 ignored. Fixed synthetic weights/labels test implementation only; they supply
 no released calibration acceptance, isolated speedup or memory measurement.
 

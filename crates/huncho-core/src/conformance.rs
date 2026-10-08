@@ -158,7 +158,7 @@ pub fn run_suite_with_options(
     if options.cooperative_prefill {
         return run_suite_with_resumable_prefill(engine, suite, thresholds, options);
     }
-    run_suite_impl(engine, suite, thresholds, options, None)
+    run_suite_impl(engine, suite, thresholds, options, None, None)
 }
 
 /// Exercise actual round-robin prefix chunks from distinct requests before
@@ -230,7 +230,14 @@ pub fn run_suite_with_resumable_prefill(
     if work.prefill_yields == 0 || work.prefill_interleaves == 0 {
         return Err(Error::Conformance("cooperative qualification requires actual split prefixes interleaved across distinct requests".into()));
     }
-    run_suite_impl(engine, suite, thresholds, options, Some((&responses, work)))
+    run_suite_impl(
+        engine,
+        suite,
+        thresholds,
+        options,
+        Some((&responses, work)),
+        None,
+    )
 }
 
 /// Qualify actual cross-request tensor collation, with fresh preparations and
@@ -273,7 +280,14 @@ pub fn run_suite_with_cross_request_batches(
             "cross-request qualification requires a native batch containing questions from distinct requests".into(),
         ));
     }
-    let mut report = run_suite_impl(engine, suite, thresholds, options, Some((&responses, work)))?;
+    let mut report = run_suite_impl(
+        engine,
+        suite,
+        thresholds,
+        options,
+        Some((&responses, work)),
+        None,
+    )?;
     report.cross_request_max_requests = Some(max_requests);
     Ok(report)
 }
@@ -287,6 +301,7 @@ fn run_suite_impl(
         &[crate::contract::SystemOneResponse],
         crate::engine::EvalStats,
     )>,
+    external_independent: Option<&[crate::contract::SystemOneResponse]>,
 ) -> Result<ConformanceReport> {
     let case_family = crate::manifest::Family::parse(&suite.family)?;
     if case_family != engine.family() {
@@ -399,6 +414,11 @@ fn run_suite_impl(
         work.accumulate(&stats);
         let independent = paired
             .then(|| {
+                if let Some(responses) = external_independent {
+                    return responses.get(index).cloned().ok_or_else(|| {
+                        Error::Conformance("external independent execution omitted a case".into())
+                    });
+                }
                 engine.eval_uncached_with_stats(
                     &case.request,
                     &independent_options,
@@ -673,7 +693,76 @@ pub fn run_external_marker_suite(
         &ConformanceThresholds::default(),
         &EvalOptions::default(),
         Some((responses, work)),
+        None,
     )
+}
+
+/// Actual external CPU F1 tensor batches plus fresh per-question execution of
+/// the same graph. Profiles/counters are derived from original immutable inputs;
+/// fixed labeled and paired gates are shared with native backends.
+#[cfg(feature = "external-scores")]
+pub fn run_external_marker_batched_suite(
+    engine: &Engine,
+    suite: &GoldenSuite,
+    responses: &[crate::contract::SystemOneResponse],
+    work: crate::engine::EvalStats,
+    independent: &[crate::contract::SystemOneResponse],
+    independent_work: crate::engine::EvalStats,
+    profile: crate::engine::MarkerBatchProfile,
+) -> Result<ConformanceReport> {
+    profile.validate()?;
+    let independent_report =
+        run_external_marker_suite(engine, suite, independent, independent_work.clone())?;
+    let mut expected = crate::engine::EvalStats::default();
+    let mut expected_independent = crate::engine::EvalStats::default();
+    let mut logical_usage = Vec::new();
+    for case in &suite.cases {
+        let plan = engine.prepare_external_markers(case.request.clone(), EvalOptions::default())?;
+        let scalar = plan.marker_work(None)?;
+        logical_usage.push(scalar.processed_tokens);
+        expected_independent.accumulate(&scalar);
+        expected.accumulate(&plan.marker_work(Some(profile))?);
+    }
+    if work != expected
+        || independent_work != expected_independent
+        || responses.len() != suite.cases.len()
+        || suite.cases.iter().zip(responses).zip(&logical_usage).any(
+            |((case, response), &tokens)| {
+                response.model != engine.manifest().name
+                    || response.answers.len() != case.request.questions.len()
+                    || case
+                        .request
+                        .questions
+                        .keys()
+                        .any(|id| !response.answers.contains_key(id))
+                    || response.usage.input_tokens != tokens
+                    || response.usage.output_tokens != 0
+            },
+        )
+        || independent
+            .iter()
+            .zip(&logical_usage)
+            .any(|(response, &tokens)| response.usage.input_tokens != tokens)
+    {
+        return Err(Error::Conformance(
+            "external batch qualification requires original logical usage and exact fresh tensor/independent work".into(),
+        ));
+    }
+    let options = EvalOptions {
+        max_batch_tokens: Some(profile.max_batch_tokens),
+        max_batch_padding_percent: profile.max_batch_padding_percent,
+        ..Default::default()
+    };
+    let mut report = run_suite_impl(
+        engine,
+        suite,
+        &ConformanceThresholds::default(),
+        &options,
+        Some((responses, work)),
+        Some(independent),
+    )?;
+    report.passed &= independent_report.passed;
+    Ok(report)
 }
 
 /// Load a golden suite from a JSON file.

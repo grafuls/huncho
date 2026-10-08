@@ -129,7 +129,7 @@ function initializeRuntime(config, moduleBytes, loaderBytes, wasmBytes) {
   return runtime.promise;
 }
 
-function validateGraph(session) {
+function validateGraph(session, batched) {
   const inputs = new Map(session.inputMetadata.map(x => [x.name, x]));
   const outputs = session.outputMetadata;
   const dynamic = x => typeof x === 'string' && x.length > 0;
@@ -140,17 +140,17 @@ function validateGraph(session) {
       throw new Error(`integrated marker graph has invalid ${name} metadata`);
     }
   }
-  input('tokens', [1, '*']);
-  input('positions', ['*']);
-  input('qtype', [1]);
-  if (inputs.has('attention_mask')) input('attention_mask', [1, '*']);
+  input('tokens', [batched ? '*' : 1, '*']);
+  input('positions', batched ? ['*', 2] : ['*']);
+  input('qtype', [batched ? '*' : 1]);
+  if (inputs.has('attention_mask')) input('attention_mask', [batched ? '*' : 1, '*']);
   if (inputs.size !== (inputs.has('attention_mask') ? 4 : 3) ||
       outputs.length !== 1 || outputs[0].name !== 'scores' ||
       !outputs[0].isTensor || outputs[0].type !== 'float32' ||
       outputs[0].shape.length !== 2 || !dynamic(outputs[0].shape[0]) || outputs[0].shape[1] !== 1) {
     throw new Error('expected only raw FP32 scores [markers,1] from the integrated F1 head');
   }
-  return inputs.has('attention_mask');
+  return { mask: inputs.has('attention_mask'), batched };
 }
 
 export class HunchoBrowser {
@@ -158,18 +158,20 @@ export class HunchoBrowser {
   #session;
   #ort;
   #mask;
+  #batched;
   #queue = Promise.resolve();
   #pending = 0;
   #closed = false;
   #disposal;
   #report;
 
-  constructor(key, core, session, ort, mask) {
+  constructor(key, core, session, ort, graph) {
     if (key !== constructorKey) throw new Error('use HunchoBrowser.load() for fresh labeled qualification');
     this.#core = core;
     this.#session = session;
     this.#ort = ort;
-    this.#mask = mask;
+    this.#mask = graph.mask;
+    this.#batched = graph.batched;
   }
 
   static async loadPackage(spec) {
@@ -179,8 +181,15 @@ export class HunchoBrowser {
 
   static async load(config) {
     config = snapshot(config);
-    if (config.provider !== 'wasm' || config.head !== 'graph-integrated-f1-v1') {
-      throw new Error('this increment supports CPU WASM with an integrated F1 scalar head only');
+    const batched = config.head === 'graph-integrated-f1-batch-v1';
+    if (config.provider !== 'wasm' || (!batched && config.head !== 'graph-integrated-f1-v1')) {
+      throw new Error('this increment supports CPU WASM with an integrated F1 scalar or row/marker head only');
+    }
+    if (batched ? !config.batch || Object.keys(config.batch).some(key => !['max_tokens', 'padding_percent'].includes(key)) ||
+        !Number.isInteger(config.batch.max_tokens) || config.batch.max_tokens < 1 || config.batch.max_tokens > 65536 ||
+        !Number.isInteger(config.batch.padding_percent) || config.batch.padding_percent < 0 || config.batch.padding_percent > 100
+      : config.batch !== undefined) {
+      throw new Error('immutable browser batches require 1..65536 tokens and padding percent 0..100');
     }
     const specs = [config.manifest, config.tokenizer, config.model, config.golden,
       config.core?.module, config.core?.wasm, config.runtime?.module, config.runtime?.loader, config.runtime?.wasm];
@@ -196,6 +205,12 @@ export class HunchoBrowser {
     const identity = { onnx_execution_provider: 'wasm', onnx_web_version: VERSION,
       native_execution: 'onnxruntime-web-integrated-f1-v1', browser_user_agent: navigator.userAgent,
       wasm_threads: '1', wasm_simd: 'fixed', graph_optimization: 'all' };
+    if (batched) Object.assign(identity, {
+      native_execution: 'onnxruntime-web-integrated-f1-batch-v1',
+      external_marker_scores: config.head, onnx_native_batch: 'wasm-f1-row-marker-v1',
+      browser_batch_tokens: String(config.batch.max_tokens),
+      browser_batch_padding_percent: String(config.batch.padding_percent),
+    });
     identity.browser_execution = typeof document === 'undefined' &&
       typeof DedicatedWorkerGlobalScope !== 'undefined' && globalThis instanceof DedicatedWorkerGlobalScope
       ? 'dedicated-worker-v1' : 'calling-thread-v1';
@@ -213,17 +228,31 @@ export class HunchoBrowser {
       session = await ort.InferenceSession.create(bytes[2], {
         executionProviders: ['wasm'], graphOptimizationLevel: 'all', executionMode: 'sequential',
       });
-      instance = new HunchoBrowser(constructorKey, core, session, ort, validateGraph(session));
+      const graph = validateGraph(session, batched);
+      if (batched && config.batch.padding_percent > 0 && !graph.mask) {
+        throw new Error('padded browser batches require an explicit original-length attention mask');
+      }
+      instance = new HunchoBrowser(constructorKey, core, session, ort, graph);
       const responses = [];
       const work = {};
+      const independent = [];
+      const independentWork = {};
       for (const request of requests) {
         const result = await instance.#execute(JSON.stringify(request), false);
         responses.push(result.response);
         for (const [key, value] of Object.entries(result.work)) work[key] = (work[key] ?? 0) + value;
+        if (batched) {
+          const scalar = await instance.#execute(JSON.stringify(request), false, true);
+          independent.push(scalar.response);
+          for (const [key, value] of Object.entries(scalar.work)) independentWork[key] = (independentWork[key] ?? 0) + value;
+        }
       }
-      const report = JSON.parse(core.qualify(golden, JSON.stringify(responses), JSON.stringify(work)));
+      const report = JSON.parse(batched
+        ? core.qualify_batched(golden, JSON.stringify(responses), JSON.stringify(work),
+          JSON.stringify(independent), JSON.stringify(independentWork))
+        : core.qualify(golden, JSON.stringify(responses), JSON.stringify(work)));
       if (!report.passed || !report.outcome_calibration) {
-        throw new Error(`browser labeled conformance failed: delta=${report.max_prob_delta}, argmax=${report.argmax_agreement}, ECE drift=${report.ece}`);
+        throw new Error(`browser labeled conformance failed: delta=${report.max_prob_delta}, argmax=${report.argmax_agreement}, ECE drift=${report.ece}, paired delta=${report.optimization_parity?.max_prob_delta}`);
       }
       instance.#report = report;
       return instance;
@@ -239,9 +268,11 @@ export class HunchoBrowser {
 
   get qualification() { return snapshot(this.#report); }
 
-  async #execute(requestJson, extensions) {
-    const plan = JSON.parse(this.#core.prepare(requestJson, extensions));
+  async #execute(requestJson, extensions, independent = false) {
+    const plan = JSON.parse(independent ? this.#core.prepare_independent(requestJson, extensions)
+      : this.#core.prepare(requestJson, extensions));
     try {
+      if (this.#batched) return await this.#executeBatches(plan);
       const scores = [];
       for (const input of plan.readouts) {
         const tensors = [];
@@ -278,6 +309,62 @@ export class HunchoBrowser {
     } finally {
       this.#core.cancel(plan.handle);
     }
+  }
+
+  async #executeBatches(plan) {
+    const scores = new Array(plan.readouts.length);
+    const groups = plan.groups ?? plan.readouts.map((input, i) => ({ readouts: [i], sequence: input.tokens.length }));
+    for (const group of groups) {
+      const tokens = new Array(group.sequence * group.readouts.length).fill(0);
+      const mask = this.#mask ? new Array(tokens.length).fill(0) : undefined;
+      const positions = [];
+      const types = [];
+      group.readouts.forEach((index, row) => {
+        const input = plan.readouts[index];
+        input.tokens.forEach((token, i) => {
+          tokens[row * group.sequence + i] = token;
+          if (mask) mask[row * group.sequence + i] = 1;
+        });
+        input.positions.forEach(position => positions.push(row, position));
+        types.push(input.qtype);
+      });
+      const markers = positions.length / 2;
+      const tensors = [];
+      const tensor = (values, dims) => {
+        const value = new this.#ort.Tensor('int64', BigInt64Array.from(values, BigInt), dims);
+        tensors.push(value);
+        return value;
+      };
+      let outputs;
+      try {
+        const feeds = {
+          tokens: tensor(tokens, [group.readouts.length, group.sequence]),
+          positions: tensor(positions, [markers, 2]),
+          qtype: tensor(types, [group.readouts.length]),
+        };
+        if (mask) feeds.attention_mask = tensor(mask, [group.readouts.length, group.sequence]);
+        outputs = await this.#session.run(feeds, ['scores']);
+        const output = outputs.scores;
+        if (output.type !== 'float32' || output.dims.length !== 2 ||
+            output.dims[0] !== markers || output.dims[1] !== 1) {
+          throw new Error('integrated batch head returned the wrong marker-score shape');
+        }
+        const data = await output.getData();
+        if (!(data instanceof Float32Array) || data.some(x => !Number.isFinite(x))) {
+          throw new Error('integrated batch head returned nonfinite or non-FP32 scores');
+        }
+        let offset = 0;
+        for (const index of group.readouts) {
+          const count = plan.readouts[index].positions.length;
+          scores[index] = Array.from(data.subarray(offset, offset + count));
+          offset += count;
+        }
+      } finally {
+        if (outputs) Object.values(outputs).forEach(value => value.dispose());
+        tensors.forEach(value => value.dispose());
+      }
+    }
+    return JSON.parse(this.#core.finish(plan.handle, JSON.stringify(scores)));
   }
 
   evalWithStats(request, options = {}) {

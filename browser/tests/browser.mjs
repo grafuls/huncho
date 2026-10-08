@@ -19,12 +19,18 @@ const unlabeled = structuredClone(golden);
 unlabeled.cases.forEach(c => { c.targets = {}; });
 const partial = structuredClone(golden);
 delete partial.cases[1].targets.a_noul;
+const equal = structuredClone(golden);
+equal.cases.forEach(c => {
+  c.request.questions.x_choice_copy = structuredClone(c.request.questions.z_choice);
+  c.expected.x_choice_copy = structuredClone(c.expected.z_choice);
+  c.targets.x_choice_copy = c.targets.z_choice;
+});
 const drift = structuredClone(golden);
 drift.cases[0].expected.z_choice = { billing: 0.999, returns: 0.0005, shipping: 0.0005 };
 const pending = await readJson('huncho-model.json');
 pending.calibration.default.status = 'pending';
 pending.calibration.entries['onnx:fp32'].status = 'pending';
-for (const [name, value] of Object.entries({ unlabeled, partial, drift, pending })) {
+for (const [name, value] of Object.entries({ unlabeled, partial, equal, drift, pending })) {
   await writeFile(resolve(generated, `${name}.json`), JSON.stringify(value));
 }
 const server = createServer(async (request, response) => {
@@ -152,6 +158,69 @@ try {
   await rejectedLoad({ ...config, provider: 'webgpu' }, /CPU WASM/);
   checks.push('unlabeled, incomplete, drifted, pending, nonfinite, substituted and GPU-provider loads refuse serving');
 
+  const batchConfig = { ...config, head: 'graph-integrated-f1-batch-v1',
+    model: await asset('tests/generated/batch-masked.onnx'),
+    batch: { max_tokens: 8192, padding_percent: 100 } };
+  await page.evaluate(async config => { window.batchEngine = await HunchoBrowser.load(config); }, batchConfig);
+  const batchReport = await page.evaluate(() => batchEngine.qualification);
+  assert.equal(batchReport.passed, true);
+  assert.equal(batchReport.work.forward_calls, 4);
+  assert.equal(batchReport.work.batch_calls, 4);
+  assert.equal(batchReport.work.padded_batch_calls, 3);
+  assert.ok(batchReport.work.padded_tokens > 0);
+  assert.equal(batchReport.outcome_calibration.questions, 12);
+  assert.ok(batchReport.optimization_parity.max_prob_delta <= 1e-4);
+  assert.equal(batchReport.optimization_parity.argmax_agreement, 1);
+  assert.equal(batchReport.max_batch_tokens, 8192);
+  assert.equal(batchReport.max_batch_padding_percent, 100);
+  for (let i = 0; i < requests.length; i++) {
+    const result = await page.evaluate(request => batchEngine.evalWithStats(request, { extensions: true }), requests[i]);
+    close(result.response, reference.responses[i], `native browser batch ${i}`);
+    assert.equal(result.work.forward_calls, 1);
+    assert.equal(result.work.batch_calls, 1);
+    assert.equal(result.work.processed_tokens - result.work.padded_tokens, result.response.usage.input_tokens);
+  }
+  const scrambled = { ...requests[0], questions: { z_noul: requests[0].questions.a_noul,
+    a_choice: requests[0].questions.z_choice, m_score: requests[0].questions.m_score } };
+  const scatter = await page.evaluate(async request => ({
+    batched: await batchEngine.eval(request, { extensions: true }),
+    scalar: await engine.eval(request, { extensions: true }),
+  }), scrambled);
+  close(scatter.batched, scatter.scalar, 'native sorted row/marker scatter');
+  const equalConfig = { ...batchConfig, model: await asset('tests/generated/batch.onnx'),
+    golden: await asset('tests/generated/equal.json'), batch: { max_tokens: 8192, padding_percent: 0 } };
+  const equalResult = await page.evaluate(async ({ config, request }) => {
+    const loaded = await HunchoBrowser.load(config);
+    const report = loaded.qualification;
+    const result = await loaded.evalWithStats(request, { extensions: true });
+    const scalar = await engine.eval(request, { extensions: true });
+    await loaded.dispose();
+    return { report, result, scalar };
+  }, { config: equalConfig, request: equal.cases[0].request });
+  assert.equal(equalResult.report.work.forward_calls, 10);
+  assert.equal(equalResult.report.work.batch_calls, 4);
+  assert.equal(equalResult.report.work.padded_tokens, 0);
+  assert.equal(equalResult.report.outcome_calibration.questions, 16);
+  close(equalResult.result.response, equalResult.scalar, 'native equal-row graph');
+  checks.push('actual native equal/masked CPU WASM row/marker batches; original typed probabilities, sorted scatter and honest physical/logical counters');
+  await rejectedLoad({ ...batchConfig, model: await asset('tests/generated/model.onnx') }, /invalid tokens metadata/);
+  await rejectedLoad({ ...batchConfig, model: await asset('tests/generated/batch.onnx') }, /original-length attention mask/);
+  await rejectedLoad({ ...batchConfig, model: await asset('tests/generated/batch-nonfinite.onnx') }, /nonfinite/);
+  await rejectedLoad({ ...batchConfig, batch: { max_tokens: 1, padding_percent: 0 } }, /actually batches/);
+  await rejectedLoad({ ...batchConfig, batch: { max_tokens: 65537, padding_percent: 0 } }, /65536/);
+  await rejectedLoad({ ...config, batch: { max_tokens: 8192, padding_percent: 0 } }, /immutable browser batches/);
+  await rejectedLoad({ ...batchConfig, golden: await asset('tests/generated/unlabeled.json') }, /complete observed-label/);
+  const pairedFailure = await page.evaluate(async config => {
+    try { const loaded = await HunchoBrowser.load(config); await loaded.dispose(); return ''; }
+    catch (error) { return String(error); }
+  }, { ...batchConfig, model: await asset('tests/generated/batch-biased.onnx') });
+  assert.match(pairedFailure, /conformance failed/);
+  const goldenDelta = Number(/delta=([^,]+)/.exec(pairedFailure)[1]);
+  const pairedDelta = Number(/paired delta=([^,]+)/.exec(pairedFailure)[1]);
+  assert.ok(goldenDelta <= 0.001 && pairedDelta > 1e-4, pairedFailure);
+  await page.evaluate(() => batchEngine.dispose());
+  checks.push('browser batch ABI/mask/limit/label/nonfinite/vacuous gates; below-external-limit drift still fails fixed paired 1e-4');
+
   const packageResult = await page.evaluate(async ({ url, sha256, request }) => {
     const { HunchoBrowser } = await import(new URL('index.mjs', url).href);
     const loaded = await HunchoBrowser.loadPackage({ url, sha256 });
@@ -272,6 +341,31 @@ try {
   terminated.forEach(error => assert.match(error, /terminated/));
   checks.push('worker hash/outcome refusal, bounded immutable requests, drain/dispose, fatal failure and explicit termination reject all pending work');
 
+  const batchBundle = `tests/generated/batch-bundle-${Date.now()}`;
+  const batchArgs = packageArgs.map((arg, i) => i > 0 && packageArgs[i - 1] === '--model'
+    ? resolve(generated, 'batch-masked.onnx') : arg);
+  const batchPackage = JSON.parse((await promisify(execFile)(process.execPath,
+    [resolve(root, 'scripts/package.mjs'), ...batchArgs, '--head', 'graph-integrated-f1-batch-v1',
+      '--max-batch-tokens', '8192', '--max-batch-padding-percent', '100', '--out', resolve(root, batchBundle)])).stdout);
+  const batchWorker = await page.evaluate(async ({ url, sha256, requests }) => {
+    const { HunchoBrowserWorker } = await import(new URL('index.mjs', url).href);
+    const loaded = await HunchoBrowserWorker.loadPackage({ url, sha256 });
+    const report = loaded.qualification;
+    const results = await Promise.all(requests.map(request => loaded.evalWithStats(request, { extensions: true })));
+    await loaded.dispose();
+    return { report, results };
+  }, { url: `${base}/${batchBundle}/config.json`, sha256: batchPackage.config_sha256, requests });
+  assert.equal(batchWorker.report.execution_metadata.browser_execution, 'dedicated-worker-v1');
+  assert.equal(batchWorker.report.work.batch_calls, 4);
+  assert.equal(batchWorker.report.work.padded_batch_calls, 3);
+  assert.ok(batchWorker.report.optimization_parity.max_prob_delta <= 1e-4);
+  batchWorker.results.forEach((result, i) => {
+    close(result.response, reference.responses[i], `native batched worker ${i}`);
+    assert.equal(result.work.forward_calls, 1);
+    assert.equal(result.work.processed_tokens - result.work.padded_tokens, result.response.usage.input_tokens);
+  });
+  checks.push('new hashed native-batch bundle and dedicated worker each rerun actual labeled/paired tensor gates');
+
   const errors = await page.evaluate(async request => {
     const invalids = [ { ...request, model: 'alias' }, { ...request, questions: {} },
       { ...request, images: [] }, { ...request, questions: { bad: { type: 'choice', criteria: {} } } },
@@ -318,6 +412,7 @@ try {
   checks.push('bounded queue, input snapshots, immutable qualification and drain-before-dispose');
   const summary = { qualified: false, synthetic_fixture_only: true, actual_runtime: 'ONNX Runtime Web 1.30.0 CPU WASM',
     browser: await browser.version(), gpu_checks: false, checks, report, package_report: packageResult.report, worker_report: workerReport,
+    batch_report: batchReport, equal_batch_report: equalResult.report, batch_worker_report: batchWorker.report,
     note: 'Synthetic labels test gate plumbing only; no released-model calibration or speed acceptance.' };
   if (process.env.HUNCHO_BROWSER_TEST_REPORT) {
     await writeFile(process.env.HUNCHO_BROWSER_TEST_REPORT, JSON.stringify(summary, null, 2) + '\n');

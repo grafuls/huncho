@@ -29,7 +29,7 @@ pub use qualification::ServingQualificationToken;
 mod resumable;
 use batching::padded_groups;
 #[cfg(feature = "external-scores")]
-pub use external_scores::{ExternalEvaluation, MarkerReadout};
+pub use external_scores::{ExternalEvaluation, MarkerBatch, MarkerBatchProfile, MarkerReadout};
 pub use resumable::ResumableEvaluation;
 
 /// Options controlling a single evaluation.
@@ -66,7 +66,7 @@ pub struct EvalOptions {
 }
 
 /// Physical work submitted to the backend, separate from logical wire usage.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct EvalStats {
     pub forward_calls: u64,

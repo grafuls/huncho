@@ -61,8 +61,9 @@ scores all questions together. See [Clef setup](clef.md).
 | `VllmBackend` | `huncho-backend` | `vllm` | Pinned optional local CPU Python pooling worker for Kev F2, BF16 backbone/FP32 raw pointer; no vocabulary head or decode. Offline merged LoRA, bounded equal-length native batches and optional two-rank CPU tensor sharding; fresh labeled qualification required. See [workflow and limits](vllm.md). |
 
 The separate [browser package](../browser/README.md) executes F1 FP32 integrated
-scalar-head ONNX graphs through CPU WASM with shared Rust prompt/calibration
-and fixed labeled conformance. This asynchronous SDK is not a new native
+scalar/raw row-marker ONNX heads through CPU WASM with shared Rust
+prompt/calibration, bounded equal/masked native tensor groups, dedicated CPU
+workers and fresh fixed labeled/paired conformance. This asynchronous SDK is not a new native
 `BackendId` or CLI runtime. Generic encoder exports and released-model/browser
 acceptance are not supplied. WebGPU and actual GPU checks remain deferred.
 

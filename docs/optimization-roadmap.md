@@ -42,9 +42,31 @@ These variants remain unqualified.
 | O24 distributed/sharded inference | Actual two-rank local CPU vLLM tensor sharding available | Released fitting/acceptance, capacity/latency; pipeline/multi-node/device implementation and multi-GPU qualification |
 | O25 prefill scheduling | Resumable CPU prefix/question scheduling available | Released labeled qualification and latency; tensor/device scheduling open |
 | O26 MLX | Skipped by user | Apple work deferred |
-| O27 browser WASM/WebGPU | Separate CPU WASM F1 integrated-head SDK, packaging, dedicated bounded CPU workers and fresh per-session labeled gates available | Released exports/calibration, native batches/prefixes, other families and multithread tuning; WebGPU deferred |
+| O27 browser WASM/WebGPU | Separate CPU WASM F1 scalar/native equal/masked row/marker heads, packaging, dedicated bounded CPU workers and fresh per-session labeled/paired gates available | Released exports/calibration, cross-request batches/prefixes, other families and multithread tuning; WebGPU deferred |
 
 ## Implemented increments
+
+### Native CPU browser row/marker batches
+
+O12/O27 now collate whole F1 question rows in actual CPU WASM graph calls, using
+the same distinct dynamic row/marker ABI as native ONNX heads. Core-derived
+immutable groups bound physical rectangles, padding, rows and marker counts;
+owned raw scores scatter to original typed calibration and logical usage.
+Fresh complete labeled gates also run every question independently at batch
+one, require actual tensor/padding work and compare unchanged paired 1e-4
+probabilities/full argmax. Public page and dedicated-worker sessions cannot
+inherit scalar acceptance or change their hashed batch profile per evaluation.
+
+The original four synthetic cases submit four optimized calls for twelve
+questions, including three padded calls (672 physical tokens, 27 padding).
+Equal-row fixture cases preserve copied original vectors/labels and exercise
+ten calls for sixteen questions without padding. These counts do not establish
+released calibration or latency/throughput/RSS improvement. Original weights,
+probabilities, temperatures and thresholds are unchanged; new graphs read the
+frozen weights without regenerating references. Released exports, cross-request
+collation, prefixes, other families and multithreading remain open. Apple and
+actual GPU checks stay deferred.
+[Evidence and limits](verification/browser-batch-cpu-20261008/README.md).
 
 ### Dedicated CPU browser inference workers
 

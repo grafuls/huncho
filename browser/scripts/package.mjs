@@ -6,12 +6,27 @@ import { fileURLToPath } from 'node:url';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
 const inputs = {};
+const profile = {};
 for (let i = 0; i < args.length; i += 2) {
+  if (['--head', '--max-batch-tokens', '--max-batch-padding-percent'].includes(args[i])) {
+    if (!args[i + 1] || profile[args[i]]) throw new Error('expected unique browser batch profile options');
+    profile[args[i]] = args[i + 1];
+    continue;
+  }
   if (!['--manifest', '--tokenizer', '--model', '--golden', '--out'].includes(args[i]) ||
       !args[i + 1] || inputs[args[i]]) throw new Error('expected unique --manifest --tokenizer --model --golden --out paths');
   inputs[args[i]] = resolve(args[i + 1]);
 }
 if (Object.keys(inputs).length !== 5) throw new Error('all five paths are required');
+const head = profile['--head'] ?? 'graph-integrated-f1-v1';
+const batched = head === 'graph-integrated-f1-batch-v1';
+const maxTokens = Number(profile['--max-batch-tokens']);
+const padding = Number(profile['--max-batch-padding-percent'] ?? 0);
+if ((!batched && (head !== 'graph-integrated-f1-v1' || Object.keys(profile).some(key => key !== '--head')))
+    || (batched && (!Number.isInteger(maxTokens) || maxTokens < 1 || maxTokens > 65536
+      || !Number.isInteger(padding) || padding < 0 || padding > 100))) {
+  throw new Error('batch heads require 1..65536 tokens and padding percent 0..100; scalar heads cannot batch');
+}
 const files = {
   'huncho-model.json': inputs['--manifest'], 'tokenizer.json': inputs['--tokenizer'],
   'model.onnx': inputs['--model'], 'golden.json': inputs['--golden'],
@@ -39,12 +54,13 @@ if (manifest.family !== 'F1' || manifest.head?.kind !== 'option-marker' || manif
   throw new Error('browser bundle requires an explicit fitted F1 onnx:fp32 scalar head package');
 }
 const spec = name => ({ url: `./${name}`, sha256: createHash('sha256').update(bytes[name]).digest('hex') });
-const config = { provider: 'wasm', head: 'graph-integrated-f1-v1', qualified: false,
+const config = { provider: 'wasm', head, qualified: false,
   manifest: spec('huncho-model.json'), tokenizer: spec('tokenizer.json'), model: spec('model.onnx'), golden: spec('golden.json'),
   core: { module: spec('huncho_browser_core.js'), wasm: spec('huncho_browser_core_bg.wasm') },
   runtime: { module: spec('ort.wasm.min.mjs'), loader: spec('ort-wasm-simd-threaded.mjs'), wasm: spec('ort-wasm-simd-threaded.wasm') },
   sdk: spec('index.mjs'), note: 'No serving acceptance is inherited. loadPackage performs fresh complete labeled CPU WASM conformance.' };
 config.worker = { module: spec('worker.mjs') };
+if (batched) config.batch = { max_tokens: maxTokens, padding_percent: padding };
 const descriptor = Buffer.from(JSON.stringify(config, null, 2) + '\n');
 const output = inputs['--out'];
 await mkdir(output);
