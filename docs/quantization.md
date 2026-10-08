@@ -116,3 +116,11 @@ per-request statistics. Their row arrays, targets and hashes still cover the
 complete collection, but those work counters cannot support an aggregate
 performance claim. Interrupted collections still supply no completed audit or
 qualification.
+
+## Released CPU fitting progress
+
+The existing isolated Kev CPU Q8 job completed 768 fitting rows and saved a
+separate typed refit. At the 2026-10-08 20:30:54 UTC observation, independent
+1,536-case held-out conformance was active and Q4 was waiting. Both remain
+unqualified; no source temperature or held-out golden was changed, and no GPU
+check ran. [Pinned progress and counter limitation](verification/kev-quant-cpu-20261008/README.md).

@@ -1,0 +1,44 @@
+{
+  "observed_at_utc": "2026-10-08 20:30:54 UTC",
+  "scope": "Existing CPU quantization job only; no Apple or actual GPU check",
+  "qualified": false,
+  "profile": "candle:q8_0-fp32",
+  "fitting_rows": 768,
+  "captured_rows_verified": 768,
+  "refit_saved": true,
+  "fit_nll": 0.39005208856387225,
+  "entry": {
+    "temperature": 2.3681771755218506,
+    "per_type_temperatures": {
+      "choice": 2.845608949661255,
+      "noul": 1.9874602556228638,
+      "score": 2.3718371391296387
+    },
+    "temperature_by_options": {
+      "choice:2": 2.845608949661255,
+      "noul:2": 1.9874602556228638,
+      "score:3-5": 2.3718371391296387
+    },
+    "confidence": "peak",
+    "status": "refit"
+  },
+  "heldout_cases": 1536,
+  "heldout_status": "Existing independent CPU conform process observed active; report still empty",
+  "heldout_pid": 336220,
+  "q4_status": "Waiting for the existing staged CPU job; not started at observation",
+  "fitting_binary": {
+    "bytes": 18811176,
+    "sha256": "b870ad79ed89987e9970de2c444681d4e71b64cbc7e12a9b70740f856e61657a"
+  },
+  "fitting_input_hash": {
+    "bytes": 691274,
+    "sha256": "96b5d0425699a06f8c8c057abd874c13f53e96824840ec70e1adad5147f4b3ff"
+  },
+  "limits": [
+    "The isolated existing job uses the older staged binary; new kernel/adapter/batching profiles do not inherit its result.",
+    "Original source temperatures and immutable held-out goldens are unchanged. Only a new converted variant received this refit.",
+    "The older capture audit records all 768 questions but its work counters contain only the final request because evaluation resets stats. The current capture implementation already accumulates per-record work; the original audit is preserved, not corrected retroactively.",
+    "Fitting completion/NLL alone cannot qualify calibrated serving. Independent held-out, complete argmax/ECE and any selected paired optimization gates must still pass unchanged.",
+    "No corpus text, fitting logits or model weights are copied into this evidence directory."
+  ]
+}

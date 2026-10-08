@@ -1,0 +1,124 @@
+{
+  "schema_version": 1,
+  "source_manifest": {
+    "schema_version": "1.0",
+    "name": "kev-4b",
+    "family": "F2",
+    "backbone": {
+      "source": {
+        "kind": "hf",
+        "repo": "Qwen/Qwen3.5-4B-Base",
+        "revision": "1001bb4d826a52d1f399e183466143f4da7b741b"
+      },
+      "artifacts": {
+        "candle": [
+          {
+            "path": "adapter_model.safetensors",
+            "dtype": "fp32"
+          },
+          {
+            "path": "adapter_model.safetensors",
+            "dtype": "fp16"
+          },
+          {
+            "path": "adapter_model.safetensors",
+            "dtype": "f16"
+          }
+        ]
+      },
+      "hidden_size": 2560,
+      "max_context": 8192,
+      "tokenizer": "tokenizer.json"
+    },
+    "adapter": {
+      "repo": "jaredpalmer/kev-4b",
+      "revision": "6cfce5c2fa4b4bd64026336ab649c5ca78857d52",
+      "rank": 16
+    },
+    "head": {
+      "kind": "pointer",
+      "weights": "head.pt",
+      "width": 256
+    },
+    "prompt_contract": {
+      "template": "kev-v1",
+      "option_marker_tokens": [
+        "<|box_end|>"
+      ],
+      "state_budget": 8192,
+      "head_budget": 8192,
+      "max_options": 255,
+      "contract_hash": "9eb014d527bf6f61",
+      "max_len": 8192,
+      "head_max_len": 8192
+    },
+    "calibration": {
+      "default": {
+        "temperature": 2.406049966812134,
+        "confidence": "peak",
+        "status": "fit"
+      },
+      "entries": {}
+    },
+    "capabilities": {
+      "supports_fork": false,
+      "supports_multi_lora": false
+    }
+  },
+  "source_files": {
+    "adapter/config": {
+      "bytes": 1271,
+      "sha256": "8a05dfd6c5e7f61a62e6db5d8de8093a8dbbd105aa7ee7b5e7b73f6249f45617"
+    },
+    "adapter/weights": {
+      "bytes": 129924032,
+      "sha256": "90e817356246e7f18bfa7ca3d31794cd4fbeb3332a66a84cb51d9ceae925f2b2"
+    },
+    "base/config.json": {
+      "bytes": 3161,
+      "sha256": "ddc63e1c717afa86c865bb5e01313d89d72bb53b97ad4a8a03ba8510c0621670"
+    },
+    "base/model.safetensors-00001-of-00002.safetensors": {
+      "bytes": 5329398712,
+      "sha256": "df547074dce70532a0493e5433152bd17a65efb89088cfabc2e7e2371a93d712"
+    },
+    "base/model.safetensors-00002-of-00002.safetensors": {
+      "bytes": 3990429344,
+      "sha256": "590fbaac095dd31db886c322d9d2f7df47777966391acf306ddddc3e4e3a15ef"
+    },
+    "head": {
+      "bytes": 5249791,
+      "sha256": "dd633435998ecc751ac538717a3742e32149500fabf7d7276287dbf0693f347c"
+    },
+    "manifest": {
+      "bytes": 1363,
+      "sha256": "b32072ebd7b54e2ed6c9c02df247e2812a8d65d3bade46bdb8b2d7211ac665a4"
+    },
+    "tokenizer": {
+      "bytes": 19989325,
+      "sha256": "06b9509352d2af50381ab2247e083b80d32d5c0aba91c272ca9ff729b6a0e523"
+    }
+  },
+  "converter_binary": {
+    "bytes": 18811176,
+    "sha256": "b870ad79ed89987e9970de2c444681d4e71b64cbc7e12a9b70740f856e61657a"
+  },
+  "artifact": {
+    "bytes": 6338859776,
+    "sha256": "9b1c86e36d7f8476060f39a81bf916726fdc3574c4842e09a731cc020e53f04c"
+  },
+  "statistics": {
+    "scheme": "kev-projections-q8_0-fp32-v1",
+    "projection_count": 248,
+    "source_projection_bytes": 14276362240,
+    "packed_projection_bytes": 3792158720,
+    "dense_backbone_bytes": 2546642944
+  },
+  "qualified": false,
+  "limits": [
+    "CPU only; FP32 LoRA merge followed by packed Q8_0/Q4_0 projections.",
+    "QMatMul internally quantizes activation blocks; FP32 activations and state do not imply unchanged arithmetic.",
+    "Conversion and loading temporarily materialize dense projection weights; statistics cover payload, not peak RSS.",
+    "No fitting data or held-out outcomes were evaluated; do not serve before refit and fresh labeled conformance."
+  ]
+}

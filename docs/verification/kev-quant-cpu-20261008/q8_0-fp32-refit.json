@@ -1,0 +1,24 @@
+{
+  "manifest": "/var/tmp/huncho-quant-cpu-20261008/q8_0-fp32/huncho-model.json",
+  "backend": "candle",
+  "dtype": "q8_0-fp32",
+  "fitting_rows": 768,
+  "fit_nll": 0.39005208856387225,
+  "entry": {
+    "temperature": 2.3681771755218506,
+    "per_type_temperatures": {
+      "choice": 2.845608949661255,
+      "noul": 1.9874602556228638,
+      "score": 2.3718371391296387
+    },
+    "temperature_by_options": {
+      "choice:2": 2.845608949661255,
+      "noul:2": 1.9874602556228638,
+      "score:3-5": 2.3718371391296387
+    },
+    "confidence": "peak",
+    "status": "refit"
+  },
+  "saved": true,
+  "qualification": "refit only; held-out runtime conformance remains required"
+}

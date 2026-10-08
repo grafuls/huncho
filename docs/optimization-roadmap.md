@@ -8,9 +8,11 @@ The user has deferred Apple Silicon work and all checks against actual GPUs.
 CPU implementation and qualification continue. "Available" below describes
 code and fixture coverage; it does not promote a released model/precision.
 The CPU Kev held-out gate rejected FP32, and selected-case FP16 diagnostics
-also show drift. Packed CPU fitting/held-out evaluation was staged remotely;
-its current completion cannot be verified because SSH to the supplied host
-still times out. These variants remain unqualified.
+also show drift. Lab access resumed: the staged CPU Q8 job completed all 768 fitting rows
+and saved its separate refit; the independent 1,536-case held-out process was
+active at 20:30:54 UTC, with Q4 still waiting. Fitting alone grants no release.
+[CPU progress and audit limits](verification/kev-quant-cpu-20261008/README.md).
+These variants remain unqualified.
 
 | Area | Implementation status | Remaining work or qualification |
 |---|---|---|
@@ -31,7 +33,7 @@ still times out. These variants remain unqualified.
 | O15 device buffers/graph replay | Optional stable CUDA ONNX I/O and bounded graph replay implemented; CPU ownership checks and CUDA compilation pass | Actual GPU capture/execution/calibration and released graph/performance qualification deferred |
 | O16 Candle device propagation | Optional CUDA loaders available | Actual GPU checks deferred |
 | O17 recurrent/conv buffers | CPU implementations available | Released profile acceptance rejected; parallel device kernels open |
-| O18 quantization | Experimental Candle and llama.cpp CPU Q8/Q4 packages available | Portable Q8/Q4 fit/held-out job staged; host currently unreachable; other families open |
+| O18 quantization | Experimental Candle and llama.cpp CPU Q8/Q4 packages available | CPU Q8 refit complete, held-out active at the recorded snapshot; Q4 waiting; other families open |
 | O19 retained/paged prefixes | Bounded immutable CPU snapshots, copy-on-write CPU KV pages, optional direct CPU FP32 page attention and equal/padded-suffix branch collation available | Mixed-prefix/multi-row direct page kernels, device kernels and tenant policies |
 | O20 Metal | Skipped by user | Apple work deferred |
 | O21 llama.cpp | CPU F2/F3, full-state forks/chunks, bounded native batches and pending FP32/FP16/Q8/Q4 exports available | Released fitting/qualification and graph-side readout efficiency |
