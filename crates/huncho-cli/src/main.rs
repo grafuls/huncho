@@ -2,10 +2,12 @@
 
 mod bench;
 mod calibrate;
-#[cfg(feature = "quantization")]
+#[cfg(any(feature = "quantization", feature = "llamacpp"))]
 mod capture_logits;
 mod conform;
 mod convert;
+#[cfg(feature = "llamacpp")]
+mod export_llamacpp;
 mod load;
 #[cfg(feature = "qualification")]
 mod qualification;
@@ -37,9 +39,12 @@ enum Command {
     #[cfg(feature = "quantization")]
     /// Build a new CPU Kev packed-weight package with pending calibration.
     Quantize(quantize::QuantizeArgs),
-    #[cfg(feature = "quantization")]
+    #[cfg(any(feature = "quantization", feature = "llamacpp"))]
     /// Collect independent Kev fitting logits offline, including pending variants.
     CaptureLogits(capture_logits::CaptureArgs),
+    #[cfg(feature = "llamacpp")]
+    /// Export a new CPU Qwen3.5 GGUF package with pending calibration.
+    ExportLlamacpp(export_llamacpp::ExportArgs),
     /// Packaging probe: initialize CUDA and run kernels without loading a model.
     #[command(name = "__check-cuda", hide = true)]
     CheckCuda,
@@ -67,8 +72,10 @@ async fn main() -> anyhow::Result<()> {
         Command::Bench(a) => bench::run(a),
         #[cfg(feature = "quantization")]
         Command::Quantize(a) => quantize::run(a),
-        #[cfg(feature = "quantization")]
+        #[cfg(any(feature = "quantization", feature = "llamacpp"))]
         Command::CaptureLogits(a) => capture_logits::run(a),
+        #[cfg(feature = "llamacpp")]
+        Command::ExportLlamacpp(a) => export_llamacpp::run(a),
         Command::CheckCuda => {
             #[cfg(feature = "candle")]
             if huncho_backend::device::device_from_env()?.is_cuda() {

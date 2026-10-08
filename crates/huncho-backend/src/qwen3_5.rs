@@ -1358,6 +1358,99 @@ fn merge_lora_into_map(
     Ok(())
 }
 
+/// Export the same CPU FP32 LoRA merge used by Kev inference as a new HF text
+/// checkpoint for the pinned llama.cpp converter. No calibration is copied and
+/// the source checkpoint is never written. The destination must not exist.
+#[cfg(feature = "llamacpp")]
+pub fn export_merged_hf(
+    base_dir: &Path,
+    adapter_dir: &Path,
+    include_lm_head: bool,
+    destination: &Path,
+) -> CoreResult<usize> {
+    let config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(base_dir.join("config.json"))?)?;
+    let mut text = config.get("text_config").unwrap_or(&config).clone();
+    let model_type = text
+        .get("model_type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if !matches!(model_type, "qwen3_5_text" | "qwen3_5") {
+        return Err(Error::Unsupported(
+            "GGUF export requires dense Qwen3.5 text weights".into(),
+        ));
+    }
+    let cfg = Config::from_value(&text).map_err(|e| Error::Package(e.to_string()))?;
+    if cfg.attention_bias || cfg.linear_key_head_dim != cfg.linear_value_head_dim {
+        return Err(Error::Unsupported("pinned GGUF profile requires bias-free projections and equal linear key/value head dimensions".into()));
+    }
+    let mut tensors =
+        load_base_tensors_filtered(base_dir, &Device::Cpu, DType::F32, include_lm_head)?;
+    let lora =
+        candle::safetensors::load(adapter_dir.join("adapter_model.safetensors"), &Device::Cpu)
+            .map_err(|e| Error::Package(e.to_string()))?;
+    let (rank, alpha) = read_lora_hyperparams(&adapter_dir.join("adapter_config.json"))?;
+    if rank == 0 {
+        return Err(Error::Package(
+            "GGUF export requires positive LoRA rank".into(),
+        ));
+    }
+    merge_lora_into_map(&mut tensors, &lora, alpha / rank as f32, DType::F32)
+        .map_err(|e| Error::Package(e.to_string()))?;
+    for (name, tensor) in &tensors {
+        if tensor
+            .flatten_all()
+            .and_then(|t| t.to_vec1::<f32>())
+            .map_err(|e| Error::Package(e.to_string()))?
+            .iter()
+            .any(|x| !x.is_finite())
+        {
+            return Err(Error::Package(format!("non-finite exported weight {name}")));
+        }
+    }
+    Model::new(
+        &cfg,
+        VarBuilder::from_tensors(tensors.clone(), DType::F32, &Device::Cpu),
+        &Device::Cpu,
+        DType::F32,
+    )
+    .map_err(|e| Error::Package(e.to_string()))?;
+    if include_lm_head && tensors.contains_key("lm_head.bias") {
+        return Err(Error::Unsupported(
+            "pinned Qwen3.5 GGUF does not expose an LM-head bias".into(),
+        ));
+    }
+    if include_lm_head && !tensors.contains_key("lm_head.weight") {
+        return Err(Error::Package(
+            "F3 export requires trained language-model weights".into(),
+        ));
+    }
+    let tensors: HashMap<_, _> = tensors
+        .into_iter()
+        .map(|(name, tensor)| {
+            let name = name
+                .strip_prefix("model.language_model.")
+                .map(|suffix| format!("model.{suffix}"))
+                .unwrap_or(name);
+            (name, tensor)
+        })
+        .collect();
+    let bytes = tensors.values().map(|t| t.elem_count() * 4).sum();
+    text["architectures"] = serde_json::json!(["Qwen3_5ForCausalLM"]);
+    text["model_type"] = serde_json::json!("qwen3_5_text");
+    // Kev has no vocabulary projection. Its unused auxiliary GGUF projection
+    // shares embeddings; decision scores still use the external trained head.
+    text["tie_word_embeddings"] = serde_json::json!(!include_lm_head);
+    std::fs::create_dir(destination)?;
+    candle::safetensors::save(&tensors, destination.join("model.safetensors"))
+        .map_err(|e| Error::Package(e.to_string()))?;
+    std::fs::write(
+        destination.join("config.json"),
+        serde_json::to_vec_pretty(&text)?,
+    )?;
+    Ok(bytes)
+}
+
 // ---------------------------------------------------------------------------
 // Backend
 // ---------------------------------------------------------------------------

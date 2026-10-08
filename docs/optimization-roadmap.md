@@ -799,3 +799,30 @@ isolated inference speedup or aggregate-work rate. No corpus text, GPU checks,
 manifest changes or optimized golden replacements are retained. A portable
 Q8 fit cannot silently qualify AVX2; each kernel profile needs its own full
 fitting and unchanged labeled acceptance gates.
+
+### O21: pinned CPU llama.cpp execution and new-package GGUF export
+
+Implemented an optional native CPU backend for actual dense Qwen3.5 Kev pointer
+and F3 vocabulary readouts, plus shared immutable weights with isolated replica
+contexts. The pinned masked hidden-state staging API avoids ordinary embeddings
+mode's all-token output behavior. There is one prefill and no sampler/decode
+loop. F3 candidate selection remains a host gather; F2 still computes an unused
+auxiliary vocabulary projection over selected marker/decision rows.
+
+`export-llamacpp` performs the existing CPU FP32 LoRA merge and the pinned official
+GGUF conversion, preserves trained readouts/tokenizer/contracts and publishes a
+new pending package only after a native load check and input rechecks. It never
+inherits calibration or regenerates golden probabilities. Fitting collection
+and execution receipts now accept the new runtime; fresh complete observed-label
+startup gates apply even to `fit` metadata. Quantized runtime artifacts require
+exact profile metadata and an explicit refit. Existing thresholds are unchanged.
+
+Real CPU fixture tests retain frozen upstream Kev raw/probability references
+(raw delta `8.94e-8`, probability delta `2.98e-8`), cover 512-token masked readouts,
+state resets, F3 projection and concurrent isolated replicas. CLI checks cover
+exact dtype selection, artifact receipts, refusal of unlabeled serving and
+per-context work. See [runtime, export and limits](llamacpp.md). Full released
+Kev fitting/held-out acceptance and controlled runtime benchmarks remain open.
+Native prefix fan-out, native batching, graph-side decision-only projection,
+Q8/Q4 conversion and GPU execution are later increments. No Apple or actual GPU
+checks were performed.

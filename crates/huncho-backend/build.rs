@@ -2,6 +2,14 @@
 // features available on whichever host later runs this binary. Candle's packed
 // dot products choose AVX2/NEON/WASM implementations with target_feature cfgs.
 fn main() {
+    #[cfg(feature = "llamacpp")]
+    {
+        println!("cargo:rerun-if-changed=src/llamacpp_readout.cpp");
+        cc::Build::new()
+            .cpp(true)
+            .file("src/llamacpp_readout.cpp")
+            .compile("huncho_llamacpp_readout");
+    }
     println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_FEATURE");
     println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_ARCH");
     let features = std::env::var("CARGO_CFG_TARGET_FEATURE").unwrap_or_default();

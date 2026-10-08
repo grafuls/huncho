@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "scope": "CPU integration only; no full-model calibration or timing claim",
+  "model": "synthetic two-layer tiny Kev with original nonzero LoRA/head and a zero-padded embedding table for the released tokenizer",
+  "hidden_size": 16,
+  "vocab_size": 248096,
+  "trained_checkpoint_qualified": false,
+  "gpu_checks_performed": false,
+  "apple_checks_performed": false,
+  "profiles": {
+    "gguf-f32": {
+      "native_load_succeeded": true,
+      "calibration_status": "pending",
+      "source_files_unchanged": true,
+      "merged_hf_staging_removed": true,
+      "artifact": {
+        "bytes": 26830880,
+        "sha256": "64f4f5050f9e654c420cdec3fd3d52e4be09e6b6dbb30f954cb6bab8d5be7824"
+      },
+      "runtime": {
+        "device": "CPU",
+        "kv_dtype": "fp32",
+        "llamacpp_cpu_kernels": "avx,avx2,fma,f16c",
+        "llamacpp_execution": "cpu-qwen35-masked-prefill-v1",
+        "llamacpp_threads": "1",
+        "pointer_head_dtype": "fp32",
+        "recurrent_state_dtype": "fp32",
+        "runtime": "llama-cpp-sys-2=0.1.159;llama.cpp=26394b4e6749a41c3633db040e0987500a5f7013",
+        "runtime_version": "0.4.1-dev",
+        "weight_load_mode": "copy"
+      },
+      "observed_outcome_gate": null
+    },
+    "gguf-f16": {
+      "native_load_succeeded": true,
+      "calibration_status": "pending",
+      "source_files_unchanged": true,
+      "merged_hf_staging_removed": true,
+      "artifact": {
+        "bytes": 18881312,
+        "sha256": "b9fb7cdf5ec479f25b4ef8ee5fed2541aec63db2e05173bf479b66f2ee0374fe"
+      },
+      "runtime": {
+        "device": "CPU",
+        "kv_dtype": "fp32",
+        "llamacpp_cpu_kernels": "avx,avx2,fma,f16c",
+        "llamacpp_execution": "cpu-qwen35-masked-prefill-v1",
+        "llamacpp_threads": "1",
+        "pointer_head_dtype": "fp32",
+        "recurrent_state_dtype": "fp32",
+        "runtime": "llama-cpp-sys-2=0.1.159;llama.cpp=26394b4e6749a41c3633db040e0987500a5f7013",
+        "runtime_version": "0.4.1-dev",
+        "weight_load_mode": "copy"
+      },
+      "observed_outcome_gate": null
+    }
+  },
+  "frozen_tiny_384_token_fixture": {
+    "fp32_max_raw_logit_delta": 8.940697e-08,
+    "fp32_max_probability_delta": 2.9802322e-08,
+    "source_temperature": 2.40605,
+    "probability_targets": "frozen upstream fixture; no observed-outcome calibration",
+    "f16_probability_check": "see native integration test",
+    "sha256": "83f9463c39501ef8924ac0b0bbe783cb0561640d09eab679f98a4fbd0a281d18",
+    "f16_max_probability_delta": 4.351139e-06,
+    "f16_argmax_agreement": 1.0
+  }
+}

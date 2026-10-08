@@ -27,6 +27,7 @@ scores all questions together. See [Clef setup](clef.md).
 | `OnnxBackend` | `huncho-backend` | ⚙️ feature-gated | ONNX Runtime on CPU today; CUDA EP registration and device I/O binding remain pending. Built with `onnx`. |
 | `CandleBackend` | `huncho-backend` | ⚙️ feature-gated | Native ModernBERT/Laya, FP32 on CPU by default; explicit optional CUDA path requires labeled qualification. Built with `candle`; GPU kernels require `cuda`. |
 | `Qwen3_5Backend` | `huncho-backend` | ⚙️ feature-gated | Kev F2 pointers and F3 candidate logits over Qwen3.5/merged LoRA. CPU, optional CUDA; F3 GPU selection is explicit and requires labeled qualification. |
+| `LlamaCppBackend` | `huncho-backend` | `llamacpp` | Pinned CPU dense Qwen3.5 GGUF; trained Kev F2 pointers and F3 raw candidate logits. Independent prefill and shared-weight CPU replicas; fresh labeled qualification required. See [workflow and limits](llamacpp.md). |
 
 `MockBackend` emits a `Features` (hidden-state) output so the engine's
 feature-projection heads (F1/F2/F4) and the mean-fallback projection are all

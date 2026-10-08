@@ -6,6 +6,11 @@ profile. These artifacts embed text configuration and projection layout; the
 package also retains the trained pointer head and tokenizer. See the
 [conversion and calibration workflow](quantization.md).
 
+Standard dense Qwen3.5 artifacts for the optional `llamacpp` runtime use separate
+`gguf-f32`, `gguf-f16`, `gguf-q8_0` or `gguf-q4_0` labels. They are incompatible
+with the Candle packed-projection format above. See [CPU GGUF export and pending
+calibration](llamacpp.md); external quantized layouts need their exact profile.
+
 A model package is a single `huncho-model.json` manifest plus artifacts. Every
 backend can load it. The manifest pins everything the engine needs to serve a
 model deterministically: family, backbone, head, prompt contract, calibration,

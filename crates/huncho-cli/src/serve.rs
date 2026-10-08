@@ -48,7 +48,7 @@ pub struct ServeArgs {
     #[arg(long)]
     pub token: Option<String>,
 
-    /// Backend override (auto|onnx|candle|clef|mock). Auto selects a runtime per model.
+    /// Backend override (auto|onnx|candle|clef|llamacpp|mock). Auto selects a runtime per model.
     #[arg(long, default_value = "auto", env = "HUNCHO_BACKEND")]
     pub backend: String,
 
@@ -397,6 +397,7 @@ fn changed_arithmetic_profile(engine: &huncho_core::engine::Engine) -> bool {
         "prefill_chunk_tokens",
         "weight_quantization",
         "cpu_kernel_build",
+        "llamacpp_execution",
     ]
     .iter()
     .any(|key| engine.execution_metadata().contains_key(*key))
@@ -922,6 +923,7 @@ mod qualification_tests {
             ("delta_rule_execution", "cpu-buffered-v1"),
             ("causal_conv_execution", "cpu-buffered-v1"),
             ("cpu_kernel_build", "x86_64:avx,avx2,f16c,fma"),
+            ("llamacpp_execution", "cpu-qwen35-masked-prefill-v1"),
         ] {
             let registry = registry_with_execution_metadata(
                 0.0,

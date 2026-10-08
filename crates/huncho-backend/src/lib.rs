@@ -37,6 +37,8 @@ pub mod onnx;
 pub mod qwen3_5;
 #[cfg(feature = "shared-base")]
 pub mod shared_base;
+#[cfg(feature = "llamacpp")]
+pub mod llamacpp;
 
 #[cfg(feature = "candle")]
 pub use candle::CandleBackend;
@@ -48,6 +50,8 @@ pub use null::NullBackend;
 pub use onnx::OnnxBackend;
 #[cfg(feature = "candle")]
 pub use qwen3_5::Qwen3_5Backend;
+#[cfg(feature = "llamacpp")]
+pub use llamacpp::LlamaCppBackend;
 
 /// Process-unique handles prevent an ID from one model accidentally selecting
 /// another model's live prefix. Allocation never wraps and reuses an old ID.

@@ -37,7 +37,7 @@ pub struct ConformArgs {
     #[arg(long)]
     pub golden: Option<String>,
 
-    /// Backend override (auto|onnx|candle|clef|mock). Auto selects from model metadata.
+    /// Backend override (auto|onnx|candle|clef|llamacpp|mock). Auto selects from model metadata.
     #[arg(long, default_value = "auto")]
     pub backend: String,
 

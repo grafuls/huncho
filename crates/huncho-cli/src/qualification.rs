@@ -57,7 +57,7 @@ pub(crate) struct InputSnapshot {
 }
 
 impl InputSnapshot {
-    #[cfg(feature = "quantization")]
+    #[cfg(any(feature = "quantization", feature = "llamacpp"))]
     pub(crate) fn file_digests(&self) -> &BTreeMap<String, FileDigest> {
         &self.files
     }
@@ -148,6 +148,11 @@ fn input_paths(
             paths.insert("head/config".into(), dir.join("joint_head_config.json"));
             paths.insert("head/weights".into(), dir.join(&manifest.head.weights));
         }
+        BackendId::LlamaCpp => {
+            let artifact = manifest.find_artifact(backend, dtype).ok_or_else(|| Error::Package("missing exact llama.cpp artifact".into()))?;
+            paths.insert("backbone/gguf".into(), dir.join(&artifact.path));
+            if manifest.family == Family::F2 { paths.insert("head".into(), dir.join(&manifest.head.weights)); }
+        }
         BackendId::Onnx => {
             let artifact = manifest.find_artifact(backend, dtype).ok_or_else(|| Error::Package("missing selected ONNX artifact".into()))?;
             let graph = dir.join(&artifact.path);
@@ -157,7 +162,7 @@ fn input_paths(
             // symlinks fail closed, and individual HF file symlinks are hashed.
             add_tree(&mut paths, graph.parent().unwrap_or(dir), "onnx/files")?;
         }
-        _ => return Err(Error::Unsupported("qualification records are implemented for native Candle/Clef and ONNX artifact loaders".into())),
+        _ => return Err(Error::Unsupported("qualification records are implemented for native Candle/Clef, llama.cpp and ONNX artifact loaders".into())),
     }
     Ok(paths)
 }
@@ -271,6 +276,7 @@ impl ExecutionIdentity {
             "HUNCHO_ONNX_OUTPUT_BUFFER_BYTES",
             "HUNCHO_ONNX_EP",
             "HUNCHO_ONNX_THREADS",
+            "HUNCHO_LLAMA_THREADS",
             "HUNCHO_ONNX_NATIVE_BATCH",
             "HUNCHO_CPU_DELTA_RULE",
             "HUNCHO_CPU_CAUSAL_CONV",

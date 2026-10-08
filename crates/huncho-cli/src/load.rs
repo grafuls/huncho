@@ -44,6 +44,7 @@ fn available_backends() -> Vec<BackendId> {
         (BackendId::Clef, cfg!(feature = "clef")),
         (BackendId::Candle, cfg!(feature = "candle")),
         (BackendId::Onnx, cfg!(feature = "onnx")),
+        (BackendId::LlamaCpp, cfg!(feature = "llamacpp")),
     ]
     .into_iter()
     .filter_map(|(backend, enabled)| enabled.then_some(backend))
@@ -241,7 +242,7 @@ fn engine_from_manifest_observed(
     let dtype = dtype.map(|s| s.to_string()).unwrap_or_else(|| {
         if backend_id == BackendId::Clef {
             clef_dtype.unwrap_or("fp16").to_string()
-        } else if manifest.family == Family::F3 || kev_gpu {
+        } else if (backend_id == BackendId::Candle && manifest.family == Family::F3) || kev_gpu {
             "fp16".to_string()
         } else {
             manifest.default_dtype(backend_id).to_string()
@@ -276,10 +277,43 @@ fn load_backend(
         BackendId::Onnx => load_onnx(manifest, dtype, dir),
         BackendId::Candle => load_candle(manifest, dtype, dir),
         BackendId::Clef => load_clef(manifest, dtype, dir),
+        BackendId::LlamaCpp => load_llamacpp(manifest, dtype, dir),
         other => Err(Error::Unsupported(format!(
             "backend `{other}` is not available in this build"
         ))),
     }
+}
+
+#[cfg(feature = "llamacpp")]
+fn load_llamacpp(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<dyn Backend>> {
+    match std::env::var("HUNCHO_DEVICE") {
+        Ok(value) if value == "cpu" => {}
+        Err(std::env::VarError::NotPresent) => {}
+        _ => {
+            return Err(Error::Unsupported(
+                "llamacpp currently requires HUNCHO_DEVICE=cpu or unset".into(),
+            ))
+        }
+    }
+    let threads = match std::env::var("HUNCHO_LLAMA_THREADS") {
+        Ok(value) => value
+            .parse::<usize>()
+            .map_err(|_| Error::Package("HUNCHO_LLAMA_THREADS must be in 1..256".into()))?,
+        Err(std::env::VarError::NotPresent) => 1,
+        Err(_) => return Err(Error::Package("invalid HUNCHO_LLAMA_THREADS".into())),
+    };
+    Ok(Box::new(huncho_backend::LlamaCppBackend::load(
+        dir,
+        manifest,
+        dtype,
+        huncho_backend::llamacpp::LlamaOptions { threads },
+    )?))
+}
+#[cfg(not(feature = "llamacpp"))]
+fn load_llamacpp(_manifest: &ModelManifest, _dtype: &str, _dir: &Path) -> Result<Box<dyn Backend>> {
+    Err(Error::Unsupported(
+        "llamacpp requires --features llamacpp".into(),
+    ))
 }
 
 #[cfg(feature = "clef")]

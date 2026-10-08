@@ -519,6 +519,10 @@ impl ModelManifest {
                         || (self.family == Family::F2 && self.prompt_contract.template == "kev-v1")
                 }
                 BackendId::Onnx => self.family == Family::F1,
+                BackendId::LlamaCpp => {
+                    self.family == Family::F3
+                        || (self.family == Family::F2 && self.prompt_contract.template == "kev-v1")
+                }
                 _ => self.family != Family::F5,
             };
             if !compatible {
@@ -675,6 +679,38 @@ mod tests {
             .to_string()
             .contains("--features candle"));
     }
+
+    #[test]
+    fn llamacpp_selection_is_limited_to_implemented_decision_families() {
+        let mut m = minimal_manifest();
+        m.backbone.artifacts = BTreeMap::from([(
+            BackendId::LlamaCpp,
+            vec![ArtifactRef {
+                path: "backbone.gguf".into(),
+                dtype: "gguf-f32".into(),
+                quantization: None,
+            }],
+        )]);
+        assert!(m.select_backend(&[BackendId::LlamaCpp], None).is_err());
+        m.family = Family::F2;
+        m.prompt_contract.template = "kev-v1".into();
+        assert_eq!(
+            m.select_backend(&[BackendId::LlamaCpp], None).unwrap(),
+            BackendId::LlamaCpp
+        );
+        assert_eq!(m.default_dtype(BackendId::LlamaCpp), "gguf-f32");
+        m.prompt_contract.template = "other-pointer".into();
+        assert!(m.select_backend(&[BackendId::LlamaCpp], None).is_err());
+        m.family = Family::F3;
+        assert_eq!(
+            m.select_backend(&[BackendId::LlamaCpp], None).unwrap(),
+            BackendId::LlamaCpp
+        );
+        assert!(m
+            .select_backend(&[BackendId::LlamaCpp], Some("fp16"))
+            .is_err());
+    }
+
 
     #[test]
     fn automatic_backend_does_not_fall_back_for_missing_or_incompatible_artifacts() {
