@@ -33,10 +33,12 @@ use huncho_core::error::{Error, Result as CoreResult};
 use huncho_core::manifest::{BackendId, Family};
 use huncho_core::tensor::Tensor as CoreTensor;
 
+mod attention;
+mod kv_pages;
 #[cfg(feature = "quantization")]
 #[path = "qwen_quantized.rs"]
 pub mod quantized;
-mod attention;
+use kv_pages::PagedKv;
 
 /// The block type of a decoder layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -575,19 +577,31 @@ impl Attention {
             .transpose(1, 2)?;
 
         let (q, k) = apply_partial_rotary(&q, &k, cos, sin, self.rotary_dim)?;
-        let (k, v) = match cache
+        let retained_pages = cache
             .as_ref()
-            .and_then(|cache| cache.key.as_ref().zip(cache.value.as_ref()))
-        {
-            Some((past_key, past_value)) => (
-                Tensor::cat(&[past_key, &k], 2)?,
-                Tensor::cat(&[past_value, &v], 2)?,
-            ),
-            None => (k, v),
+            .and_then(|c| c.pages.as_ref())
+            .map(|pages| pages.append(&k, &v))
+            .transpose()?;
+        let (k, v) = if let Some(pages) = cache.as_ref().and_then(|c| c.pages.as_ref()) {
+            pages.materialize_with(&k, &v)?
+        } else {
+            match cache
+                .as_ref()
+                .and_then(|cache| cache.key.as_ref().zip(cache.value.as_ref()))
+            {
+                Some((past_key, past_value)) => (
+                    Tensor::cat(&[past_key, &k], 2)?,
+                    Tensor::cat(&[past_value, &v], 2)?,
+                ),
+                None => (k, v),
+            }
         };
         // Retain unexpanded GQA tensors. A fork shares immutable prefix storage;
         // appending a branch produces new tensors and cannot mutate its parent.
-        let retained = cache.as_ref().map(|_| (k.clone(), v.clone()));
+        let retained = cache
+            .as_ref()
+            .filter(|_| retained_pages.is_none())
+            .map(|_| (k.clone(), v.clone()));
 
         let n_rep = self.num_heads / self.num_kv_heads;
         let k = if n_rep > 1 && !self.grouped_gqa {
@@ -634,9 +648,13 @@ impl Attention {
             .broadcast_mul(&gate)?
             .reshape((b, seq, self.num_heads * self.head_dim))?;
         let output = self.o_proj.forward(&attn)?;
-        if let (Some(cache), Some((key, value))) = (cache, retained) {
-            cache.key = Some(key);
-            cache.value = Some(value);
+        if let Some(cache) = cache {
+            if let Some(pages) = retained_pages {
+                cache.pages = Some(pages);
+            } else if let Some((key, value)) = retained {
+                cache.key = Some(key);
+                cache.value = Some(value);
+            }
         }
         Ok(output)
     }
@@ -938,7 +956,9 @@ impl Mlp {
         if self.cpu_fused_gate {
             let gate = self.gate_proj.forward(x)?;
             let up = self.up_proj.forward(x)?;
-            return self.down_proj.forward(&crate::gate_cpu::silu_mul(&gate, &up)?);
+            return self
+                .down_proj
+                .forward(&crate::gate_cpu::silu_mul(&gate, &up)?);
         }
         let gate = self.gate_proj.forward(x)?.apply(&self.act)?;
         let up = self.up_proj.forward(x)?;
@@ -1025,6 +1045,7 @@ impl DecoderLayer {
 
 #[derive(Clone, Default)]
 struct LayerCache {
+    pages: Option<PagedKv>,
     key: Option<Tensor>,
     value: Option<Tensor>,
     recurrent: Option<Tensor>,
@@ -1042,6 +1063,9 @@ impl ModelCache {
         let mut bytes = tokens.checked_mul(8)?.checked_add(512)?;
         for layer in &self.layers {
             bytes = bytes.checked_add(512)?;
+            if let Some(pages) = &layer.pages {
+                bytes = bytes.checked_add(pages.retention_bytes()?)?;
+            }
             for tensor in [
                 &layer.key,
                 &layer.value,
@@ -1073,6 +1097,7 @@ impl ModelCache {
             .iter()
             .map(|layer| {
                 Ok(LayerCache {
+                    pages: layer.pages.clone(),
                     key: copy(&layer.key)?,
                     value: copy(&layer.value)?,
                     recurrent: copy(&layer.recurrent)?,
@@ -1168,6 +1193,7 @@ pub struct Model {
     fp32_attention: bool,
     attention_query_rows: usize,
     grouped_gqa: bool,
+    kv_page_tokens: usize,
     cpu_delta_rule: bool,
     cpu_causal_conv: bool,
     cpu_fused_gate: bool,
@@ -1222,6 +1248,7 @@ impl Model {
             fp32_attention: false,
             attention_query_rows: 0,
             grouped_gqa: false,
+            kv_page_tokens: 0,
             cpu_delta_rule: false,
             cpu_causal_conv: false,
             cpu_fused_gate: false,
@@ -1378,7 +1405,15 @@ impl Model {
     fn empty_cache(&self) -> ModelCache {
         ModelCache {
             tokens: 0,
-            layers: vec![LayerCache::default(); self.layers.len()],
+            layers: self
+                .layers
+                .iter()
+                .map(|layer| LayerCache {
+                    pages: (self.kv_page_tokens > 0 && layer.self_attn.is_some())
+                        .then(|| PagedKv::new(self.kv_page_tokens)),
+                    ..Default::default()
+                })
+                .collect(),
         }
     }
 
@@ -1624,6 +1659,40 @@ enum Readout {
 }
 
 impl Qwen3_5Backend {
+    /// Immutable CPU KV pages share full blocks across Kev forks. Attention
+    /// materializes all original keys in order; this is not a paged kernel.
+    pub fn with_kv_page_tokens(mut self, tokens: usize) -> CoreResult<Self> {
+        if tokens != 0 && (!(16..=256).contains(&tokens) || !tokens.is_power_of_two()) {
+            return Err(Error::Request(
+                "KV page tokens must be 0 or a power of two in 16..256".into(),
+            ));
+        }
+        if tokens > 0
+            && (!self.device.is_cpu()
+                || !matches!(self.head.as_ref(), Readout::Pointer(_))
+                || self
+                    .model
+                    .layers
+                    .iter()
+                    .all(|layer| layer.self_attn.is_none()))
+        {
+            return Err(Error::Unsupported(
+                "KV pages currently require CPU Kev with full attention".into(),
+            ));
+        }
+        if tokens != self.model.kv_page_tokens {
+            if !self.caches.is_empty()
+                || !self.pending_prefills.is_empty()
+                || !self.prefixes.values.is_empty()
+            {
+                return Err(Error::Unsupported(
+                    "release retained/partial Qwen caches before changing KV pages".into(),
+                ));
+            }
+            self.model_mut()?.kv_page_tokens = tokens;
+        }
+        Ok(self)
+    }
     /// Group query heads by their existing K/V head without expanding K/V.
     /// Call shapes change; configure before caches/replicas and qualify anew.
     pub fn with_grouped_gqa(mut self, enabled: bool) -> CoreResult<Self> {
@@ -2275,6 +2344,13 @@ impl Backend for Qwen3_5Backend {
         }
         if self.model.grouped_gqa {
             extra.insert("gqa_execution".into(), "cpu-grouped-queries-v1".into());
+        }
+        if self.model.kv_page_tokens > 0 {
+            extra.insert("kv_storage".into(), "cpu-cow-pages-materialize-v1".into());
+            extra.insert(
+                "kv_page_tokens".into(),
+                self.model.kv_page_tokens.to_string(),
+            );
         }
         if self.model.cpu_delta_rule {
             extra.insert("delta_rule_execution".into(), "cpu-buffered-v1".into());

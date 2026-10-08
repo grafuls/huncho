@@ -218,6 +218,7 @@ fn engine_from_manifest_observed(
 ) -> Result<Engine> {
     let manifest = ModelManifest::load(path)?;
     backend_id.require_available(&available_backends())?;
+    validate_kv_pages(&manifest, backend_id)?;
     // F3 (Qwen3.5+LoRA) backbones are large (9B+); default them to fp16 so a
     // plain `serve --backend candle` does not try to materialize a multi-GB
     // checkpoint in fp32. Candle's CPU matmul supports fp16 (but not bf16), so
@@ -276,6 +277,7 @@ fn load_backend(
 ) -> Result<Box<dyn Backend>> {
     let query_rows = attention_query_rows_from_env()?;
     let grouped_gqa = bool_env("HUNCHO_GROUPED_GQA")?;
+    validate_kv_pages(manifest, backend_id)?;
     if (query_rows > 0 || grouped_gqa)
         && (!cfg!(feature = "candle")
             || !((backend_id == BackendId::Candle
@@ -321,6 +323,19 @@ fn load_backend(
             "backend `{other}` is not available in this build"
         ))),
     }
+}
+
+fn validate_kv_pages(manifest: &ModelManifest, backend_id: BackendId) -> Result<()> {
+    if kv_page_tokens_from_env()? > 0
+        && (!cfg!(feature = "candle")
+            || backend_id != BackendId::Candle
+            || manifest.family != Family::F2
+            || manifest.prompt_contract.template != "kev-v1"
+            || std::env::var("HUNCHO_DEVICE").as_deref() != Ok("cpu"))
+    {
+        return Err(Error::Unsupported("KV pages require native Candle Kev F2 and explicit HUNCHO_DEVICE=cpu".into()));
+    }
+    Ok(())
 }
 
 #[cfg(feature = "vllm")]
@@ -463,6 +478,7 @@ fn load_candle(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<
                 manifest.backbone.max_context,
                 dtype,
             )?
+            .with_kv_page_tokens(kv_page_tokens_from_env()?)?
             .with_projection_chunk_rows(projection_chunk_rows_from_env()?)?
             .with_fp32_attention(fp32_attention_from_env()?)?
             .with_cpu_delta_rule(bool_env("HUNCHO_CPU_DELTA_RULE")?)?
@@ -484,6 +500,7 @@ fn load_candle(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<
             dtype,
             huncho_backend::device::device_from_env()?,
         )?
+        .with_kv_page_tokens(kv_page_tokens_from_env()?)?
         .with_projection_chunk_rows(projection_chunk_rows_from_env()?)?
         .with_fp32_attention(fp32_attention_from_env()?)?
         .with_cpu_delta_rule(bool_env("HUNCHO_CPU_DELTA_RULE")?)?
@@ -576,6 +593,18 @@ fn prefill_chunk_tokens_from_env() -> Result<usize> {
 #[cfg(feature = "candle")]
 fn fp32_attention_from_env() -> Result<bool> {
     bool_env("HUNCHO_ATTENTION_FP32")
+}
+
+fn kv_page_tokens_from_env() -> Result<usize> {
+    match std::env::var("HUNCHO_KV_PAGE_TOKENS") {
+        Ok(value) => value
+            .parse::<usize>()
+            .ok()
+            .filter(|&tokens| tokens == 0 || ((16..=256).contains(&tokens) && tokens.is_power_of_two()))
+            .ok_or_else(|| Error::Request("HUNCHO_KV_PAGE_TOKENS must be 0 or a power of two in 16..256".into())),
+        Err(std::env::VarError::NotPresent) => Ok(0),
+        Err(_) => Err(Error::Request("invalid HUNCHO_KV_PAGE_TOKENS".into())),
+    }
 }
 
 fn attention_query_rows_from_env() -> Result<usize> {

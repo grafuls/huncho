@@ -32,7 +32,7 @@ still times out. These variants remain unqualified.
 | O16 Candle device propagation | Optional CUDA loaders available | Actual GPU checks deferred |
 | O17 recurrent/conv buffers | CPU implementations available | Released profile acceptance rejected; parallel device kernels open |
 | O18 quantization | Experimental Candle and llama.cpp CPU Q8/Q4 packages available | Portable Q8/Q4 fit/held-out job staged; host currently unreachable; other families open |
-| O19 retained/paged prefixes | Bounded immutable CPU snapshots available | Paging, branch collation and tenant policies |
+| O19 retained/paged prefixes | Bounded immutable CPU snapshots and copy-on-write CPU KV pages available | Direct paged-attention kernels, branch collation and tenant policies |
 | O20 Metal | Skipped by user | Apple work deferred |
 | O21 llama.cpp | CPU F2/F3, full-state forks/chunks, bounded native batches and pending FP32/FP16/Q8/Q4 exports available | Released fitting/qualification and graph-side readout efficiency |
 | O22 shared bases/residency | Immutable CPU bases and bounded CPU lazy loading/preload/idle eviction available | Released residency measurements and runtime LoRA dispatch |
@@ -43,6 +43,29 @@ still times out. These variants remain unqualified.
 | O27 browser WASM/WebGPU | Separate CPU WASM F1 integrated-head SDK, packaging and fresh labeled gates available | Released exports/calibration, other families and browser scheduling; WebGPU deferred |
 
 ## Implemented increments
+
+### Immutable CPU KV pages for Kev forks
+
+O19 now has default-disabled native Kev KV pages. Full compact CPU blocks share
+across forks; appending a suffix replaces only a partial tail and creates new
+blocks. Attention materializes all original keys and values in their original
+order and retains its existing reductions. Recurrent/convolution state and
+transactional offset/handle behavior are unchanged. Retained snapshots charge
+shared page payloads conservatively within the existing byte/FIFO limits.
+Changing the page profile with live/partial/retained caches or shared model
+replicas is rejected. CLI preflight rejects incompatible profiles before device
+selection, and receipts bind page size/storage identity. Serving requires actual
+prefix/fork qualification and complete fresh labeled gates.
+
+Native FP32/FP16 scores are bitwise equal to flat cached storage across four
+page sizes, page boundaries, typed rows and short/shared prefixes. Frozen
+independent PyTorch probabilities, fixed full argmax and paired 1e-4 gates stay
+unchanged. CPU tests exercise retained hits/eviction, cancellation, malformed
+continuations, context/handle bounds, replicas and profile guards; synthetic
+labeled CLI gates exercise plumbing only. This is storage sharing, not a direct
+paged kernel: attention still allocates contiguous complete KV workspaces.
+Released acceptance, speed/RSS, branch collation and tenant policy remain open.
+No actual GPU check was run. [Verification](verification/kv-pages-cpu-20261008/README.md).
 
 ### Actual ONNX output allocation ownership
 

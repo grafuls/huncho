@@ -279,6 +279,7 @@ impl ExecutionIdentity {
             "HUNCHO_ATTENTION_FP32",
             "HUNCHO_ATTENTION_QUERY_ROWS",
             "HUNCHO_GROUPED_GQA",
+            "HUNCHO_KV_PAGE_TOKENS",
             "HUNCHO_CLEF_VECTOR_HEAD",
             "HUNCHO_CLEF_GROUPED_POOL",
             "HUNCHO_BASE_CACHE_BYTES",

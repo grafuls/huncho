@@ -438,6 +438,7 @@ fn requires_outcome_qualification(engine: &huncho_core::engine::Engine) -> bool 
         "attention_compute_dtype",
         "attention_execution",
         "gqa_execution",
+        "kv_storage",
         "device_path",
         "joint_head_execution",
         "joint_pool_execution",
@@ -534,10 +535,13 @@ fn qualify_optimizations(registry: &ModelRegistry, args: &ServeArgs) -> anyhow::
             "cooperative prefill requires CPU Kev with HUNCHO_PREFILL_CHUNK_TOKENS configured for every model");
         anyhow::ensure!(!engine.execution_metadata().contains_key("prefill_chunk_tokens") || opts.prefix_cache,
             "chunked prefill serving for `{name}` requires --prefix-cache and an actual split-prefix qualification");
+        anyhow::ensure!(!engine.execution_metadata().contains_key("kv_storage") || opts.prefix_cache,
+            "paged KV serving for `{name}` requires --prefix-cache and actual fork qualification");
         let readout_storage_profile = [
             "onnx_readout",
             "onnx_output_buffer_bytes",
             "base_weight_cache",
+            "kv_storage",
         ]
         .iter()
         .any(|key| engine.execution_metadata().contains_key(*key));

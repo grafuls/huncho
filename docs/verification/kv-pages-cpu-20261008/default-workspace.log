@@ -1,0 +1,538 @@
+   Compiling huncho-backend v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-backend)
+   Compiling huncho-cli v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-cli)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.96s
+     Running unittests src/lib.rs (target/debug/deps/huncho_api-cca6c2387b4fb957)
+
+running 5 tests
+test auth::tests::no_token_always_passes ... ok
+test auth::tests::correct_token_passes ... ok
+test auth::tests::wrong_token_fails ... ok
+test coalesce::tests::bounds_cleanup_and_unfinished_owner_release ... ok
+test auth::tests::extensions_header ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/api.rs (target/debug/deps/api-3e9ab07f23324666)
+
+running 28 tests
+test health_reports_ok_and_model_count ... ok
+test list_models_reports_registered_model ... ok
+test exact_result_cache_preserves_extensions_auth_and_physical_metrics ... ok
+test choice_returns_summing_distribution ... ok
+test rejects_media_instead_of_silently_discarding_it ... ok
+test canceling_the_original_caller_does_not_cancel_a_shared_result ... ok
+test missing_auth_token_returns_401 ... ok
+test noul_and_score_questions_serve ... ok
+test cold_waiters_are_bounded_and_failed_or_substituted_factories_are_not_retried ... ok
+test extensions_returned_only_when_requested ... ok
+test unsupported_replica_construction_does_not_replace_any_registered_model ... ok
+test canceled_cold_load_keeps_its_reservation_and_one_shared_factory ... ok
+test unknown_model_returns_422 ... ok
+test cross_request_cancellation_retains_running_capacity_and_discards_queued_work ... ok
+test metrics_exposes_prometheus_registry ... ok
+test slow_inference_keeps_health_registry_and_overload_responsive_after_cancellation ... ok
+test coalesced_failures_keep_the_error_contract_and_are_retried ... ok
+test prepared_prompt_hits_keep_physical_metrics_and_authentication ... ok
+test canceled_blocking_preparation_retains_admission_and_submits_no_forward ... ok
+test mixed_length_http_collation_keeps_wire_usage_and_counts_padding ... ok
+test abandoning_all_shared_queued_callers_releases_capacity_without_inference ... ok
+test queued_request_cancellation_releases_admission_without_running_inference ... ok
+test lazy_residency_bounds_slots_and_never_unloads_external_contexts ... ok
+test preparation_overlaps_execution_and_bounds_ready_requests ... ok
+test lazy_http_auth_validation_and_idle_batch_workers_preserve_residency_limits ... ok
+test replica_jobs_overlap_without_releasing_running_capacity_on_http_cancellation ... ok
+test inflight_sharing_preserves_auth_extensions_admission_and_exact_answers ... ok
+test cross_request_batches_preserve_distinct_answers_extensions_and_auth ... ok
+
+test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+     Running tests/cooperative.rs (target/debug/deps/cooperative-9734d02cd4b8706f)
+
+running 5 tests
+test coalesced_follower_keeps_resumable_job_alive_after_leader_cancels ... ok
+test queued_cancellation_submits_no_prefix_work_and_failed_chunk_releases_all_handles ... ok
+test short_requests_run_before_long_prefills_finish_and_keep_admission_bounded ... ok
+test cancellation_retains_current_kernel_permits_then_releases_partial_prefix ... ok
+test all_coalesced_callers_cancel_and_release_partial_work_after_current_chunk ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (target/debug/deps/huncho_backend-0a202a95a6119a50)
+
+running 2 tests
+test mock::tests::deterministic_output ... ok
+test mock::tests::fork_is_isolated ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/candidate_readout.rs (target/debug/deps/candidate_readout-67fca32c9be6cd8d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/candle_integration.rs (target/debug/deps/candle_integration-b95858bc1ec7c6c2)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/chunked_prefill.rs (target/debug/deps/chunked_prefill-f0471b9f5a4788ea)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/clef_batch.rs (target/debug/deps/clef_batch-cdc5775dcb6fb726)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/clef_reference.rs (target/debug/deps/clef_reference-f4eae305f54a48db)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/conformance.rs (target/debug/deps/conformance-6a3212a147dcf9fd)
+
+running 5 tests
+test argmax_gate_and_outcome_metrics_follow_candidate_order_on_ties ... ok
+test mock_reproduces_golden_suite ... ok
+test malformed_or_incomplete_golden_suites_cannot_pass ... ok
+test labeled_suite_reports_outcome_calibration_without_changing_fidelity ... ok
+test mock_deterministic_across_runs ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/cpu_blas.rs (target/debug/deps/cpu_blas-e1643fafdf6debe3)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/kev_reference.rs (target/debug/deps/kev_reference-d7c39aa17e72171b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/kv_pages.rs (target/debug/deps/kv_pages-a18fb27c29fac705)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/laya_padded.rs (target/debug/deps/laya_padded-47742c60df087fbe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/laya_selected.rs (target/debug/deps/laya_selected-01bc67dc55a79290)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/llamacpp.rs (target/debug/deps/llamacpp-76512a365fe7d207)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/native_batch.rs (target/debug/deps/native_batch-a8b9c0e5b6098a0f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/onnx_conformance.rs (target/debug/deps/onnx_conformance-085783aeb7af17a5)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/onnx_integrated.rs (target/debug/deps/onnx_integrated-956b4d1298539ff4)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/onnx_integration.rs (target/debug/deps/onnx_integration-7b5589e75087711a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/onnx_padded.rs (target/debug/deps/onnx_padded-d0712a199a099bac)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/onnx_replicas.rs (target/debug/deps/onnx_replicas-bcab94063223b3a5)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/padded_batch.rs (target/debug/deps/padded_batch-ded92f4deff5641e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/prefix_cache.rs (target/debug/deps/prefix_cache-4435855ba3798c59)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/quantized_kev.rs (target/debug/deps/quantized_kev-999cc8c9288e0350)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/query_attention.rs (target/debug/deps/query_attention-0a153e477b3946bd)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/replicas.rs (target/debug/deps/replicas-57764d570edcf8c6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/shared_base.rs (target/debug/deps/shared_base-d8e2c5d431f32038)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/vllm_cpu.rs (target/debug/deps/vllm_cpu-d0813a67ae62a4d5)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/debug/deps/huncho-cd1b55174f397a4c)
+
+running 27 tests
+test bench::tests::percentile_bounds ... ok
+test bench::tests::benchmark_mix_is_valid_distinct_and_uses_loaded_model_name ... ok
+test bench::tests::make_request_builds_expected_questions ... ok
+test convert::tests::build_manifest_produces_valid_f1_manifest ... ok
+test calibrate::tests::typed_refit_fits_only_supplied_types_and_buckets ... ok
+test convert::tests::build_manifest_honors_overrides_and_quantization ... ok
+test convert::tests::assemble_missing_config_errors ... ok
+test convert::tests::assemble_laya_layout_remaps_encoder_config_and_tokenizer ... ok
+test calibrate::tests::fit_temperature_dry_run_does_not_write ... ok
+test convert::tests::assemble_standard_layout_copies_config_and_weights ... ok
+test calibrate::tests::fit_temperature_lowers_nll_and_writes_entry ... ok
+test convert::tests::run_without_runner_writes_manifest_but_no_artifact ... ok
+test convert::tests::run_with_source_assembles_candle_package ... ok
+test convert::tests::assemble_sharded_weights_via_index ... ok
+test calibrate::tests::scalar_refit_does_not_inherit_overrides_or_replace_variant_confidence ... ok
+test serve::qualification_tests::persistent_budget_is_divided_across_replica_contexts_without_expanding_the_model_limit ... ok
+test serve::qualification_tests::preparing_serving_requires_nonvacuous_paired_qualification ... ok
+test serve::qualification_tests::paired_gate_rejects_drift_that_passes_the_external_golden_threshold ... ok
+test serve::qualification_tests::explicit_baseline_qualification_is_checked_without_optimization_flags ... ok
+test serve::qualification_tests::pending_is_rejected_and_refits_require_labeled_heldout_qualification ... ok
+test serve::qualification_tests::optimized_serving_requires_actual_successful_qualification ... ok
+test serve::qualification_tests::every_replica_requires_complete_labeled_qualification_and_a_primary_pass_cannot_hide_drift ... ok
+test bench::tests::run_mock_bench_completes ... ok
+test convert::tests::run_with_runner_copies_artifact_and_writes_manifest ... ok
+test serve::qualification_tests::cross_request_serving_requires_actual_mixed_batch_qualification ... ok
+test serve::qualification_tests::readout_and_storage_profiles_require_fresh_numerical_qualification ... ok
+test serve::qualification_tests::changed_kernels_require_labeled_qualification_even_with_fit_metadata ... ok
+
+test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/backend_selection.rs (target/debug/deps/backend_selection-c8425f1ad68e3fab)
+
+running 3 tests
+test explicit_backend_is_not_replaced_by_auto_selection ... ok
+test explicit_mock_remains_available_for_a_package ... ok
+test model_defaults_fail_with_build_guidance_instead_of_using_mock ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/clef.rs (target/debug/deps/clef-24481c7910ef25be)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/clef_batch.rs (target/debug/deps/clef_batch-a1e894259785c60e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/cooperative.rs (target/debug/deps/cooperative-9c2e3c3066733c8f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/cpu_blas.rs (target/debug/deps/cpu_blas-fbd761334db48741)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/cuda_probe.rs (target/debug/deps/cuda_probe-cc765dacca8617de)
+
+running 3 tests
+test cpu_build_rejects_cuda_probe_in_auto_mode ... ok
+test cuda_probe_cannot_report_success_for_cpu ... ok
+test packaging_probe_is_not_in_public_help ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/json_reports.rs (target/debug/deps/json_reports-77024dcf33d61822)
+
+running 5 tests
+test calibration_json_dry_run_accepts_false_and_leaves_manifest_unchanged ... ok
+test bench_and_conformance_stdout_are_standalone_json_with_info_logging ... ok
+test bench_distinguishes_repeated_result_reuse_from_distinct_model_work ... ok
+test prepared_prompt_cache_reuses_preparation_but_still_submits_forwards ... ok
+test replica_bench_accounts_for_every_timed_request_and_shared_result_cache ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/laya_padded.rs (target/debug/deps/laya_padded-910065776a1f8e63)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/laya_selected.rs (target/debug/deps/laya_selected-b095c1dff224d1e8)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/lazy_serving.rs (target/debug/deps/lazy_serving-d18bcae7ace93926)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/llamacpp.rs (target/debug/deps/llamacpp-15bcdf7503189a27)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/native_gates.rs (target/debug/deps/native_gates-22ef97a1c0126eb5)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/onnx_integrated.rs (target/debug/deps/onnx_integrated-5fe5cd8cafe7dbac)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/onnx_padded.rs (target/debug/deps/onnx_padded-5d0cdc9a47aacd2a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/onnx_shared.rs (target/debug/deps/onnx_shared-2de2f1d57af7552a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/qualification_records.rs (target/debug/deps/qualification_records-b2c307326580979c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/quantized_packages.rs (target/debug/deps/quantized_packages-e77b2fd48af64e4e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/shared_base.rs (target/debug/deps/shared_base-891ed24d240f7992)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/vllm_cpu.rs (target/debug/deps/vllm_cpu-130ad804974a2eb1)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/huncho_core-37e23811fde4e89c)
+
+running 67 tests
+test calibration::tests::entropy_confidence ... ok
+test calibration::tests::ece_basic ... ok
+test calibration::tests::ece_uses_actual_confidence_and_includes_endpoints ... ok
+test calibration::tests::jev_confidence_values ... ok
+test calibration::tests::temperature_flattens ... ok
+test calibration::tests::rejects_invalid_inference_and_fit_inputs ... ok
+test calibration::tests::softmax_sums_to_one ... ok
+test contract::tests::rejects_bad_state ... ok
+test contract::tests::parses_all_question_types ... ok
+test engine::batching::tests::native_readout_and_sequence_limits_split_without_dropping_candidates ... ok
+test contract::tests::response_round_trips ... ok
+test engine::batching::tests::groups_bound_actual_rectangles_padding_and_rows_without_truncation ... ok
+test engine::tests::eval_returns_typed_answers ... ok
+test contract::tests::rejects_too_many_options ... ok
+test engine::tests::rejects_oversized_input ... ok
+test engine::tests::extensions_off_by_default ... ok
+test error::tests::code_and_body ... ok
+test head::tests::candidate_logit_features_with_linear ... ok
+test head::tests::candidate_logit_reads_logits ... ok
+test head::tests::compact_logits_preserve_candidate_order_and_reject_missing_codes ... ok
+test engine::tests::conformance_bypasses_populated_result_cache ... ok
+test head::tests::reused_linear_and_scalar_projection_preserve_accumulation_order ... ok
+test engine::tests::score_distribution_sums_to_one ... ok
+test head::tests::row_lookup_preserves_first_match_for_sorted_and_unordered_outputs ... ok
+test engine::tests::exact_result_reuse_preserves_all_fields_and_submits_no_work ... ok
+test engine::tests::f3_compact_and_legacy_readouts_have_identical_typed_probabilities ... ok
+test engine::tests::result_reuse_distinguishes_absent_and_explicit_null_descriptions ... ok
+test manifest::tests::automatic_backend_does_not_fall_back_for_missing_or_incompatible_artifacts ... ok
+test engine::tests::prompt_preparation_errors_and_oversize_entries_are_not_retained ... ok
+test manifest::tests::automatic_backend_uses_available_artifacts_and_requested_dtype ... ok
+test manifest::tests::llamacpp_selection_is_limited_to_implemented_decision_families ... ok
+test engine::tests::prepared_result_retention_and_qualification_have_nonvacuous_work ... ok
+test prompt::clef::tests::python_json_numbers_and_sorted_nested_keys ... ok
+test manifest::tests::loads_and_validates ... ok
+test manifest::tests::rejects_family_head_mismatch ... ok
+test manifest::tests::resolves_calibration ... ok
+test prompt::kev::tests::nested_state_matches_reference_rendering ... ok
+test prompt::kev::tests::numeric_state_matches_python_float_rendering ... ok
+test prompt::kev::tests::user_text_cannot_forge_delimiters ... ok
+test prompt::tests::f1_builds_choice ... ok
+test engine::tests::replicas_share_immutable_preparation_and_bounded_exact_caches_only_within_the_group ... ok
+test engine::tests::prepared_evaluation_freezes_inputs_and_is_bound_to_its_engine ... ok
+test prompt::tests::f1_builds_score_legend ... ok
+test prompt::tests::f1_prefix_len_is_option_marker_boundary ... ok
+test prompt::tests::f2_builds_choice_at_distinct_positions ... ok
+test prompt::tests::f2_builds_noul_yes_no ... ok
+test prompt::tests::f2_builds_score_levels ... ok
+test prompt::tests::f3_builds_noul_same_position ... ok
+test prompt::tests::f4_builds_slot_choice ... ok
+test prompt::tests::f4_builds_slot_noul ... ok
+test prompt::tests::nimble_builds_choice_all_at_last_position ... ok
+test prompt::tests::nimble_builds_noul_yes_no ... ok
+test prompt::tests::nimble_builds_score_levels_with_legend ... ok
+test tensor::tests::row_access ... ok
+test tensor::tests::shape_mismatch ... ok
+test engine::tests::prepared_prompt_reuse_preserves_model_work_options_and_field_order ... ok
+test response_cache::tests::key_preserves_each_optional_noul_description ... ok
+test tokenizer::tests::deterministic_encode ... ok
+test tokenizer::tests::markers_in_reserved_range ... ok
+test tokenizer::tests::exact_encoding_cache_isolates_flags_instances_and_caller_mutation ... ok
+test engine::tests::result_reuse_keys_include_order_inputs_and_execution_options ... ok
+test tokenizer::tests::concurrent_encoding_cache_keeps_exact_results_and_a_bounded_budget ... ok
+test response_cache::tests::budget_eviction_oversize_and_entry_limit ... ok
+test engine::tests::batch_buckets_preserve_typed_answers_and_enforce_token_budgets ... ok
+test tokenizer::tests::encoding_cache_evicts_bypasses_large_entries_and_never_retains_errors ... ok
+test prompt_cache::tests::eviction_oversize_bounds_and_owned_return ... ok
+test calibration::tests::fit_temperature_recovers_true ... ok
+
+test result: ok. 67 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/hf_tokenizer.rs (target/debug/deps/hf_tokenizer-65f729a48f1a2759)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/joint_schema.rs (target/debug/deps/joint_schema-9266e909201be02b)
+
+running 4 tests
+test joint_forward_preserves_labels_types_calibration_and_usage ... ok
+test rejects_incomplete_mislabelled_and_nonfinite_backend_outputs ... ok
+test joint_result_reuse_requires_the_complete_ordered_schema ... ok
+test malformed_native_joint_groups_never_publish_partial_results ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/huncho_hub-4f1e04e49aaf469b)
+
+running 39 tests
+test http::tests::commit_hash_check ... ok
+test http::tests::content_range_total_is_parsed ... ok
+test http::tests::repo_folder_replaces_slash ... ok
+test clef::tests::shards_must_be_real_local_weight_files ... ok
+test http::tests::falls_back_to_revision_when_it_is_a_sha ... ok
+test http::tests::resolve_url_builds_endpoint_and_revision ... ok
+test http::tests::resolve_redirect_keeps_absolute_location ... ok
+test http::tests::resolve_redirect_joins_relative_location ... ok
+test http::tests::snapshot_dir_matches_hf_layout ... ok
+test http::tests::resolves_full_commit_from_headers ... ok
+test http::tests::temp_path_sits_next_to_dest ... ok
+test progress::tests::eta_formats_minutes_and_seconds ... ok
+test progress::tests::eta_requires_progress_and_rate ... ok
+test progress::tests::handler_survives_a_download_lifecycle ... ok
+test progress::tests::human_bytes_formats ... ok
+test progress::tests::human_pair_shares_a_unit ... ok
+test progress::tests::progress_line_handles_unknown_size ... ok
+test progress::tests::progress_line_includes_bar_rate_and_eta ... ok
+test progress::tests::rate_uses_bytes_per_sec ... ok
+test progress::tests::truncate_long_label_adds_ellipsis ... ok
+test progress::tests::truncate_short_label_unchanged ... ok
+test resolver::tests::local_directory_without_manifest_fails ... ok
+test resolver::tests::parses_hf_repo_when_not_a_path ... ok
+test resolver::tests::parses_existing_path_as_local ... ok
+test resolver::tests::required_files_omits_backend_artifact_for_mock ... ok
+test resolver::tests::required_files_select_artifact_and_head ... ok
+test resolver::tests::synthesize_f3_defaults_temperature_and_contract_hash ... ok
+test resolver::tests::synthesize_f3_manifest ... ok
+test resolver::tests::resolves_local_directory ... ok
+test resolver::tests::synthesize_f3_rejects_mismatched_codebook ... ok
+test resolver::tests::auto_hub_resolution_fetches_only_the_selected_backend_and_dtype ... ok
+test resolver::tests::synthesize_modernbert_manifest ... ok
+test resolver::tests::synthesize_laya_sets_laya_contract_and_calibration ... ok
+test resolver::tests::snapshot_root_handles_config_at_the_root ... ok
+test resolver::tests::synthesize_rejects_non_modernbert ... ok
+test clef::tests::local_release_preserves_calibration_and_needs_no_python ... ok
+test resolver::tests::snapshot_root_finds_commit_dir_when_config_is_nested ... ok
+test resolver::tests::auto_raw_modernbert_resolves_and_reopens_from_cache ... ok
+test clef::tests::cached_hub_release_pins_shards_and_rejects_missing_weights ... ok
+
+test result: ok. 39 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests huncho_api
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests huncho_backend
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests huncho_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests huncho_hub
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

@@ -1,0 +1,30 @@
+   Compiling huncho-backend v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-backend)
+   Compiling huncho-core v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.77s
+     Running tests/chunked_prefill.rs (target/debug/deps/chunked_prefill-4ee7f1d787403124)
+
+running 3 tests
+test chunked_cpu_prefill_preserves_original_probabilities_and_accounts_for_actual_calls ... ok
+test engine_qualification_requires_actual_chunking_and_keeps_original_goldens_and_usage ... ok
+test resumable_native_prefixes_interleave_without_changing_chunk_arithmetic ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.75s
+
+     Running tests/kv_pages.rs (target/debug/deps/kv_pages-4d8f74b2b704227d)
+
+running 2 tests
+test native_pages_forks_and_chunks_match_flat_storage_and_frozen_typed_goldens ... ok
+test pages_are_bounded_transactional_and_compose_with_retention_and_partial_prefills ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 19.36s
+
+     Running tests/prefix_cache.rs (target/debug/deps/prefix_cache-0f9e68b8045abcc9)
+
+running 4 tests
+test cache_handles_are_owned_bounded_and_transactional ... ok
+test engine_fanout_preserves_wire_usage_and_releases_on_later_errors ... ok
+test native_forks_chunks_and_short_prefixes_preserve_probabilities ... ok
+test persistent_prefixes_are_exact_bounded_and_isolate_active_handles_on_cpu ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.14s
+

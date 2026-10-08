@@ -1,0 +1,9 @@
+   Compiling huncho-backend v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-backend)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.36s
+     Running unittests src/lib.rs (target/debug/deps/huncho_backend-008bafa76c4e86a3)
+
+running 1 test
+test qwen3_5::kv_pages::tests::page_order_and_copy_on_write_tails_preserve_exact_storage_values ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 38 filtered out; finished in 0.01s
+

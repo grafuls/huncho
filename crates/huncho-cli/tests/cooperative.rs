@@ -14,11 +14,21 @@ fn run_profile(args: &[&str], chunk: &str, query_rows: &str) -> Output {
     run_attention_profile(args, chunk, query_rows, "0")
 }
 fn run_attention_profile(args: &[&str], chunk: &str, query_rows: &str, grouped: &str) -> Output {
+    run_storage_profile(args, chunk, query_rows, grouped, "0")
+}
+fn run_storage_profile(
+    args: &[&str],
+    chunk: &str,
+    query_rows: &str,
+    grouped: &str,
+    pages: &str,
+) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_huncho"))
         .env("HUNCHO_DEVICE", "cpu")
         .env("HUNCHO_PREFILL_CHUNK_TOKENS", chunk)
         .env("HUNCHO_ATTENTION_QUERY_ROWS", query_rows)
         .env("HUNCHO_GROUPED_GQA", grouped)
+        .env("HUNCHO_KV_PAGE_TOKENS", pages)
         .env("RAYON_NUM_THREADS", "1")
         .env("CANDLE_NUM_THREADS", "1")
         .env_remove("HUNCHO_CPU_DELTA_RULE")
@@ -541,4 +551,182 @@ fn grouped_cpu_gqa_binds_fresh_receipts_and_actual_prefix_interleaving() {
     );
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("HUNCHO_GROUPED_GQA"));
+}
+
+#[cfg(feature = "qualification")]
+#[test]
+fn kv_pages_bind_fresh_receipts_and_actual_prefix_work_and_refuse_vacuous_serving() {
+    let (tmp, manifest, golden) = package();
+    let manifest = manifest.to_str().unwrap();
+    for pages in ["16", "32", "64", "256"] {
+        let receipt = tmp.path().join(format!("pages-{pages}.json"));
+        let output = run_storage_profile(
+            &[
+                "conform",
+                "--manifest",
+                manifest,
+                "--backend",
+                "candle",
+                "--dtype",
+                "fp32",
+                "--golden",
+                golden.to_str().unwrap(),
+                "--prefix-cache",
+                "--cooperative-prefill",
+                "--json",
+                "--write-qualification",
+                receipt.to_str().unwrap(),
+            ],
+            "3",
+            "7",
+            "1",
+            pages,
+        );
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["passed"], true);
+        assert_eq!(
+            report["execution_metadata"]["kv_storage"],
+            "cpu-cow-pages-materialize-v1"
+        );
+        assert_eq!(report["execution_metadata"]["kv_page_tokens"], pages);
+        assert!(report["work"]["cache_forks"].as_u64().unwrap() > 0);
+        assert!(report["work"]["prefill_interleaves"].as_u64().unwrap() > 0);
+        assert!(
+            report["optimization_parity"]["max_prob_delta"]
+                .as_f64()
+                .unwrap()
+                <= 1e-4
+        );
+        let record: Value = serde_json::from_slice(&std::fs::read(&receipt).unwrap()).unwrap();
+        assert_eq!(record["outcome_gates_passed"], false);
+        let text = std::fs::read_to_string(receipt).unwrap();
+        assert!(
+            text.contains("HUNCHO_KV_PAGE_TOKENS") && text.contains("cpu-cow-pages-materialize-v1")
+        );
+    }
+    // Synthetic labels prove gate wiring only; original frozen probabilities stay unchanged.
+    let mut labeled: Value = serde_json::from_slice(&std::fs::read(&golden).unwrap()).unwrap();
+    for case in labeled["cases"].as_array_mut().unwrap() {
+        let targets: serde_json::Map<String, Value> = case["expected"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(id, expected)| {
+                (
+                    id.clone(),
+                    json!(expected.as_object().unwrap().keys().next().unwrap()),
+                )
+            })
+            .collect();
+        case["targets"] = json!(targets);
+    }
+    let labeled_path = tmp.path().join("labeled-fixture.json");
+    std::fs::write(&labeled_path, serde_json::to_vec(&labeled).unwrap()).unwrap();
+    let receipt = tmp.path().join("labeled-pages.json");
+    let output = run_storage_profile(
+        &[
+            "conform",
+            "--manifest",
+            manifest,
+            "--backend",
+            "candle",
+            "--dtype",
+            "fp32",
+            "--golden",
+            labeled_path.to_str().unwrap(),
+            "--prefix-cache",
+            "--persistent-prefix-bytes",
+            "1048576",
+            "--write-qualification",
+            receipt.to_str().unwrap(),
+            "--json",
+        ],
+        "3",
+        "0",
+        "0",
+        "16",
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["passed"], true);
+    assert!(report["work"]["persistent_prefix_hits"].as_u64().unwrap() > 0);
+    assert!(
+        report["optimization_parity"]["max_prob_delta"]
+            .as_f64()
+            .unwrap()
+            <= 1e-4
+    );
+    assert_eq!(report["optimization_parity"]["argmax_agreement"], 1.0);
+    let record: Value = serde_json::from_slice(&std::fs::read(receipt).unwrap()).unwrap();
+    assert_eq!(record["outcome_gates_passed"], true);
+    let binding = format!("tiny-kev={}", golden.display());
+    let base = [
+        "serve",
+        "--manifest",
+        manifest,
+        "--backend",
+        "candle",
+        "--dtype",
+        "fp32",
+        "--qualification-golden",
+        &binding,
+        "--bind",
+        "127.0.0.1:0",
+    ];
+    let output = run_storage_profile(&base, "0", "0", "0", "16");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("requires --prefix-cache"));
+    let mut prefix = base.to_vec();
+    prefix.push("--prefix-cache");
+    let output = run_storage_profile(&prefix, "0", "0", "0", "16");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("observed target labels"));
+    let output = run_storage_profile(
+        &[
+            "serve",
+            "--manifest",
+            manifest,
+            "--backend",
+            "candle",
+            "--dtype",
+            "fp32",
+            "--prefix-cache",
+            "--bind",
+            "127.0.0.1:0",
+        ],
+        "0",
+        "0",
+        "0",
+        "16",
+    );
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("requires --qualification-golden"));
+    for invalid in ["1", "15", "17", "257", "-1", "true", "broken"] {
+        let output = run_storage_profile(
+            &[
+                "bench",
+                "--manifest",
+                manifest,
+                "--backend",
+                "candle",
+                "--iterations",
+                "1",
+            ],
+            "0",
+            "0",
+            "0",
+            invalid,
+        );
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("HUNCHO_KV_PAGE_TOKENS"));
+    }
 }

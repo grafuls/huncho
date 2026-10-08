@@ -608,6 +608,31 @@ counters exclude their avoided prefill positions. The budget covers snapshots,
 not live forks or peak inference memory. Library callers can clear retained
 state with `Engine::clear_prefix_cache`; otherwise unused snapshots live until
 eviction or model unload. Full released-model and GPU qualification remain open.
+### CPU Kev KV pages
+
+`HUNCHO_DEVICE=cpu HUNCHO_KV_PAGE_TOKENS=16` enables immutable native Kev pages.
+Page sizes are powers of two in 16..256; default 0 retains flat storage. Only
+Candle Kev F2 with full-attention layers supports this option. Configure it before
+creating caches or replicas. Full pages share across forks; a changed partial
+tail is copied and failed continuations publish no changed pages. Pages own
+compact tensor allocations, including short tails. Recurrent/convolution state
+uses its existing implementation.
+
+Attention still materializes complete contiguous KV in original token order,
+so this does not provide paged-attention kernels or a peak-memory bound. It can
+trade smaller persistent fork storage for extra page/cat copies and metadata.
+The existing 64 live-handle limit and retained snapshot byte/16-entry bounds
+apply; snapshot accounting charges shared payloads conservatively per snapshot.
+The snapshot budget excludes active forks and transient attention workspaces.
+
+Serving requires `--prefix-cache` and fresh complete observed-label conformance,
+including actual forks and independent paired probability gates. Qualification
+identity records `kv_storage=cpu-cow-pages-materialize-v1`, page size and the
+configuration environment. CPU fixture bitwise parity does not release Kev or
+establish speed/RSS. Direct paged kernels, cached-branch batches and tenant
+retention policy remain separate work. Apple work and actual GPU checks are
+deferred by the user.
+
 ### ONNX compact readouts and bounded output reuse
 
 The optional `onnx` build keeps its existing CPU/full-sequence output behavior by
