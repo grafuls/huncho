@@ -8,6 +8,7 @@ mod batch;
 mod coalesce;
 pub mod config;
 pub mod metrics;
+mod replicas;
 pub mod routes;
 pub mod server;
 pub mod state;

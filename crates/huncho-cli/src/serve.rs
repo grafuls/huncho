@@ -64,6 +64,11 @@ pub struct ServeArgs {
     #[arg(long, default_value = "32", env = "HUNCHO_MAX_QUEUED_PER_MODEL")]
     pub max_queued_per_model: u16,
 
+    /// Independent CPU contexts sharing immutable weights (1–8). Every context
+    /// must pass complete labeled startup qualification against pinned goldens.
+    #[arg(long, default_value = "1", env = "HUNCHO_REPLICAS", value_parser = clap::value_parser!(u8).range(1..=8))]
+    pub replicas: u8,
+
     /// Bound requests preparing/holding prompts while another request executes (0 disables).
     #[arg(long, default_value = "0", env = "HUNCHO_MAX_PREPARED_PER_MODEL")]
     pub max_prepared_per_model: u16,
@@ -124,6 +129,10 @@ pub struct ServeArgs {
 
 fn load_models(args: &ServeArgs) -> anyhow::Result<ModelRegistry> {
     anyhow::ensure!(
+        args.replicas <= 1 || args.batch_max_requests.is_none(),
+        "replicas and cross-request collation cannot be combined yet"
+    );
+    anyhow::ensure!(
         args.max_batch_tokens != Some(0),
         "max batch tokens must be positive"
     );
@@ -141,6 +150,11 @@ fn load_models(args: &ServeArgs) -> anyhow::Result<ModelRegistry> {
     anyhow::ensure!(
         args.persistent_prefix_bytes == 0 || args.prefix_cache,
         "persistent prefixes require --prefix-cache"
+    );
+    anyhow::ensure!(
+        args.persistent_prefix_bytes == 0
+            || args.persistent_prefix_bytes >= usize::from(args.replicas),
+        "persistent prefix budget must provide at least one byte per replica"
     );
     let mut registry = ModelRegistry::new();
     #[cfg(feature = "qualification")]
@@ -242,6 +256,7 @@ fn load_models(args: &ServeArgs) -> anyhow::Result<ModelRegistry> {
     if registry.is_empty() {
         tracing::warn!("no models registered; /v1/systemone will return 422 for every model");
     }
+    registry.set_replicas(usize::from(args.replicas))?;
     qualify_optimizations(&registry, args)?;
     #[cfg(feature = "qualification")]
     records.verify(&registry, args)?;
@@ -255,7 +270,7 @@ fn evaluation_options(
     huncho_core::engine::EvalOptions {
         prefix_cache: args.prefix_cache && engine.supports_prefix_cache(),
         persistent_prefix_bytes: if args.prefix_cache && engine.supports_prefix_cache() {
-            args.persistent_prefix_bytes
+            args.persistent_prefix_bytes / usize::from(args.replicas)
         } else {
             0
         },
@@ -350,7 +365,8 @@ impl RecordBindings {
                     )
                 })?;
             let require_outcomes = engine.calibration().status == CalibrationStatus::Refit
-                || changed_arithmetic_profile(&engine);
+                || changed_arithmetic_profile(&engine)
+                || engine.replica_engines().len() > 1;
             record.verify(
                 &engine,
                 inputs,
@@ -429,6 +445,8 @@ fn qualify_optimizations(registry: &ModelRegistry, args: &ServeArgs) -> anyhow::
                 "quantized serving for `{name}` requires an explicit backend:dtype refit; an inherited or fitted source entry is insufficient");
         }
         let kernel_profile = changed_arithmetic_profile(engine);
+        let replicas = engine.replica_engines();
+        let replicated = replicas.len() > 1;
         let opts = evaluation_options(engine, args);
         anyhow::ensure!(!engine.execution_metadata().contains_key("prefill_chunk_tokens") || opts.prefix_cache,
             "chunked prefill serving for `{name}` requires --prefix-cache and an actual split-prefix qualification");
@@ -443,30 +461,54 @@ fn qualify_optimizations(registry: &ModelRegistry, args: &ServeArgs) -> anyhow::
             && !kernel_profile
             && !onnx_readout_profile
             && !opts.prepare_all
+            && !replicated
         {
             continue;
         }
         let path=paths.get(name.as_str()).ok_or_else(||anyhow::anyhow!("serving a refitted or optimized variant of `{name}` requires --qualification-golden {name}=/path/to/pinned-golden.json"))?;
         let suite = load_suite(path)?;
-        anyhow::ensure!(!(refit || kernel_profile) || suite.cases.iter().any(|case| !case.targets.is_empty()),
+        anyhow::ensure!(!(refit || kernel_profile || replicated) || suite.cases.iter().any(|case| !case.targets.is_empty()),
             "refitted or changed-kernel serving for `{name}` requires held-out golden vectors with observed target labels");
-        let report = if let Some(rows) = args.batch_max_requests.filter(|_| engine.supports_batch())
-        {
-            run_suite_with_cross_request_batches(
-                engine,
-                &suite,
-                &ConformanceThresholds::default(),
-                &opts,
-                usize::from(rows),
-            )?
-        } else {
-            run_suite_with_options(engine, &suite, &ConformanceThresholds::default(), &opts)?
+        let evaluate = |engine: &huncho_core::engine::Engine| -> huncho_core::Result<_> {
+            if let Some(rows) = args.batch_max_requests.filter(|_| engine.supports_batch()) {
+                run_suite_with_cross_request_batches(
+                    engine,
+                    &suite,
+                    &ConformanceThresholds::default(),
+                    &opts,
+                    usize::from(rows),
+                )
+            } else {
+                run_suite_with_options(engine, &suite, &ConformanceThresholds::default(), &opts)
+            }
         };
-        anyhow::ensure!(report.passed,"qualification failed for `{name}` on {} / {}: golden delta={}, argmax={}, ECE drift={}, parity={:?}",engine.device(),engine.dtype(),report.max_prob_delta,report.argmax_agreement,report.ece,report.optimization_parity);
+        // Qualify the actual independently locked contexts concurrently, with
+        // one complete fixed suite per context. A subset or a primary-only pass
+        // cannot silently authorize the remainder of the pool.
+        let reports = std::thread::scope(|scope| {
+            let jobs: Vec<_> = replicas
+                .iter()
+                .map(|replica| {
+                    let evaluate = &evaluate;
+                    scope.spawn(move || evaluate(replica))
+                })
+                .collect();
+            jobs.into_iter()
+                .map(|job| {
+                    job.join()
+                        .map_err(|_| anyhow::anyhow!("replica qualification worker panicked"))?
+                        .map_err(anyhow::Error::from)
+                })
+                .collect::<anyhow::Result<Vec<_>>>()
+        })?;
+        for (index, report) in reports.into_iter().enumerate() {
+            anyhow::ensure!(report.passed,"qualification failed for `{name}` replica {index} on {} / {}: golden delta={}, argmax={}, ECE drift={}, parity={:?}",engine.device(),engine.dtype(),report.max_prob_delta,report.argmax_agreement,report.ece,report.optimization_parity);
+        }
         tracing::info!(
             model = name,
             device = engine.device(),
             dtype = engine.dtype(),
+            replicas = replicas.len(),
             "qualification passed against pinned goldens (with independent parity for optimized paths)"
         );
     }
@@ -513,17 +555,27 @@ mod qualification_tests {
     struct BatchBackend {
         drift: f32,
         execution_metadata: BTreeMap<String, String>,
+        is_replica: bool,
     }
     impl Backend for BatchBackend {
+        fn replica(&self) -> huncho_core::Result<Box<dyn Backend>> {
+            Ok(Box::new(Self {
+                drift: self.drift,
+                execution_metadata: self.execution_metadata.clone(),
+                is_replica: true,
+            }))
+        }
         fn id(&self) -> BackendId {
             BackendId::Onnx
         }
         fn capabilities(&self) -> Capabilities {
+            let mut extra = self.execution_metadata.clone();
+            extra.insert("device".into(), "CPU".into());
             Capabilities {
                 id: BackendId::Onnx,
                 dtype: "fp32".into(),
                 families: vec![Family::F1],
-                extra: self.execution_metadata.clone(),
+                extra,
                 ..Default::default()
             }
         }
@@ -531,7 +583,7 @@ mod qualification_tests {
             true
         }
         fn forward(&mut self, input: ForwardInput) -> huncho_core::Result<ForwardOutput> {
-            output(input, 0.)
+            output(input, if self.is_replica { self.drift } else { 0. })
         }
         fn forward_batch(
             &mut self,
@@ -592,6 +644,7 @@ mod qualification_tests {
             Box::new(BatchBackend {
                 drift,
                 execution_metadata,
+                is_replica: false,
             }),
             Box::new(SimpleTokenizer::new(32768)),
             HeadParams::default(),
@@ -644,6 +697,78 @@ mod qualification_tests {
                 targets: Default::default(),
             }],
         }
+    }
+
+    #[test]
+    fn every_replica_requires_complete_labeled_qualification_and_a_primary_pass_cannot_hide_drift()
+    {
+        let mut args = args();
+        args.max_batch_tokens = None;
+        args.replicas = 2;
+        let mut models = registry(0.);
+        models.set_replicas(2).unwrap();
+        assert!(qualify_optimizations(&models, &args)
+            .unwrap_err()
+            .to_string()
+            .contains("requires --qualification-golden"));
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("golden.json");
+        args.qualification_golden = vec![format!("qual={}", path.display())];
+        let mut golden = suite();
+        huncho_core::conformance::save_suite(&golden, &path).unwrap();
+        assert!(qualify_optimizations(&models, &args)
+            .unwrap_err()
+            .to_string()
+            .contains("observed target labels"));
+        golden.cases[0].targets =
+            BTreeMap::from([("a".into(), "b".into()), ("b".into(), "b".into())]);
+        huncho_core::conformance::save_suite(&golden, &path).unwrap();
+        qualify_optimizations(&models, &args).unwrap();
+        let mut drifting = registry(0.02);
+        drifting.set_replicas(2).unwrap();
+        assert!(
+            huncho_core::conformance::run_suite(
+                &drifting.get("qual").unwrap(),
+                &golden,
+                &Default::default()
+            )
+            .unwrap()
+            .passed
+        );
+        assert!(qualify_optimizations(&drifting, &args)
+            .unwrap_err()
+            .to_string()
+            .contains("replica 1"));
+        golden.cases[0].targets.remove("b");
+        huncho_core::conformance::save_suite(&golden, &path).unwrap();
+        assert!(qualify_optimizations(&models, &args).is_err());
+    }
+
+    #[test]
+    fn persistent_budget_is_divided_across_replica_contexts_without_expanding_the_model_limit() {
+        let mut manifest = crate::load::mock_manifest("kev", Family::F2, "fp32", 1.0).unwrap();
+        manifest.prompt_contract.template = "kev-v1".into();
+        let engine = Engine::new(
+            manifest,
+            Box::new(huncho_backend::MockBackend::new()),
+            Box::new(SimpleTokenizer::new(32768)),
+            HeadParams::default(),
+            BackendId::Onnx,
+            "fp32",
+        )
+        .unwrap();
+        let mut args = args();
+        args.prefix_cache = true;
+        args.max_batch_tokens = None;
+        args.persistent_prefix_bytes = 1001;
+        args.replicas = 3;
+        let options = evaluation_options(&engine, &args);
+        assert!(options.prefix_cache);
+        assert_eq!(options.persistent_prefix_bytes, 333);
+        assert!(
+            options.persistent_prefix_bytes * usize::from(args.replicas)
+                <= args.persistent_prefix_bytes
+        );
     }
 
     #[test]

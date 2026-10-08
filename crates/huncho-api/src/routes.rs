@@ -97,7 +97,7 @@ async fn systemone(
         extensions: wants_extensions(&headers) || state.config.default_extensions,
         prefix_cache: state.config.prefix_cache && engine.supports_prefix_cache(),
         persistent_prefix_bytes: if state.config.prefix_cache && engine.supports_prefix_cache() {
-            state.config.persistent_prefix_bytes
+            state.config.persistent_prefix_bytes / engine.replica_engines().len()
         } else {
             0
         },
@@ -252,13 +252,12 @@ async fn evaluate(
                     preparation_slot,
                     queued: queue_start,
                 },
-                engine.engine.clone(),
-                engine.execution.clone(),
+                engine.pool.clone(),
                 metrics,
             )
             .await;
     }
-    let execution = match engine.execution.clone().acquire_owned().await {
+    let execution = match engine.pool.acquire().await {
         Ok(permit) => permit,
         Err(_) => {
             return Arc::new(JobResult::Unavailable);
@@ -274,7 +273,7 @@ async fn evaluate(
     let result = tokio::task::spawn_blocking(move || {
         // Permits belong to the job, not the HTTP future. Cancellation cannot
         // admit another evaluation while this one is still using the backend.
-        let (_admission, _execution, _admitted) = (admission, execution, admitted);
+        let (_admission, _admitted) = (admission, admitted);
         // Free preparation capacity when execution begins, so the next bounded
         // CPU preparation can overlap this request's unchanged device work.
         drop(preparation_slot);
@@ -282,12 +281,12 @@ async fn evaluate(
         let mut stats = EvalStats::default();
         let result = match input {
             EvaluationInput::Raw(req, opts) => {
-                let result = engine.engine.eval_with_stats(&req, &opts, &mut stats);
+                let result = execution.eval_with_stats(&req, &opts, &mut stats);
                 record_preparation(&metrics, &stats);
                 result
             }
             EvaluationInput::Prepared(prepared) => {
-                engine.engine.eval_prepared_with_stats(prepared, &mut stats)
+                execution.eval_prepared_with_stats(prepared, &mut stats)
             }
         };
         metrics.tokens_prefilled.inc_by(stats.processed_tokens);
@@ -372,6 +371,7 @@ struct ModelInfo {
     backend: String,
     dtype: String,
     max_context: usize,
+    replicas: usize,
 }
 
 async fn list_models(State(state): State<Arc<AppState>>) -> Response {
@@ -384,6 +384,7 @@ async fn list_models(State(state): State<Arc<AppState>>) -> Response {
             backend: engine.backend_id().to_string(),
             dtype: engine.dtype().to_string(),
             max_context: engine.manifest().backbone.max_context,
+            replicas: engine.replica_engines().len(),
         });
     }
     (StatusCode::OK, Json(ModelsResponse { models })).into_response()

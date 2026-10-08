@@ -22,7 +22,7 @@
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use crate::kev::PointerHead;
 use candle::{DType, Device, Result, Tensor, D};
@@ -1281,8 +1281,8 @@ pub enum QwenError {
 }
 
 pub struct Qwen3_5Backend {
-    model: Model,
-    head: Readout,
+    model: Arc<Model>,
+    head: Arc<Readout>,
     vocab_size: usize,
     input_vocab_size: usize,
     max_context: usize,
@@ -1299,6 +1299,12 @@ enum Readout {
 }
 
 impl Qwen3_5Backend {
+    fn model_mut(&mut self) -> CoreResult<&mut Model> {
+        Arc::get_mut(&mut self.model).ok_or_else(|| {
+            Error::Unsupported("configure Qwen kernels before creating shared replicas".into())
+        })
+    }
+
     /// Bound the query length of native CPU Kev prefix attention. This changes
     /// projection/attention shapes, so paired and labeled qualification apply.
     /// It does not yield between jobs or implement a fair serving scheduler.
@@ -1308,7 +1314,9 @@ impl Qwen3_5Backend {
                 "prefill chunk tokens must be 0..4096".into(),
             ));
         }
-        if tokens > 0 && (!self.device.is_cpu() || !matches!(self.head, Readout::Pointer(_))) {
+        if tokens > 0
+            && (!self.device.is_cpu() || !matches!(self.head.as_ref(), Readout::Pointer(_)))
+        {
             return Err(Error::Unsupported(
                 "chunked prefill currently supports CPU Kev only".into(),
             ));
@@ -1337,7 +1345,9 @@ impl Qwen3_5Backend {
                 "release retained Qwen caches before changing convolution kernels".into(),
             ));
         }
-        self.model.set_cpu_causal_conv(enabled);
+        if enabled != self.model.cpu_causal_conv {
+            self.model_mut()?.set_cpu_causal_conv(enabled);
+        }
         Ok(self)
     }
     /// Optional CPU recurrence buffers; cache state remains immutable FP32.
@@ -1353,7 +1363,9 @@ impl Qwen3_5Backend {
                 "release retained Qwen caches before changing delta-rule kernels".into(),
             ));
         }
-        self.model.set_cpu_delta_rule(enabled);
+        if enabled != self.model.cpu_delta_rule {
+            self.model_mut()?.set_cpu_delta_rule(enabled);
+        }
         Ok(self)
     }
     /// Experimental attention compute profile. Weights and retained KV keep
@@ -1367,7 +1379,9 @@ impl Qwen3_5Backend {
                 "release retained Qwen caches before changing attention kernels".into(),
             ));
         }
-        self.model.set_fp32_attention(enabled);
+        if enabled != self.model.fp32_attention {
+            self.model_mut()?.set_fp32_attention(enabled);
+        }
         Ok(self)
     }
 
@@ -1386,7 +1400,9 @@ impl Qwen3_5Backend {
                 "release retained Qwen caches before changing projection kernels".into(),
             ));
         }
-        self.model.set_projection_chunks(rows);
+        if rows != self.model.projection_chunk_rows {
+            self.model_mut()?.set_projection_chunks(rows);
+        }
         Ok(self)
     }
 
@@ -1576,8 +1592,8 @@ impl Qwen3_5Backend {
         })?;
 
         Ok(Qwen3_5Backend {
-            model,
-            head,
+            model: Arc::new(model),
+            head: Arc::new(head),
             vocab_size,
             input_vocab_size: config.vocab_size,
             max_context,
@@ -1706,6 +1722,26 @@ fn canonical_weight_name(name: &str) -> Option<String> {
 }
 
 impl Backend for Qwen3_5Backend {
+    fn replica(&self) -> CoreResult<Box<dyn Backend>> {
+        if !self.device.is_cpu() {
+            return Err(Error::Unsupported(
+                "shared Qwen replicas currently support CPU only".into(),
+            ));
+        }
+        Ok(Box::new(Self {
+            model: self.model.clone(),
+            head: self.head.clone(),
+            vocab_size: self.vocab_size,
+            input_vocab_size: self.input_vocab_size,
+            max_context: self.max_context,
+            dtype: self.dtype.clone(),
+            device: self.device.clone(),
+            caches: BTreeMap::new(),
+            prefixes: PrefixSnapshots::default(),
+            prefill_chunk_tokens: self.prefill_chunk_tokens,
+        }))
+    }
+
     fn id(&self) -> BackendId {
         BackendId::Candle
     }
@@ -1742,16 +1778,16 @@ impl Backend for Qwen3_5Backend {
             extra.insert("pointer_head_dtype".into(), "fp32".into());
             extra.insert("projection_kernel".into(), "candle-packed-cpu-v1".into());
         }
-        if self.device.is_cuda() && matches!(self.head, Readout::LanguageModel(_)) {
+        if self.device.is_cuda() && matches!(self.head.as_ref(), Readout::LanguageModel(_)) {
             extra.insert("device_path".into(), "qwen-f3-cuda".into());
         }
         Capabilities {
             id: BackendId::Candle,
             dtype: self.dtype.clone(),
             max_context: self.max_context,
-            supports_fork: matches!(self.head, Readout::Pointer(_)),
+            supports_fork: matches!(self.head.as_ref(), Readout::Pointer(_)),
             supports_lora: true,
-            families: vec![match self.head {
+            families: vec![match self.head.as_ref() {
                 Readout::Pointer(_) => Family::F2,
                 _ => Family::F3,
             }],
@@ -1802,7 +1838,7 @@ impl Backend for Qwen3_5Backend {
                 sequence_len, self.max_context
             )));
         }
-        if matches!(self.head, Readout::LanguageModel(_)) {
+        if matches!(self.head.as_ref(), Readout::LanguageModel(_)) {
             if let Some(codes) = &input.logit_codes {
                 if codes.is_empty() || codes.iter().any(|&code| code as usize >= self.vocab_size) {
                     return Err(Error::Backend(
@@ -1873,7 +1909,7 @@ impl Backend for Qwen3_5Backend {
                         .tokens
                         .iter()
                         .any(|&token| token as usize >= self.input_vocab_size)
-                    || (matches!(self.head, Readout::LanguageModel(_))
+                    || (matches!(self.head.as_ref(), Readout::LanguageModel(_))
                         && input.logit_codes.as_ref().is_some_and(|codes| {
                             codes.is_empty() || codes.iter().any(|&c| c as usize >= self.vocab_size)
                         }))
@@ -1958,7 +1994,7 @@ impl Qwen3_5Backend {
         tokens: &[u32],
         work: &mut huncho_core::backend::PrefillWork,
     ) -> CoreResult<CacheHandle> {
-        if !matches!(self.head, Readout::Pointer(_)) {
+        if !matches!(self.head.as_ref(), Readout::Pointer(_)) {
             return Err(Error::Unsupported(
                 "prefix caching is currently qualified only for the pointer readout".into(),
             ));
@@ -2055,7 +2091,7 @@ impl Qwen3_5Backend {
             .map_err(&candle)?
             .squeeze(0)
             .map_err(&candle)?; // [n_positions, hidden]
-        let (logits, codes) = match (&self.head, input.logit_codes.clone()) {
+        let (logits, codes) = match (self.head.as_ref(), input.logit_codes.clone()) {
             (Readout::LanguageModel(head), Some(codes)) => {
                 // The decision distribution only needs these vocabulary rows.
                 // Preserve the trained projection/bias and native matmul dtype;
@@ -2120,6 +2156,36 @@ fn core_from_tensor(t: &Tensor) -> CoreResult<CoreTensor> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn cpu_replicas_share_loaded_weights_but_never_copy_active_or_retained_state() {
+        let root = Path::new("tests/fixtures/tiny_kev");
+        let mut backend = Qwen3_5Backend::load_kev(root, root, &root.join("head.pt"), 512, "fp32")
+            .unwrap()
+            .with_cpu_delta_rule(true)
+            .unwrap()
+            .with_cpu_causal_conv(true)
+            .unwrap();
+        let cached = backend.prefill_cached(&[1, 2, 3], 1 << 20).unwrap();
+        let mut replica = backend.replica().unwrap();
+        assert_eq!(Arc::strong_count(&backend.model), 2);
+        assert_eq!(Arc::strong_count(&backend.head), 2);
+        let mut continued = ForwardInput::new(vec![4, 5], vec![0, 1]);
+        continued.fork_from = Some(cached.handle);
+        assert!(replica.forward(continued).is_err());
+        assert!(replica.release_cache(cached.handle).is_err());
+        let fresh = replica.prefill_cached(&[1, 2, 3], 1 << 20).unwrap();
+        assert!(!fresh.hit);
+        replica.release_cache(fresh.handle).unwrap();
+        let hit = backend.prefill_cached(&[1, 2, 3], 1 << 20).unwrap();
+        assert!(hit.hit);
+        backend.release_cache(hit.handle).unwrap();
+        backend.release_cache(cached.handle).unwrap();
+        backend.clear_prefix_cache().unwrap();
+        assert!(backend.model_mut().is_err());
+        drop(replica);
+        assert!(backend.model_mut().is_ok());
+    }
+
     use super::*;
     use candle::shape::Shape;
 
@@ -2413,8 +2479,8 @@ mod tests {
         .unwrap();
 
         let mut backend = Qwen3_5Backend {
-            model,
-            head: Readout::LanguageModel(lm_head),
+            model: Arc::new(model),
+            head: Arc::new(Readout::LanguageModel(lm_head)),
             vocab_size: cfg.vocab_size,
             input_vocab_size: cfg.vocab_size,
             max_context: 32,

@@ -126,6 +126,7 @@ huncho serve --model ./models/laya
 | `--dtype` | Override the model-specific default precision. |
 | `--extensions` | Enable engine extensions by default (API-05). |
 | `--max-queued-per-model` | Waiting requests per model, excluding the running request; defaults to 32. Overload returns HTTP 503. |
+| `--replicas` | CPU contexts per model, 1–8 (default 1); also `HUNCHO_REPLICAS`. Shares weights; every context needs complete labeled startup qualification. |
 | `--max-prepared-per-model` | Optional F1–F4 preparation/ready slots per model; defaults to zero. Also `HUNCHO_MAX_PREPARED_PER_MODEL`. Requires startup qualification. |
 | `--result-cache-bytes` | Optional per-model exact-result retention budget; defaults to zero. Also `HUNCHO_RESULT_CACHE_BYTES`. |
 | `--coalesce-bytes` | Optional per-model metadata budget for identical in-flight request sharing; defaults to zero. Also `HUNCHO_COALESCE_BYTES`. |
@@ -157,7 +158,7 @@ model execution on blocking workers. One slot covers a running preparation or
 ready request; it is released when execution starts, allowing the next request
 to prepare concurrently. The existing admission bound still covers all jobs.
 F5 ignores this knob and keeps joint preparation in its backend. Packets own
-frozen inputs/options and cannot be used by a different engine. Model forwards,
+frozen inputs/options and stay within their immutable model/replica group. Model forwards,
 heads, temperatures and logical usage retain their existing arithmetic.
 Preparation validates every question before any forward; a later invalid
 question therefore submits no model work. Default zero retains the original
@@ -640,3 +641,42 @@ the CPU-only kernel comparison with:
 cargo test --offline --release -p huncho-backend --features candle --lib \
   delta_cpu::tests::recurrence_cpu_timing -- --ignored --nocapture
 ```
+
+
+## Bounded shared-weight CPU replicas
+
+`--replicas N` leases one independently locked context per complete model job,
+with a maximum of eight. Native CPU ModernBERT/Laya, Qwen F2/F3, packed CPU Kev
+and the offline mock support it. ONNX, Clef, GPU contexts and unsupported
+backends fail explicitly when more than one replica is requested. The default
+remains one. CLI cross-request collation cannot be combined with replicas;
+per-request native batches, prefix reuse and bounded preprocessing can be used
+when separately qualified.
+
+Backbone/trained-head tensor storage, tokenizer, formatter, core head and exact
+prompt/result caches are shared. Mutable KV, recurrence, convolution history,
+active handles and persistent snapshots belong to each context. A snapshot hit
+on one context does not make another context warm. The per-model persistent
+prefix byte budget is divided evenly across contexts; a small share that cannot
+retain representative prefixes fails its nonvacuous qualification. Temporary
+activations and active state can grow with concurrency. Shared CPU workers can
+also contend for cores and memory bandwidth, so replica count needs workload
+measurements; no automatic throughput gain is claimed.
+
+Admission covers N running jobs plus `--max-queued-per-model` waiting jobs.
+Canceled queued requests release capacity; a running blocking job retains its
+context and admission until it finishes. Preprocessing packets can transfer
+only within the same immutable replica group. Every actual context runs the
+complete pinned suite concurrently before the listener opens, requiring
+observed targets for every question and unchanged probability thresholds. A
+primary pass cannot hide drift in another context. Existing single-context
+receipts still describe one execution identity; they do not certify pool
+throughput or replace these fresh checks.
+
+The in-process API exposes `Engine::replica()` and
+`ModelRegistry::set_replicas(N)` for current registrations before serving.
+They do not authorize calibration themselves; library callers own that gate.
+Registry pool construction is atomic on failure. The cross-request library
+worker remains serial; use the supported CLI combinations when measuring
+replica throughput. Full released-model pool qualification, CPU affinity per
+context and replica-aware benchmark summaries remain outstanding.

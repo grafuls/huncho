@@ -162,6 +162,14 @@ pub struct Capabilities {
 /// A loaded model instance. Constructed once per `(model, backend, dtype)` and
 /// reused across requests.
 pub trait Backend: Send + Sync {
+    /// An independent execution context over identical immutable model weights.
+    /// No live handles or retained prefixes may transfer into the new context.
+    /// Unsupported backends fail explicitly; this is distinct from KV `fork`.
+    fn replica(&self) -> Result<Box<dyn Backend>> {
+        Err(crate::error::Error::Unsupported(
+            "this backend does not support independent shared-weight replicas".into(),
+        ))
+    }
     /// The backend identifier.
     fn id(&self) -> BackendId;
 

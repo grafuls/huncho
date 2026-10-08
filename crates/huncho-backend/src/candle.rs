@@ -21,6 +21,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
+use std::sync::Arc;
 
 use candle::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
@@ -46,8 +47,8 @@ pub enum CandleError {
 
 /// A candle-backed ModernBERT encoder, optionally with a Laya decision head.
 pub struct CandleBackend {
-    model: ModernBert,
-    head: Option<LayaHead>,
+    model: Arc<ModernBert>,
+    head: Option<Arc<LayaHead>>,
     hidden_size: usize,
     vocab_size: usize,
     max_context: usize,
@@ -100,8 +101,8 @@ impl CandleBackend {
         })?;
 
         Ok(CandleBackend {
-            model,
-            head,
+            model: Arc::new(model),
+            head: head.map(Arc::new),
             hidden_size,
             vocab_size: config.vocab_size,
             max_context,
@@ -223,6 +224,25 @@ fn load_encoder_tensors(path: &Path, device: &Device) -> candle::Result<HashMap<
 }
 
 impl Backend for CandleBackend {
+    fn replica(&self) -> Result<Box<dyn Backend>> {
+        if !self.device.is_cpu() {
+            return Err(Error::Unsupported(
+                "shared ModernBERT replicas currently support CPU only".into(),
+            ));
+        }
+        Ok(Box::new(Self {
+            model: self.model.clone(),
+            head: self.head.clone(),
+            hidden_size: self.hidden_size,
+            vocab_size: self.vocab_size,
+            max_context: self.max_context,
+            dtype: self.dtype.clone(),
+            id: self.id,
+            families: self.families.clone(),
+            device: self.device.clone(),
+        }))
+    }
+
     fn id(&self) -> BackendId {
         self.id
     }
@@ -562,8 +582,26 @@ fn core_from_tensor(t: &Tensor) -> Result<CoreTensor> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn cpu_replica_reuses_the_loaded_modernbert_storage() {
+        let root = Path::new("tests/fixtures/tiny_modernbert");
+        let backend = CandleBackend::load(
+            root.join("config.json"),
+            root.join("model.safetensors"),
+            512,
+            "fp32",
+        )
+        .unwrap();
+        let replica = backend.replica().unwrap();
+        assert_eq!(Arc::strong_count(&backend.model), 2);
+        assert_eq!(replica.capabilities().extra, backend.capabilities().extra);
+        drop(replica);
+        assert_eq!(Arc::strong_count(&backend.model), 1);
+    }
+
     use super::*;
     use std::path::Path;
+    use std::sync::Arc;
 
     #[test]
     fn extraction_matches_manual_slice() {

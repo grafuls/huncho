@@ -310,8 +310,8 @@ impl Qwen3_5Backend {
         install_packed(&mut model, quantized)?;
         let head = Readout::Pointer(PointerHead::load(head, cfg.hidden_size, &Device::Cpu)?);
         Ok(Self {
-            model,
-            head,
+            model: Arc::new(model),
+            head: Arc::new(head),
             vocab_size: 1,
             input_vocab_size: cfg.vocab_size,
             max_context,

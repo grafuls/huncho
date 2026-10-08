@@ -82,8 +82,8 @@ impl EvalStats {
     }
 }
 
-/// Opaque, single-use evaluation prepared for one immutable engine. Request,
-/// options and prompts cannot be altered or transferred to another model.
+/// Opaque, single-use evaluation prepared for one immutable engine/replica group.
+/// Request, options and prompts cannot be altered or transferred to another model.
 pub struct PreparedEvaluation {
     owner: Arc<()>,
     request: SystemOneRequest,
@@ -115,14 +115,14 @@ impl Drop for RequestPrefix<'_> {
 
 /// A loaded, serving-ready model.
 pub struct Engine {
-    manifest: ModelManifest,
+    manifest: Arc<ModelManifest>,
     /// The backend. Wrapped in a [`Mutex`] so a shared [`Engine`] can drive it
     /// through `&self`; this is the synchronization point for the (v1) in-process
     /// scheduler, which serializes forwards per model.
     backend: Mutex<Box<dyn Backend>>,
-    tokenizer: Box<dyn Tokenizer>,
-    formatter: Box<dyn PromptFormatter>,
-    head: HeadParams,
+    tokenizer: Arc<dyn Tokenizer>,
+    formatter: Arc<dyn PromptFormatter>,
+    head: Arc<HeadParams>,
     backend_id: BackendId,
     dtype: String,
     /// Actual execution device reported by the loaded backend.
@@ -133,8 +133,8 @@ pub struct Engine {
     calibration: CalibrationEntry,
     supports_fork: bool,
     supports_batch: bool,
-    response_cache: Option<Mutex<ResponseCache>>,
-    prompt_cache: Option<Mutex<PromptCache>>,
+    response_cache: Option<Arc<Mutex<ResponseCache>>>,
+    prompt_cache: Option<Arc<Mutex<PromptCache>>>,
     preparation_identity: Arc<()>,
 }
 
@@ -160,11 +160,11 @@ impl Engine {
             .remove("device")
             .unwrap_or_else(|| "unknown device".into());
         Ok(Engine {
-            formatter: formatter_for(&manifest),
-            manifest,
+            formatter: formatter_for(&manifest).into(),
+            manifest: Arc::new(manifest),
             backend: Mutex::new(backend),
-            tokenizer,
-            head,
+            tokenizer: tokenizer.into(),
+            head: Arc::new(head),
             backend_id,
             dtype,
             device,
@@ -178,12 +178,58 @@ impl Engine {
         })
     }
 
+    /// Share this immutable model's preprocessing, heads, calibration and exact
+    /// caches, with an independently locked backend and fresh native state.
+    /// Prepared packets can move within this replica group, never to a model
+    /// created separately. Serving qualification is still the caller's duty.
+    pub fn replica(&self) -> Result<Self> {
+        let original = self
+            .backend
+            .lock()
+            .map_err(|_| Error::Backend("backend lock poisoned".into()))?;
+        let backend = original.replica()?;
+        let expected = original.capabilities();
+        let actual = backend.capabilities();
+        if backend.id() != original.id()
+            || actual.id != expected.id
+            || actual.dtype != expected.dtype
+            || actual.extra != expected.extra
+            || actual.families != expected.families
+            || actual.max_context != expected.max_context
+            || actual.supports_fork != expected.supports_fork
+            || actual.supports_lora != expected.supports_lora
+            || backend.supports_batch() != original.supports_batch()
+        {
+            return Err(Error::Backend(
+                "replica changed the model execution identity".into(),
+            ));
+        }
+        Ok(Self {
+            manifest: self.manifest.clone(),
+            backend: Mutex::new(backend),
+            tokenizer: self.tokenizer.clone(),
+            formatter: self.formatter.clone(),
+            head: self.head.clone(),
+            backend_id: self.backend_id,
+            dtype: self.dtype.clone(),
+            device: self.device.clone(),
+            execution_metadata: self.execution_metadata.clone(),
+            calibration: self.calibration.clone(),
+            supports_fork: self.supports_fork,
+            supports_batch: self.supports_batch,
+            response_cache: self.response_cache.clone(),
+            prompt_cache: self.prompt_cache.clone(),
+            preparation_identity: self.preparation_identity.clone(),
+        })
+    }
+
     /// Opt in to exact whole-request response reuse for this immutable engine.
     /// Zero (default) disables retention. The FIFO has a charged-byte budget
     /// and 1,024-entry bound; oversized responses and errors are not cached.
     /// Cached data includes input text and is held only for this engine's life.
     pub fn with_result_cache(mut self, max_bytes: usize) -> Self {
-        self.response_cache = (max_bytes > 0).then(|| Mutex::new(ResponseCache::new(max_bytes)));
+        self.response_cache =
+            (max_bytes > 0).then(|| Arc::new(Mutex::new(ResponseCache::new(max_bytes))));
         self
     }
 
@@ -192,7 +238,7 @@ impl Engine {
     /// A charged-byte budget and 1,024-entry FIFO bound retained inputs/tokens.
     pub fn with_prompt_cache(mut self, max_bytes: usize) -> Self {
         self.prompt_cache = (max_bytes > 0 && self.family() != Family::F5)
-            .then(|| Mutex::new(PromptCache::new(max_bytes)));
+            .then(|| Arc::new(Mutex::new(PromptCache::new(max_bytes))));
         self
     }
 
@@ -1188,6 +1234,9 @@ mod tests {
     struct TestBackend;
 
     impl Backend for TestBackend {
+        fn replica(&self) -> Result<Box<dyn Backend>> {
+            Ok(Box::new(Self))
+        }
         fn id(&self) -> BackendId {
             BackendId::Onnx
         }
@@ -1289,6 +1338,53 @@ mod tests {
     }
 
     #[test]
+    fn replicas_share_immutable_preparation_and_bounded_exact_caches_only_within_the_group() {
+        let primary = engine()
+            .with_prompt_cache(1 << 20)
+            .with_result_cache(1 << 20);
+        let replica = primary.replica().unwrap();
+        assert!(Arc::ptr_eq(&primary.manifest, &replica.manifest));
+        assert!(Arc::ptr_eq(&primary.tokenizer, &replica.tokenizer));
+        assert!(Arc::ptr_eq(&primary.head, &replica.head));
+        assert!(Arc::ptr_eq(
+            primary.response_cache.as_ref().unwrap(),
+            replica.response_cache.as_ref().unwrap()
+        ));
+        let request = req();
+        let opts = EvalOptions {
+            extensions: true,
+            prepare_all: true,
+            ..Default::default()
+        };
+        let expected = primary
+            .eval_uncached_with_stats(&request, &opts, &mut Default::default())
+            .unwrap();
+        let prepared = primary
+            .prepare_eval_with_stats(request.clone(), opts.clone(), &mut Default::default())
+            .unwrap();
+        let mut work = EvalStats::default();
+        let result = replica
+            .eval_prepared_with_stats(prepared, &mut work)
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&result).unwrap(),
+            serde_json::to_value(&expected).unwrap()
+        );
+        assert_eq!(work.forward_calls, request.questions.len() as u64);
+        primary.eval_with_stats(&request, &opts, &mut work).unwrap();
+        assert_eq!(work.result_cache_hits, 1);
+        assert_eq!(work.forward_calls, 0);
+        let independent = engine();
+        let packet = primary
+            .prepare_eval_with_stats(request, opts, &mut Default::default())
+            .unwrap();
+        assert!(independent
+            .eval_prepared_with_stats(packet, &mut work)
+            .is_err());
+        assert_eq!(work.forward_calls, 0);
+    }
+
+    #[test]
     fn exact_result_reuse_preserves_all_fields_and_submits_no_work() {
         let engine = engine()
             .with_result_cache(1024 * 1024)
@@ -1351,7 +1447,7 @@ mod tests {
         }
         let calls = Arc::new(AtomicUsize::new(0));
         let mut engine = engine().with_prompt_cache(1024 * 1024);
-        engine.formatter = Box::new(CountingFormatter(calls.clone()));
+        engine.formatter = Arc::new(CountingFormatter(calls.clone()));
         let opts = EvalOptions {
             extensions: true,
             ..Default::default()
@@ -1428,7 +1524,7 @@ mod tests {
         assert_eq!(stats.prompt_cache_hits, 0);
         // Retention belongs to this engine and zero disables an existing cache.
         let mut other = self::engine().with_prompt_cache(1024 * 1024);
-        other.formatter = Box::new(CountingFormatter(calls.clone()));
+        other.formatter = Arc::new(CountingFormatter(calls.clone()));
         other.eval_with_stats(&request, &opts, &mut stats).unwrap();
         assert_eq!(stats.prompt_cache_hits, 0);
         let engine = engine.with_prompt_cache(0);
@@ -1578,7 +1674,7 @@ mod tests {
         }
         let calls = Arc::new(AtomicUsize::new(0));
         let mut engine = engine().with_prompt_cache(1024 * 1024);
-        engine.formatter = Box::new(TransientFormatter(calls.clone()));
+        engine.formatter = Arc::new(TransientFormatter(calls.clone()));
         let request = req();
         let mut stats = EvalStats::default();
         assert!(engine

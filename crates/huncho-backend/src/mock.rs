@@ -80,6 +80,17 @@ impl MockBackend {
 }
 
 impl Backend for MockBackend {
+    fn replica(&self) -> Result<Box<dyn Backend>> {
+        Ok(Box::new(Self {
+            hidden: self.hidden,
+            max_context: self.max_context,
+            id: self.id,
+            dtype: self.dtype.clone(),
+            families: self.families.clone(),
+            supports_fork: self.supports_fork,
+            caches: BTreeMap::new(),
+        }))
+    }
     fn id(&self) -> BackendId {
         self.id
     }

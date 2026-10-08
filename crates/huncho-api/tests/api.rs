@@ -1530,3 +1530,210 @@ async fn coalesced_failures_keep_the_error_contract_and_are_retried() {
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
     assert_eq!(state.metrics.queue_depth.get(), 0);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn replica_jobs_overlap_without_releasing_running_capacity_on_http_cancellation() {
+    use huncho_core::backend::{CacheHandle, Capabilities, ForwardInput, ForwardOutput};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    struct ReplicaBackend {
+        inner: MockBackend,
+        gate: SlowGate,
+        started: tokio::sync::mpsc::UnboundedSender<usize>,
+        next: Arc<AtomicUsize>,
+        index: usize,
+    }
+    impl Backend for ReplicaBackend {
+        fn id(&self) -> BackendId {
+            self.inner.id()
+        }
+        fn capabilities(&self) -> Capabilities {
+            self.inner.capabilities()
+        }
+        fn replica(&self) -> huncho_core::Result<Box<dyn Backend>> {
+            Ok(Box::new(Self {
+                inner: MockBackend::with_vocab(4096),
+                gate: self.gate.clone(),
+                started: self.started.clone(),
+                next: self.next.clone(),
+                index: self.next.fetch_add(1, Ordering::SeqCst),
+            }))
+        }
+        fn forward(&mut self, input: ForwardInput) -> huncho_core::Result<ForwardOutput> {
+            let _ = self.started.send(self.index);
+            let released = self.gate.0.lock().unwrap();
+            let (released, timeout) = self
+                .gate
+                .1
+                .wait_timeout_while(released, std::time::Duration::from_secs(3), |released| {
+                    !*released
+                })
+                .unwrap();
+            assert!(
+                !timeout.timed_out(),
+                "replica did not execute concurrently or test did not release it"
+            );
+            drop(released);
+            self.inner.forward(input)
+        }
+        fn fork(&mut self, handle: CacheHandle) -> huncho_core::Result<CacheHandle> {
+            self.inner.fork(handle)
+        }
+    }
+    let gate = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+    let release = ReleaseSlowJob(gate.clone());
+    let (started, mut started_rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut registry = ModelRegistry::new();
+    registry.insert(
+        "mock-laya",
+        engine_with_backend(
+            "mock-laya",
+            Box::new(ReplicaBackend {
+                inner: MockBackend::with_vocab(4096),
+                gate,
+                started,
+                index: 0,
+                next: Arc::new(AtomicUsize::new(1)),
+            }),
+        ),
+    );
+    registry.set_replicas(2).unwrap();
+    assert!(registry.set_replicas(0).is_err());
+    assert!(registry.set_replicas(9).is_err());
+    assert_eq!(
+        registry.get("mock-laya").unwrap().replica_engines().len(),
+        2
+    );
+    let config = ServerConfig {
+        max_queued_per_model: 1,
+        max_prepared_per_model: 2,
+        ..Default::default()
+    };
+    let state = Arc::new(AppState::new(config, registry, Metrics::new()));
+    let (status, listing) = send(state.clone(), Method::GET, "/v1/models", None, None, false).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listing["models"][0]["replicas"], 2);
+    let request = |state: Arc<AppState>| {
+        tokio::spawn(send(
+            state,
+            Method::POST,
+            "/v1/systemone",
+            Some(choice_request()),
+            None,
+            true,
+        ))
+    };
+    let first = request(state.clone());
+    let second = request(state.clone());
+    let a = tokio::time::timeout(std::time::Duration::from_secs(1), started_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let b = tokio::time::timeout(std::time::Duration::from_secs(1), started_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(a, b);
+    let queued = request(state.clone());
+    for _ in 0..100 {
+        if state.metrics.requests_waiting.get() == 1 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    }
+    assert_eq!(state.metrics.requests_waiting.get(), 1);
+    assert_eq!(
+        send(
+            state.clone(),
+            Method::POST,
+            "/v1/systemone",
+            Some(choice_request()),
+            None,
+            false
+        )
+        .await
+        .0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    queued.abort();
+    let _ = queued.await;
+    first.abort();
+    let _ = first.await;
+    assert_eq!(state.metrics.queue_depth.get(), 2);
+    // Both running native jobs still occupy their contexts after one HTTP abort.
+    let waiting = request(state.clone());
+    for _ in 0..100 {
+        if state.metrics.requests_waiting.get() == 1 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    }
+    assert_eq!(state.metrics.requests_waiting.get(), 1);
+    assert_eq!(
+        send(
+            state.clone(),
+            Method::POST,
+            "/v1/systemone",
+            Some(choice_request()),
+            None,
+            false
+        )
+        .await
+        .0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    drop(release);
+    let (status, result) = second.await.unwrap();
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(waiting.await.unwrap().0, StatusCode::OK);
+    let (_, expected) = send(
+        crate::state(None),
+        Method::POST,
+        "/v1/systemone",
+        Some(choice_request()),
+        None,
+        true,
+    )
+    .await;
+    assert_eq!(result["answers"], expected["answers"]);
+    assert_eq!(result["extensions"], expected["extensions"]);
+    assert_eq!(
+        result["usage"]["input_tokens"],
+        expected["usage"]["input_tokens"]
+    );
+    for _ in 0..100 {
+        if state.metrics.queue_depth.get() == 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    }
+    assert_eq!(state.metrics.queue_depth.get(), 0);
+    assert_eq!(state.metrics.requests_waiting.get(), 0);
+    assert_eq!(
+        send(
+            state.clone(),
+            Method::POST,
+            "/v1/systemone",
+            Some(choice_request()),
+            None,
+            true
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+}
+
+#[test]
+fn unsupported_replica_construction_does_not_replace_any_registered_model() {
+    let mut registry = ModelRegistry::new();
+    registry.insert("mock-laya", mock_engine("mock-laya"));
+    registry.insert(
+        "unsupported",
+        engine_with_backend("unsupported", Box::new(huncho_backend::NullBackend::new())),
+    );
+    assert!(registry.set_replicas(2).is_err());
+    assert!(registry
+        .models()
+        .values()
+        .all(|model| model.replica_engines().len() == 1));
+}

@@ -4,11 +4,12 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use huncho_core::engine::{Engine, EvalStats, PreparedEvaluation};
-use tokio::sync::{mpsc, oneshot, OwnedSemaphorePermit, Semaphore};
+use huncho_core::engine::{EvalStats, PreparedEvaluation};
+use tokio::sync::{mpsc, oneshot, OwnedSemaphorePermit};
 
 use crate::coalesce::JobResult;
 use crate::metrics::{GaugeGuard, Metrics};
+use crate::replicas::ReplicaPool;
 
 pub(crate) struct BatchJob {
     pub prepared: PreparedEvaluation,
@@ -49,8 +50,7 @@ impl BatchQueue {
     pub(crate) async fn submit(
         &self,
         job: BatchJob,
-        engine: Arc<Engine>,
-        execution: Arc<Semaphore>,
+        pool: Arc<ReplicaPool>,
         metrics: Arc<Metrics>,
     ) -> Arc<JobResult> {
         let receiver = match self.receiver.lock() {
@@ -62,8 +62,7 @@ impl BatchQueue {
             // model handle closes the queue and releases the engine after drain.
             tokio::spawn(run(
                 receiver,
-                engine,
-                execution,
+                pool,
                 metrics,
                 self.max_requests,
                 self.wait,
@@ -82,8 +81,7 @@ impl BatchQueue {
 
 async fn run(
     mut receiver: mpsc::Receiver<Pending>,
-    engine: Arc<Engine>,
-    execution: Arc<Semaphore>,
+    pool: Arc<ReplicaPool>,
     metrics: Arc<Metrics>,
     max_requests: usize,
     wait: Duration,
@@ -118,14 +116,13 @@ async fn run(
         if group.is_empty() {
             continue;
         }
-        let Ok(permit) = execution.clone().acquire_owned().await else {
+        let Ok(backend) = pool.acquire().await else {
             break;
         };
         group.retain(|pending| !pending.reply.is_closed());
         if group.is_empty() {
             continue;
         }
-        let backend = engine.clone();
         let job_metrics = metrics.clone();
         // Replies are held outside the blocking task so a panic closes neither
         // the worker nor future admission; every affected caller receives 500.
@@ -135,7 +132,6 @@ async fn run(
             .unzip();
         let count = replies.len();
         let results = tokio::task::spawn_blocking(move || {
-            let _execution = permit;
             let mut packets = Vec::with_capacity(jobs.len());
             let mut owners = Vec::with_capacity(jobs.len());
             for job in jobs {

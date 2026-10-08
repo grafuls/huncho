@@ -597,3 +597,39 @@ partial-label and probability-drift rejections. Instructions are compiled,
 not dynamically dispatched: deploy only to compatible hosts. New CPU builds
 and full-model fitting/qualification are staged separately; no faster kernel
 is accepted based on instruction support alone. GPU checks remain deferred.
+
+
+## Shared-weight CPU execution replicas (2026-10-08)
+
+O14 now provides bounded independent CPU execution contexts instead of sending
+all ordinary HTTP requests through one model mutex. `Backend::replica()` fails
+by default; native CPU ModernBERT/Laya, Qwen F2/F3, packed Kev and Mock implement
+it. Backbone/trained-head weights share Arc storage. Core manifest, tokenizer,
+formatter, head and bounded exact prompt/result caches are shared within one
+immutable group. Native cache handles and persistent snapshots start empty and
+remain local. Kernel changes fail while another Qwen replica shares the model.
+This shares one already-merged adapter's weights; it is not multi-LoRA or shared
+base residency across distinct adapters.
+
+`--replicas` / `HUNCHO_REPLICAS` defaults to one, bounds the pool at eight and
+rejects non-CPU/unsupported paths and cross-request collation. Per-request native
+batch/prefix and preparation options remain independently gated. Idle contexts
+are leased through complete blocking jobs; cancellation/unwind releases them
+only when native work finishes. Admission covers N running plus the configured
+waiting limit. Persistent retention budget is divided across contexts instead
+of silently multiplying its per-model bound; exact caches and attention setup
+storage remain shared.
+
+Startup checks every actual context concurrently on the complete unchanged
+labeled suite. Partial/unlabeled data or drift in any replica rejects the pool.
+Tests prove shared loaded storage, unchanged independent fp32/fp16/packed Q8/Q4
+float bits under concurrent native fixture calls, nontransferable handles,
+fresh snapshots, group-bound prepared packets, exact cache sharing, atomic
+unsupported construction, overlapping HTTP jobs, overload and running/queued
+cancellation ownership. Existing default and native prefix/batch checks pass.
+
+Released Kev/Laya/Nimble pool qualification and workload throughput/RSS/affinity
+measurements remain open. Each concurrent job retains its own activations and
+state and can contend for cores/memory bandwidth. ONNX/Clef replica loaders,
+replica-aware benchmark summaries and cross-request worker scaling remain open;
+GPU and Apple checks are not performed.

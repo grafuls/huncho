@@ -10,6 +10,7 @@ use crate::batch::BatchQueue;
 use crate::coalesce::RequestFlights;
 use crate::config::ServerConfig;
 use crate::metrics::Metrics;
+use crate::replicas::ReplicaPool;
 
 /// A registry of loaded models keyed by the `model` string clients send.
 pub struct ModelRegistry {
@@ -26,7 +27,7 @@ pub struct ModelRegistry {
 pub struct ModelHandle {
     pub(crate) engine: Arc<Engine>,
     pub(crate) admission: Arc<Semaphore>,
-    pub(crate) execution: Arc<Semaphore>,
+    pub(crate) pool: Arc<ReplicaPool>,
     pub(crate) flights: Arc<RequestFlights>,
     pub(crate) preparation: Option<Arc<Semaphore>>,
     pub(crate) batch: Option<Arc<BatchQueue>>,
@@ -34,12 +35,14 @@ pub struct ModelHandle {
 
 impl ModelHandle {
     fn new(
-        engine: Arc<Engine>,
+        engines: Vec<Arc<Engine>>,
         max_queued: u16,
         coalesce_bytes: usize,
         max_prepared: u16,
         batch: Option<(u16, u16, usize)>,
     ) -> Self {
+        let engine = engines[0].clone();
+        let capacity = usize::from(max_queued) + engines.len();
         let batch = batch.filter(|(rows, _, tokens)| {
             (2..=64).contains(rows) && *tokens > 0 && engine.supports_batch()
         });
@@ -48,14 +51,18 @@ impl ModelHandle {
             .then(|| Arc::new(Semaphore::new(usize::from(max_prepared))));
         Self {
             engine,
-            admission: Arc::new(Semaphore::new(usize::from(max_queued) + 1)),
-            execution: Arc::new(Semaphore::new(1)),
+            admission: Arc::new(Semaphore::new(capacity)),
+            pool: ReplicaPool::new(engines),
             flights: RequestFlights::new(coalesce_bytes),
             preparation,
-            batch: batch.map(|(rows, wait, tokens)| {
-                BatchQueue::new(usize::from(max_queued) + 1, rows, wait, tokens)
-            }),
+            batch: batch.map(|(rows, wait, tokens)| BatchQueue::new(capacity, rows, wait, tokens)),
         }
+    }
+
+    /// Independent execution contexts for startup qualification. Their model
+    /// identity and prepared-packet ownership belong to one immutable group.
+    pub fn replica_engines(&self) -> &[Arc<Engine>] {
+        &self.pool.engines
     }
 }
 
@@ -81,13 +88,51 @@ impl ModelRegistry {
         self.models.insert(
             name.into(),
             ModelHandle::new(
-                Arc::new(engine),
+                vec![Arc::new(engine)],
                 self.max_queued,
                 self.coalesce_bytes,
                 self.max_prepared,
                 self.batch,
             ),
         );
+    }
+
+    /// Configure a bounded CPU pool before serving. Construction is atomic:
+    /// unsupported backends leave all existing model handles unchanged.
+    pub fn set_replicas(&mut self, count: usize) -> huncho_core::Result<()> {
+        use huncho_core::error::Error;
+        if !(1..=8).contains(&count) {
+            return Err(Error::Request("replicas must be between 1 and 8".into()));
+        }
+        if count > 1 && self.batch.is_some() {
+            return Err(Error::Unsupported(
+                "replicas and cross-request collation cannot be combined yet".into(),
+            ));
+        }
+        let mut replacement = BTreeMap::new();
+        for (name, model) in &self.models {
+            if count > 1 && model.device() != "CPU" {
+                return Err(Error::Unsupported(
+                    "replica serving currently supports CPU only".into(),
+                ));
+            }
+            let mut engines = vec![model.engine.clone()];
+            for _ in 1..count {
+                engines.push(Arc::new(model.engine.replica()?));
+            }
+            replacement.insert(
+                name.clone(),
+                ModelHandle::new(
+                    engines,
+                    self.max_queued,
+                    self.coalesce_bytes,
+                    self.max_prepared,
+                    self.batch,
+                ),
+            );
+        }
+        self.models = replacement;
+        Ok(())
     }
 
     pub fn get(&self, name: &str) -> Option<ModelHandle> {
@@ -124,7 +169,7 @@ impl ModelRegistry {
         self.batch = batch;
         for model in self.models.values_mut() {
             *model = ModelHandle::new(
-                model.engine.clone(),
+                model.pool.engines.clone(),
                 max_queued,
                 coalesce_bytes,
                 max_prepared,
