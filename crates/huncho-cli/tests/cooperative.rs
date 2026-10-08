@@ -23,12 +23,23 @@ fn run_storage_profile(
     grouped: &str,
     pages: &str,
 ) -> Output {
+    run_adapter_profile(args, chunk, query_rows, grouped, pages, "0")
+}
+fn run_adapter_profile(
+    args: &[&str],
+    chunk: &str,
+    query_rows: &str,
+    grouped: &str,
+    pages: &str,
+    lora: &str,
+) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_huncho"))
         .env("HUNCHO_DEVICE", "cpu")
         .env("HUNCHO_PREFILL_CHUNK_TOKENS", chunk)
         .env("HUNCHO_ATTENTION_QUERY_ROWS", query_rows)
         .env("HUNCHO_GROUPED_GQA", grouped)
         .env("HUNCHO_KV_PAGE_TOKENS", pages)
+        .env("HUNCHO_RUNTIME_LORA", lora)
         .env("RAYON_NUM_THREADS", "1")
         .env("CANDLE_NUM_THREADS", "1")
         .env_remove("HUNCHO_CPU_DELTA_RULE")
@@ -728,5 +739,163 @@ fn kv_pages_bind_fresh_receipts_and_actual_prefix_work_and_refuse_vacuous_servin
         );
         assert!(!output.status.success());
         assert!(String::from_utf8_lossy(&output.stderr).contains("HUNCHO_KV_PAGE_TOKENS"));
+    }
+}
+
+#[cfg(feature = "qualification")]
+#[test]
+fn runtime_lora_binds_fresh_qualification_and_keeps_frozen_probabilities_and_refusal_gates() {
+    let (tmp, manifest, golden) = package();
+    let manifest = manifest.to_str().unwrap();
+    for optimized in [false, true] {
+        let receipt = tmp.path().join(format!("runtime-lora-{optimized}.json"));
+        let mut args = vec![
+            "conform",
+            "--manifest",
+            manifest,
+            "--backend",
+            "candle",
+            "--dtype",
+            "fp32",
+            "--golden",
+            golden.to_str().unwrap(),
+            "--write-qualification",
+            receipt.to_str().unwrap(),
+            "--json",
+        ];
+        if optimized {
+            args.extend(["--prefix-cache", "--cooperative-prefill"]);
+        }
+        let output = run_adapter_profile(
+            &args,
+            if optimized { "3" } else { "0" },
+            if optimized { "7" } else { "0" },
+            if optimized { "1" } else { "0" },
+            if optimized { "16" } else { "0" },
+            "1",
+        );
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["passed"], true);
+        assert_eq!(
+            report["execution_metadata"]["adapter_execution"],
+            "cpu-fp32-runtime-lora-v1"
+        );
+        assert_eq!(report["execution_metadata"]["runtime_lora_targets"], "3");
+        if optimized {
+            assert!(report["work"]["cache_forks"].as_u64().unwrap() > 0);
+            assert!(
+                report["optimization_parity"]["max_prob_delta"]
+                    .as_f64()
+                    .unwrap()
+                    <= 1e-4
+            );
+        }
+        let record: Value = serde_json::from_slice(&std::fs::read(&receipt).unwrap()).unwrap();
+        assert_eq!(record["outcome_gates_passed"], false);
+        assert!(std::fs::read_to_string(receipt)
+            .unwrap()
+            .contains("HUNCHO_RUNTIME_LORA"));
+    }
+    let mut labeled: Value = serde_json::from_slice(&std::fs::read(&golden).unwrap()).unwrap();
+    for case in labeled["cases"].as_array_mut().unwrap() {
+        let targets: serde_json::Map<String, Value> = case["expected"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(id, expected)| {
+                (
+                    id.clone(),
+                    json!(expected.as_object().unwrap().keys().next().unwrap()),
+                )
+            })
+            .collect();
+        case["targets"] = json!(targets);
+    }
+    let labeled_path = tmp.path().join("labeled-lora-fixture.json");
+    std::fs::write(&labeled_path, serde_json::to_vec(&labeled).unwrap()).unwrap();
+    let receipt = tmp.path().join("labeled-lora-receipt.json");
+    let output = run_adapter_profile(
+        &[
+            "conform",
+            "--manifest",
+            manifest,
+            "--backend",
+            "candle",
+            "--dtype",
+            "fp32",
+            "--golden",
+            labeled_path.to_str().unwrap(),
+            "--write-qualification",
+            receipt.to_str().unwrap(),
+            "--json",
+        ],
+        "0",
+        "0",
+        "0",
+        "0",
+        "1",
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let record: Value = serde_json::from_slice(&std::fs::read(receipt).unwrap()).unwrap();
+    assert_eq!(record["outcome_gates_passed"], true); // synthetic plumbing only
+    let binding = format!("tiny-kev={}", golden.display());
+    for with_golden in [false, true] {
+        let mut args = vec![
+            "serve",
+            "--manifest",
+            manifest,
+            "--backend",
+            "candle",
+            "--dtype",
+            "fp32",
+            "--bind",
+            "127.0.0.1:0",
+        ];
+        if with_golden {
+            args.extend(["--qualification-golden", &binding]);
+        }
+        let output = run_adapter_profile(&args, "0", "0", "0", "0", "1");
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(if with_golden {
+                "observed target labels"
+            } else {
+                "requires --qualification-golden"
+            })
+        );
+    }
+    for (dtype, lora, expected) in [
+        ("fp16", "1", "runtime LoRA requires"),
+        ("fp32", "broken", "HUNCHO_RUNTIME_LORA"),
+    ] {
+        let output = run_adapter_profile(
+            &[
+                "bench",
+                "--manifest",
+                manifest,
+                "--backend",
+                "candle",
+                "--dtype",
+                dtype,
+                "--iterations",
+                "1",
+            ],
+            "0",
+            "0",
+            "0",
+            "0",
+            lora,
+        );
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains(expected));
     }
 }

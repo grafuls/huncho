@@ -35,7 +35,7 @@ still times out. These variants remain unqualified.
 | O19 retained/paged prefixes | Bounded immutable CPU snapshots and copy-on-write CPU KV pages available | Direct paged-attention kernels, branch collation and tenant policies |
 | O20 Metal | Skipped by user | Apple work deferred |
 | O21 llama.cpp | CPU F2/F3, full-state forks/chunks, bounded native batches and pending FP32/FP16/Q8/Q4 exports available | Released fitting/qualification and graph-side readout efficiency |
-| O22 shared bases/residency | Immutable CPU bases and bounded CPU lazy loading/preload/idle eviction available | Released residency measurements and runtime LoRA dispatch |
+| O22 shared bases/residency | Immutable CPU bases, lazy residency/preload/idle eviction and standard CPU FP32 F2/F3 runtime LoRA available | Released residency/calibration measurements, mixed-adapter collation and other profiles |
 | O23 vLLM custom readouts | Pinned actual CPU Kev F2 raw pooling and equal-length batches available | Released fitting/held-out acceptance; other families, prefixes, quantization and device profiles |
 | O24 distributed/sharded inference | Actual two-rank local CPU vLLM tensor sharding available | Released fitting/acceptance, capacity/latency; pipeline/multi-node/device implementation and multi-GPU qualification |
 | O25 prefill scheduling | Resumable CPU prefix/question scheduling available | Released labeled qualification and latency; tensor/device scheduling open |
@@ -43,6 +43,29 @@ still times out. These variants remain unqualified.
 | O27 browser WASM/WebGPU | Separate CPU WASM F1 integrated-head SDK, packaging and fresh labeled gates available | Released exports/calibration, other families and browser scheduling; WebGPU deferred |
 
 ## Implemented increments
+
+### Immutable CPU bases with runtime LoRA adapters
+
+O22 now keeps standard low-rank updates separate from CPU FP32 Qwen F2/F3
+backbone projections. The optional shared-base cache therefore shares even
+adapter-targeted dense tensors across independent models. Each model owns its
+immutable A/B projections and readout; no adapter switch mutates base weights or
+reuses another model's prefix state. Loaded models survive base-cache eviction.
+Native scalar, candidate-only F3, equal/right-padded CPU batches, replicas and
+Kev prefix/chunk/page paths keep their existing ownership and calibration paths.
+Unsupported/incomplete adapter semantics and reduced/packed/device backbones
+are rejected; all declared targets must have complete, consumed A/B weights.
+
+Runtime and merged LoRA use different floating-point operation orders, so the
+new default-disabled execution profile binds fresh complete labeled gates and
+receipt/environment identity. Frozen independent Kev probabilities and fixed
+full argmax gates remain unchanged; native F2/F3 scalar/batch/selected/fork
+comparisons retain paired 1e-4 probability checks at unchanged temperatures.
+Synthetic labels prove startup plumbing only. Runtime updates add two low-rank
+projections per adapted call: expected savings concern resident dense weights
+and startup merge temporaries, not guaranteed latency. Mixed-adapter tensor
+collation, released calibration and measured RSS/throughput remain open. No
+actual GPU check was run. [CPU evidence and limits](verification/runtime-lora-cpu-20261008/README.md).
 
 ### Immutable CPU KV pages for Kev forks
 

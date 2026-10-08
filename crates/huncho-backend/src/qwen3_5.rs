@@ -38,6 +38,7 @@ mod kv_pages;
 #[cfg(feature = "quantization")]
 #[path = "qwen_quantized.rs"]
 pub mod quantized;
+mod runtime_lora;
 use kv_pages::PagedKv;
 
 /// The block type of a decoder layer.
@@ -311,6 +312,10 @@ struct BackboneLinear {
 
 enum Projection {
     Dense(Linear),
+    RuntimeLora {
+        base: Linear,
+        adapter: runtime_lora::Adapter,
+    },
     #[cfg(feature = "quantization")]
     Packed {
         matmul: candle::quantized::QMatMul,
@@ -324,6 +329,9 @@ impl Module for Projection {
     fn forward(&self, input: &Tensor) -> Result<Tensor> {
         match self {
             Self::Dense(linear) => linear.forward(input),
+            Self::RuntimeLora { base, adapter } => {
+                base.forward(input)?.broadcast_add(&adapter.forward(input)?)
+            }
             #[cfg(feature = "quantization")]
             Self::Packed {
                 matmul,
@@ -367,6 +375,7 @@ impl Module for Projection {
 /// Norms, embeddings, convolution and biases still use the ordinary builder.
 enum ProjectionSource {
     Dense,
+    RuntimeLora(HashMap<String, runtime_lora::Adapter>),
     #[cfg(feature = "quantization")]
     Packed(quantized::PackedWeights),
 }
@@ -381,6 +390,18 @@ impl ProjectionSource {
     ) -> Result<BackboneLinear> {
         match self {
             Self::Dense => Ok(linear_b(input, output, bias, vb)?.into()),
+            Self::RuntimeLora(adapters) => {
+                let name = format!("{}.weight", vb.prefix());
+                let base = linear_b(input, output, bias, vb)?;
+                let mut linear: BackboneLinear = base.into();
+                if let Some(adapter) = adapters.remove(&name) {
+                    let Projection::Dense(base) = linear.linear else {
+                        unreachable!()
+                    };
+                    linear.linear = Projection::RuntimeLora { base, adapter };
+                }
+                Ok(linear)
+            }
             #[cfg(feature = "quantization")]
             Self::Packed(weights) => {
                 let name = format!("{}.weight", vb.prefix());
@@ -412,6 +433,11 @@ impl ProjectionSource {
     }
 
     fn finish(&self) -> Result<()> {
+        if let Self::RuntimeLora(adapters) = self {
+            if !adapters.is_empty() {
+                candle::bail!("unused runtime LoRA projections in model schema")
+            }
+        }
         #[cfg(feature = "quantization")]
         if let Self::Packed(weights) = self {
             if !weights.is_empty() {
@@ -475,6 +501,14 @@ impl BackboneLinear {
         #[cfg(feature = "cpu-blas")]
         if let (Some(runtime), Projection::Dense(linear)) = (&self.blas, &self.linear) {
             return runtime.forward(linear, input);
+        }
+        #[cfg(feature = "cpu-blas")]
+        if let (Some(runtime), Projection::RuntimeLora { base, adapter }) =
+            (&self.blas, &self.linear)
+        {
+            return runtime
+                .forward(base, input)?
+                .broadcast_add(&adapter.forward(input)?);
         }
         self.linear.forward(input)
     }
@@ -1194,6 +1228,7 @@ pub struct Model {
     attention_query_rows: usize,
     grouped_gqa: bool,
     kv_page_tokens: usize,
+    runtime_lora_targets: usize,
     cpu_delta_rule: bool,
     cpu_causal_conv: bool,
     cpu_fused_gate: bool,
@@ -1249,6 +1284,7 @@ impl Model {
             attention_query_rows: 0,
             grouped_gqa: false,
             kv_page_tokens: 0,
+            runtime_lora_targets: 0,
             cpu_delta_rule: false,
             cpu_causal_conv: false,
             cpu_fused_gate: false,
@@ -1307,7 +1343,13 @@ impl Model {
         }
         let mut compatible = true;
         self.visit_projections(|projection| {
-            compatible &= matches!(&projection.linear, Projection::Dense(linear) if linear.weight().dtype() == DType::F32 && linear.weight().device().is_cpu());
+            compatible &= match &projection.linear {
+                Projection::Dense(linear) | Projection::RuntimeLora { base: linear, .. } => {
+                    linear.weight().dtype() == DType::F32 && linear.weight().device().is_cpu()
+                }
+                #[cfg(feature = "quantization")]
+                _ => false,
+            };
         });
         if !compatible {
             return Err(Error::Unsupported(
@@ -1902,6 +1944,7 @@ impl Qwen3_5Backend {
             max_context,
             dtype.into(),
             device,
+            false,
             #[cfg(feature = "shared-base")]
             None,
         )
@@ -1948,6 +1991,50 @@ impl Qwen3_5Backend {
             max_context,
             dtype,
             device,
+            false,
+            #[cfg(feature = "shared-base")]
+            None,
+        )
+    }
+
+    /// Keep standard A/B adapter projections separate from immutable CPU FP32
+    /// base weights. Different arithmetic requires fresh profile qualification.
+    pub fn load_kev_runtime_lora(
+        base_dir: &Path,
+        adapter_dir: &Path,
+        head_path: &Path,
+        max_context: usize,
+        dtype: impl Into<String>,
+    ) -> CoreResult<Self> {
+        Self::load_with_head(
+            base_dir,
+            Some(adapter_dir),
+            Some(head_path),
+            max_context,
+            dtype.into(),
+            Device::Cpu,
+            true,
+            #[cfg(feature = "shared-base")]
+            None,
+        )
+    }
+
+    /// CPU FP32 F3 backbone updates; the vocabulary projection is unchanged.
+    /// Adapters targeting embeddings, norms or the LM head are rejected.
+    pub fn load_runtime_lora(
+        base_dir: &Path,
+        adapter_dir: &Path,
+        max_context: usize,
+        dtype: impl Into<String>,
+    ) -> CoreResult<Self> {
+        Self::load_with_head(
+            base_dir,
+            Some(adapter_dir),
+            None,
+            max_context,
+            dtype.into(),
+            Device::Cpu,
+            true,
             #[cfg(feature = "shared-base")]
             None,
         )
@@ -1977,6 +2064,7 @@ impl Qwen3_5Backend {
             max_context,
             dtype,
             Device::Cpu,
+            false,
             Some(cache),
         )
     }
@@ -1988,8 +2076,14 @@ impl Qwen3_5Backend {
         max_context: usize,
         dtype: String,
         device: Device,
+        runtime_lora: bool,
         #[cfg(feature = "shared-base")] cache: Option<&crate::shared_base::BaseWeightCache>,
     ) -> CoreResult<Self> {
+        if runtime_lora && (!device.is_cpu() || dtype != "fp32" || adapter_dir.is_none()) {
+            return Err(Error::Unsupported(
+                "runtime LoRA requires CPU FP32 Qwen with an adapter".into(),
+            ));
+        }
         let dtype_str = dtype;
         let dtype = match dtype_str.as_str() {
             "fp16" | "f16" => DType::F16,
@@ -2050,7 +2144,21 @@ impl Qwen3_5Backend {
             )));
         }
 
-        if let Some(adapter_dir) = adapter_dir {
+        let mut projections = if runtime_lora {
+            let rank = pointer_path
+                .map(crate::kev::KevMetadata::load)
+                .transpose()?
+                .map(|meta| meta.lora_rank);
+            ProjectionSource::RuntimeLora(runtime_lora::load(adapter_dir.unwrap(), &tensors, rank)?)
+        } else {
+            ProjectionSource::Dense
+        };
+        let runtime_lora_targets = if let ProjectionSource::RuntimeLora(adapters) = &projections {
+            adapters.len()
+        } else {
+            0
+        };
+        if let Some(adapter_dir) = adapter_dir.filter(|_| !runtime_lora) {
             let adapter_path = adapter_dir.join("adapter_model.safetensors");
             let lora = candle::safetensors::load(&adapter_path, &weight_device).map_err(|e| {
                 Error::Backend(
@@ -2104,9 +2212,11 @@ impl Qwen3_5Backend {
             .collect::<candle::Result<HashMap<_, _>>>()
             .map_err(|e| Error::Backend(format!("moving Qwen3.5 weights to device: {e}")))?;
         let vb = VarBuilder::from_tensors(tensors, dtype, &device);
-        let model = Model::new(&config, vb, &device, dtype).map_err(|e| {
-            Error::Backend(QwenError::Load("model".into(), e.to_string()).to_string())
-        })?;
+        let mut model = Model::new_with_projections(&config, vb, &device, dtype, &mut projections)
+            .map_err(|e| {
+                Error::Backend(QwenError::Load("model".into(), e.to_string()).to_string())
+            })?;
+        model.runtime_lora_targets = runtime_lora_targets;
 
         Ok(Qwen3_5Backend {
             model: Arc::new(model),
@@ -2344,6 +2454,16 @@ impl Backend for Qwen3_5Backend {
         }
         if self.model.grouped_gqa {
             extra.insert("gqa_execution".into(), "cpu-grouped-queries-v1".into());
+        }
+        if self.model.runtime_lora_targets > 0 {
+            extra.insert(
+                "adapter_execution".into(),
+                "cpu-fp32-runtime-lora-v1".into(),
+            );
+            extra.insert(
+                "runtime_lora_targets".into(),
+                self.model.runtime_lora_targets.to_string(),
+            );
         }
         if self.model.kv_page_tokens > 0 {
             extra.insert("kv_storage".into(), "cpu-cow-pages-materialize-v1".into());
@@ -2875,6 +2995,93 @@ fn core_from_tensor(t: &Tensor) -> CoreResult<CoreTensor> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "shared-base")]
+    #[test]
+    fn runtime_lora_shares_even_targeted_base_storage_and_survives_cache_eviction() {
+        let root = Path::new("tests/fixtures/tiny_kev");
+        let cache = crate::shared_base::BaseWeightCache::new(8 << 20);
+        let load = || {
+            Qwen3_5Backend::load_with_head(
+                root,
+                Some(root),
+                Some(&root.join("head.pt")),
+                512,
+                "fp32".into(),
+                Device::Cpu,
+                true,
+                Some(&cache),
+            )
+            .unwrap()
+        };
+        let mut a = load();
+        let adapter = tempfile::tempdir().unwrap();
+        std::fs::copy(
+            root.join("adapter_config.json"),
+            adapter.path().join("adapter_config.json"),
+        )
+        .unwrap();
+        let weights =
+            candle::safetensors::load(root.join("adapter_model.safetensors"), &Device::Cpu)
+                .unwrap();
+        let changed: HashMap<_, _> = weights
+            .into_iter()
+            .map(|(name, value)| {
+                let value = if name.ends_with(".lora_B.weight") {
+                    value.affine(-3., 0.).unwrap()
+                } else {
+                    value
+                };
+                (name, value)
+            })
+            .collect();
+        candle::safetensors::save(&changed, adapter.path().join("adapter_model.safetensors"))
+            .unwrap();
+        let mut b = Qwen3_5Backend::load_with_head(
+            root,
+            Some(adapter.path()),
+            Some(&root.join("head.pt")),
+            512,
+            "fp32".into(),
+            Device::Cpu,
+            true,
+            Some(&cache),
+        )
+        .unwrap();
+        assert!(!Arc::ptr_eq(&a.model, &b.model));
+        let projection =
+            |model: &Model| match &model.layers[1].self_attn.as_ref().unwrap().q_proj.linear {
+                Projection::RuntimeLora { base, .. } => base.weight().clone(),
+                _ => panic!("target must retain a runtime update"),
+            };
+        let (aw, bw) = (projection(&a.model), projection(&b.model));
+        {
+            let (first, _) = aw.storage_and_layout();
+            let (second, _) = bw.storage_and_layout();
+            assert!(
+                std::ptr::eq(&*first, &*second),
+                "targeted base storage must be shared"
+            );
+        }
+        assert_eq!(cache.stats().unwrap().hits, 1);
+        let input = ForwardInput::new(vec![1, 2, 3, 4], vec![0, 2, 3]);
+        let original = a.forward(input.clone()).unwrap();
+        let expected = b.forward(input.clone()).unwrap();
+        assert_ne!(original.values().data(), expected.values().data());
+        let parent = a.prefill(&[1, 2]).unwrap();
+        assert!(b.fork(parent).is_err());
+        cache.clear().unwrap();
+        assert_eq!(cache.stats().unwrap().charged_bytes, 0);
+        a.release_cache(parent).unwrap();
+        drop(a);
+        assert_eq!(
+            expected.values().data(),
+            b.forward(input).unwrap().values().data()
+        );
+        let (first, _) = aw.storage_and_layout();
+        let (second, _) = bw.storage_and_layout();
+        assert!(std::ptr::eq(&*first, &*second));
+    }
+
     #[cfg(feature = "shared-base")]
     #[test]
     fn separate_adapter_models_keep_shared_untargeted_embedding_storage_after_base_eviction() {

@@ -1,0 +1,71 @@
+   Compiling huncho-backend v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-backend)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.87s
+     Running unittests src/lib.rs (target/debug/deps/huncho_backend-e9f0bb0efdbf8467)
+
+running 54 tests
+test candle::tests::config_parses_flat_rope_theta ... ok
+test candle::tests::config_parses_rope_parameters_object ... ok
+test candle::tests::cpu_replica_reuses_the_loaded_modernbert_storage ... ok
+test candle::tests::extraction_matches_manual_slice ... ok
+test candle::tests::remap_drops_non_encoder ... ok
+test candle::tests::remap_encoder_to_model ... ok
+test candle::tests::remap_keeps_model_prefix ... ok
+test candle::tests::selected_final_layer_keeps_all_keys_and_values_in_multihead_attention ... ok
+test clef::tests::cpu_replicas_share_backbone_head_and_tokenizer_and_freeze_backbone_profiles ... ok
+test conv_cpu::tests::convolution_cpu_timing ... ignored, CPU convolution microbenchmark; no released-model speed claim
+test conv_cpu::tests::convolution_matches_original_tap_order_across_dtypes_short_sequences_and_strides ... ok
+test cpu_blas::tests::real_openblas_preserves_rows_bias_and_contiguous_offsets ... ignored, requires explicit HUNCHO_CPU_BLAS_LIBRARY pointing to LP64 OpenBLAS
+test cpu_blas::tests::real_openblas_timing ... ignored, CPU projection microbenchmark; explicit OpenBLAS library and fixed Rayon/Candle threads required
+test cpu_blas::tests::rejects_incompatible_integer_abis_and_vendors ... ok
+test cpu_profile::tests::identity_tracks_compiled_kernels_instead_of_host_detection ... ok
+test delta_cpu::tests::buffered_recurrence_matches_tensor_order_and_preserves_initial_storage ... ok
+test delta_cpu::tests::recurrence_cpu_timing ... ignored, CPU recurrence microbenchmark; no released-model speed claim
+test device::device_tests::auto_falls_back_when_cuda_initialization_or_kernels_fail ... ok
+test device::device_tests::auto_returns_successful_device ... ok
+test device::device_tests::cpu_never_initializes_cuda ... ok
+test device::device_tests::explicit_cuda_keeps_ordinal_and_never_falls_back ... ok
+test device::device_tests::invalid_devices_fail_before_initialization ... ok
+test device::device_tests::newly_ported_paths_require_explicit_cuda_and_never_hide_failure ... ok
+test gate_cpu::tests::fusion_preserves_typed_rounding_and_strided_views ... ok
+test gate_cpu::tests::gate_cpu_timing ... ignored, CPU gate microbenchmark; excludes projections and released models
+test gate_cpu::tests::unsupported_shapes_and_dtypes_fail_without_broadcasting ... ok
+test kev::tests::rejects_head_backbone_dimension_mismatch ... ok
+test kev::tests::rejects_invalid_calibration_and_unsupported_encoding ... ok
+test mock::tests::deterministic_output ... ok
+test mock::tests::fork_is_isolated ... ok
+test qwen3_5::attention::tests::blocks_preserve_full_causal_key_reductions_and_absolute_prefix_masks ... ok
+test qwen3_5::attention::tests::grouped_queries_preserve_head_mapping_and_full_key_reductions ... ok
+test qwen3_5::kv_pages::tests::page_order_and_copy_on_write_tails_preserve_exact_storage_values ... ok
+test qwen3_5::quantized::tests::conversion_checks_only_visible_finite_cpu_fp32_values ... ok
+test qwen3_5::quantized::tests::direct_packed_construction_keeps_projection_rows_out_of_the_dense_map_and_matches_the_previous_loader ... ok
+test qwen3_5::quantized::tests::loaded_projection_modules_release_dense_weights_and_retain_only_packed_blocks ... ok
+test qwen3_5::runtime_lora::tests::runtime_lora_keeps_base_and_applies_two_biased_base_plus_low_rank_rows ... ok
+test qwen3_5::runtime_lora::tests::runtime_lora_rejects_nonstandard_incomplete_and_malformed_semantics ... ok
+test qwen3_5::tests::attention_input_reuse_is_offset_aware_and_bounded ... ok
+test qwen3_5::tests::backend_returns_logits_shape ... ok
+test qwen3_5::tests::convolution_cache_tail_retains_only_its_visible_elements_on_cpu ... ok
+test qwen3_5::tests::cpu_replicas_share_loaded_weights_but_never_copy_active_or_retained_state ... ok
+test qwen3_5::tests::forward_is_causal ... ok
+test qwen3_5::tests::forward_produces_finite_hidden ... ok
+test qwen3_5::tests::lo_merge_changes_weights ... ok
+test qwen3_5::tests::pointer_loading_filters_unused_vocabulary_weights_before_materialization ... ok
+test qwen3_5::tests::projection_chunks_preserve_order_bias_dtype_and_partial_rows ... ok
+test qwen3_5::tests::query_profile_removes_quadratic_setup_and_invalidates_old_masks ... ok
+test qwen3_5::tests::runtime_lora_shares_even_targeted_base_storage_and_survives_cache_eviction ... ok
+test qwen3_5::tests::separate_adapter_models_keep_shared_untargeted_embedding_storage_after_base_eviction ... ok
+test qwen3_5::tests::trace_kev_prefix_precision ... ignored, requires explicit pinned model/suite paths and qualification hardware
+test shared_base::tests::a_source_change_during_materialization_is_never_published ... ok
+test shared_base::tests::concurrent_misses_materialize_once_and_each_caller_owns_a_tensor_reference ... ok
+test shared_base::tests::immutable_hits_content_changes_dtype_readout_eviction_and_clear ... ok
+
+test result: ok. 48 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 1.28s
+
+     Running tests/runtime_lora.rs (target/debug/deps/runtime_lora-c887ec8c2902053e)
+
+running 3 tests
+test f3_runtime_adapters_preserve_raw_vocabulary_and_selected_candidate_batch_scores ... ok
+test runtime_adapters_preserve_frozen_typed_scores_batches_forks_and_owned_outputs ... ok
+test separate_live_adapters_keep_weights_and_prefixes_isolated_and_reject_other_precision ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.00s
+

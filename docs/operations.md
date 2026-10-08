@@ -608,6 +608,40 @@ counters exclude their avoided prefill positions. The budget covers snapshots,
 not live forks or peak inference memory. Library callers can clear retained
 state with `Engine::clear_prefix_cache`; otherwise unused snapshots live until
 eviction or model unload. Full released-model and GPU qualification remain open.
+### CPU FP32 runtime LoRA
+
+`HUNCHO_DEVICE=cpu HUNCHO_RUNTIME_LORA=1` enables standard inference-only
+Qwen F2/F3 A/B projections with `--dtype fp32`. Default off retains the existing
+merged adapter path. With optional `shared-base` and `HUNCHO_BASE_CACHE_BYTES=B`,
+separate registry models share immutable dense base tensors even at adapted
+projections. Each model keeps its own A/B tensors, trained readout and execution
+state; model routing selects that immutable adapter context. The existing lazy
+residency and replica bounds apply. The base-cache bound covers retained bases,
+not all live adapter models, caches or activations.
+
+The update is `base(x) + B(A(x)) * alpha/r`, matching standard inference LoRA's
+structure. [PEFT's pinned implementation](https://github.com/huggingface/peft/blob/v0.18.1/src/peft/tuners/lora/layer.py)
+uses this structure and disables dropout in inference. Supported adapters have
+constant rank 1..256 matching all A/B shapes (and trained Kev head metadata),
+finite positive alpha and finite floating weights. Nonstandard variants,
+base-changing initialization, biased updates, modules-to-save, rank/alpha
+patterns, missing/unconsumed targets and embedding/norm/LM-head targets are
+rejected. Literal `target_modules` arrays require every matching base target;
+regex/all-linear declarations and layer filters are unsupported. F3 vocabulary
+readout itself keeps its existing projection and candidate selection.
+
+Runtime and merged paths have different floating-point reductions. Serving
+requires fresh complete observed-label qualification for
+`adapter_execution=cpu-fp32-runtime-lora-v1`; receipts include the option and
+actual target count. Use independent fitting capture/refits and held-out gates
+before releasing a profile. Source temperatures are not modified by loading.
+It composes with CPU scalar/native batches, replicas and existing kernel options;
+Kev supports its existing prefix/chunk/page paths. Two extra low-rank matmuls
+per targeted projection trade arithmetic for less duplicate dense storage and
+merge workspace. Mixed-adapter tensor collation, reduced/packed/device profiles,
+released outcome calibration and measured RSS/latency remain separate work.
+Apple work and actual GPU checks are deferred.
+
 ### CPU Kev KV pages
 
 `HUNCHO_DEVICE=cpu HUNCHO_KV_PAGE_TOKENS=16` enables immutable native Kev pages.

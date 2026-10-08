@@ -1,0 +1,11 @@
+   Compiling huncho-backend v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-backend)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.90s
+     Running tests/runtime_lora.rs (target/debug/deps/runtime_lora-26ee18a817a5ef35)
+
+running 3 tests
+test f3_runtime_adapters_preserve_raw_vocabulary_and_selected_candidate_batch_scores ... ok
+test runtime_adapters_preserve_frozen_typed_scores_batches_forks_and_owned_outputs ... ok
+test separate_live_adapters_keep_weights_and_prefixes_isolated_and_reject_other_precision ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.21s
+

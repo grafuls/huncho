@@ -219,6 +219,7 @@ fn engine_from_manifest_observed(
     let manifest = ModelManifest::load(path)?;
     backend_id.require_available(&available_backends())?;
     validate_kv_pages(&manifest, backend_id)?;
+    validate_runtime_lora(&manifest, backend_id, None)?;
     // F3 (Qwen3.5+LoRA) backbones are large (9B+); default them to fp16 so a
     // plain `serve --backend candle` does not try to materialize a multi-GB
     // checkpoint in fp32. Candle's CPU matmul supports fp16 (but not bf16), so
@@ -250,6 +251,7 @@ fn engine_from_manifest_observed(
             manifest.default_dtype(backend_id).to_string()
         }
     });
+    validate_runtime_lora(&manifest, backend_id, Some(&dtype))?;
     tracing::info!(model = %manifest.name, backend = %backend_id, dtype = %dtype, "selected model runtime");
 
     // Artifacts and the tokenizer are declared relative to the manifest's
@@ -278,6 +280,7 @@ fn load_backend(
     let query_rows = attention_query_rows_from_env()?;
     let grouped_gqa = bool_env("HUNCHO_GROUPED_GQA")?;
     validate_kv_pages(manifest, backend_id)?;
+    validate_runtime_lora(manifest, backend_id, Some(dtype))?;
     if (query_rows > 0 || grouped_gqa)
         && (!cfg!(feature = "candle")
             || !((backend_id == BackendId::Candle
@@ -334,6 +337,24 @@ fn validate_kv_pages(manifest: &ModelManifest, backend_id: BackendId) -> Result<
             || std::env::var("HUNCHO_DEVICE").as_deref() != Ok("cpu"))
     {
         return Err(Error::Unsupported("KV pages require native Candle Kev F2 and explicit HUNCHO_DEVICE=cpu".into()));
+    }
+    Ok(())
+}
+
+fn validate_runtime_lora(
+    manifest: &ModelManifest,
+    backend_id: BackendId,
+    dtype: Option<&str>,
+) -> Result<()> {
+    if bool_env("HUNCHO_RUNTIME_LORA")?
+        && (!cfg!(feature = "candle")
+            || backend_id != BackendId::Candle
+            || !(manifest.family == Family::F3
+                || (manifest.family == Family::F2 && manifest.prompt_contract.template == "kev-v1"))
+            || std::env::var("HUNCHO_DEVICE").as_deref() != Ok("cpu")
+            || dtype.is_some_and(|dtype| dtype != "fp32"))
+    {
+        return Err(Error::Unsupported("runtime LoRA requires native Candle Qwen F2/F3, fp32 and explicit HUNCHO_DEVICE=cpu".into()));
     }
     Ok(())
 }
@@ -492,14 +513,25 @@ fn load_candle(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<
         }
     }
     if manifest.family == Family::F2 && manifest.prompt_contract.template == "kev-v1" {
-        let backend = Qwen3_5Backend::load_kev_on_device(
-            &adapter_base_dir(manifest, dir),
-            dir,
-            &dir.join(&manifest.head.weights),
-            manifest.backbone.max_context,
-            dtype,
-            huncho_backend::device::device_from_env()?,
-        )?
+        let backend = if bool_env("HUNCHO_RUNTIME_LORA")? {
+            Qwen3_5Backend::load_kev_runtime_lora(
+                &adapter_base_dir(manifest, dir),
+                dir,
+                &dir.join(&manifest.head.weights),
+                manifest.backbone.max_context,
+                dtype,
+            )?
+        } else {
+            Qwen3_5Backend::load_kev_on_device(
+                &adapter_base_dir(manifest, dir),
+                dir,
+                &dir.join(&manifest.head.weights),
+                manifest.backbone.max_context,
+                dtype,
+                huncho_backend::device::device_from_env()?,
+            )?
+        };
+        let backend = backend
         .with_kv_page_tokens(kv_page_tokens_from_env()?)?
         .with_projection_chunk_rows(projection_chunk_rows_from_env()?)?
         .with_fp32_attention(fp32_attention_from_env()?)?
@@ -522,13 +554,19 @@ fn load_candle(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<
         // downloaded into the base repo's own snapshot dir (same cache).
         let adapter_dir = dir;
         let base_dir = adapter_base_dir(manifest, adapter_dir);
-        let backend = Qwen3_5Backend::load_on_device(
-            &base_dir,
-            Some(adapter_dir),
-            manifest.backbone.max_context,
-            dtype.to_string(),
-            huncho_backend::device::opt_in_device_from_env()?,
-        )
+        let backend = if bool_env("HUNCHO_RUNTIME_LORA")? {
+            Qwen3_5Backend::load_runtime_lora(
+                &base_dir, adapter_dir, manifest.backbone.max_context, dtype,
+            )
+        } else {
+            Qwen3_5Backend::load_on_device(
+                &base_dir,
+                Some(adapter_dir),
+                manifest.backbone.max_context,
+                dtype.to_string(),
+                huncho_backend::device::opt_in_device_from_env()?,
+            )
+        }
         .map_err(|e| {
             Error::Package(format!(
                 "failed to load the F3 (Qwen3.5+LoRA) candle backend for `{}`: {e}",

@@ -1,0 +1,281 @@
+   Compiling huncho-backend v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-backend)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.88s
+     Running unittests src/lib.rs (target/debug/deps/huncho_backend-e9f0bb0efdbf8467)
+
+running 54 tests
+test candle::tests::config_parses_flat_rope_theta ... ok
+test candle::tests::config_parses_rope_parameters_object ... ok
+test candle::tests::cpu_replica_reuses_the_loaded_modernbert_storage ... ok
+test candle::tests::extraction_matches_manual_slice ... ok
+test candle::tests::remap_drops_non_encoder ... ok
+test candle::tests::remap_encoder_to_model ... ok
+test candle::tests::remap_keeps_model_prefix ... ok
+test candle::tests::selected_final_layer_keeps_all_keys_and_values_in_multihead_attention ... ok
+test clef::tests::cpu_replicas_share_backbone_head_and_tokenizer_and_freeze_backbone_profiles ... ok
+test conv_cpu::tests::convolution_cpu_timing ... ignored, CPU convolution microbenchmark; no released-model speed claim
+test conv_cpu::tests::convolution_matches_original_tap_order_across_dtypes_short_sequences_and_strides ... ok
+test cpu_blas::tests::real_openblas_preserves_rows_bias_and_contiguous_offsets ... ignored, requires explicit HUNCHO_CPU_BLAS_LIBRARY pointing to LP64 OpenBLAS
+test cpu_blas::tests::real_openblas_timing ... ignored, CPU projection microbenchmark; explicit OpenBLAS library and fixed Rayon/Candle threads required
+test cpu_blas::tests::rejects_incompatible_integer_abis_and_vendors ... ok
+test cpu_profile::tests::identity_tracks_compiled_kernels_instead_of_host_detection ... ok
+test delta_cpu::tests::buffered_recurrence_matches_tensor_order_and_preserves_initial_storage ... ok
+test delta_cpu::tests::recurrence_cpu_timing ... ignored, CPU recurrence microbenchmark; no released-model speed claim
+test device::device_tests::auto_falls_back_when_cuda_initialization_or_kernels_fail ... ok
+test device::device_tests::auto_returns_successful_device ... ok
+test device::device_tests::cpu_never_initializes_cuda ... ok
+test device::device_tests::explicit_cuda_keeps_ordinal_and_never_falls_back ... ok
+test device::device_tests::invalid_devices_fail_before_initialization ... ok
+test device::device_tests::newly_ported_paths_require_explicit_cuda_and_never_hide_failure ... ok
+test gate_cpu::tests::fusion_preserves_typed_rounding_and_strided_views ... ok
+test gate_cpu::tests::gate_cpu_timing ... ignored, CPU gate microbenchmark; excludes projections and released models
+test gate_cpu::tests::unsupported_shapes_and_dtypes_fail_without_broadcasting ... ok
+test kev::tests::rejects_head_backbone_dimension_mismatch ... ok
+test kev::tests::rejects_invalid_calibration_and_unsupported_encoding ... ok
+test mock::tests::deterministic_output ... ok
+test mock::tests::fork_is_isolated ... ok
+test qwen3_5::attention::tests::blocks_preserve_full_causal_key_reductions_and_absolute_prefix_masks ... ok
+test qwen3_5::attention::tests::grouped_queries_preserve_head_mapping_and_full_key_reductions ... ok
+test qwen3_5::kv_pages::tests::page_order_and_copy_on_write_tails_preserve_exact_storage_values ... ok
+test qwen3_5::quantized::tests::conversion_checks_only_visible_finite_cpu_fp32_values ... ok
+test qwen3_5::quantized::tests::direct_packed_construction_keeps_projection_rows_out_of_the_dense_map_and_matches_the_previous_loader ... ok
+test qwen3_5::quantized::tests::loaded_projection_modules_release_dense_weights_and_retain_only_packed_blocks ... ok
+test qwen3_5::runtime_lora::tests::runtime_lora_keeps_base_and_applies_two_biased_base_plus_low_rank_rows ... ok
+test qwen3_5::runtime_lora::tests::runtime_lora_rejects_nonstandard_incomplete_and_malformed_semantics ... ok
+test qwen3_5::tests::attention_input_reuse_is_offset_aware_and_bounded ... ok
+test qwen3_5::tests::backend_returns_logits_shape ... ok
+test qwen3_5::tests::convolution_cache_tail_retains_only_its_visible_elements_on_cpu ... ok
+test qwen3_5::tests::cpu_replicas_share_loaded_weights_but_never_copy_active_or_retained_state ... ok
+test qwen3_5::tests::forward_is_causal ... ok
+test qwen3_5::tests::forward_produces_finite_hidden ... ok
+test qwen3_5::tests::lo_merge_changes_weights ... ok
+test qwen3_5::tests::pointer_loading_filters_unused_vocabulary_weights_before_materialization ... ok
+test qwen3_5::tests::projection_chunks_preserve_order_bias_dtype_and_partial_rows ... ok
+test qwen3_5::tests::query_profile_removes_quadratic_setup_and_invalidates_old_masks ... ok
+test qwen3_5::tests::runtime_lora_shares_even_targeted_base_storage_and_survives_cache_eviction ... ok
+test qwen3_5::tests::separate_adapter_models_keep_shared_untargeted_embedding_storage_after_base_eviction ... ok
+test qwen3_5::tests::trace_kev_prefix_precision ... ignored, requires explicit pinned model/suite paths and qualification hardware
+test shared_base::tests::a_source_change_during_materialization_is_never_published ... ok
+test shared_base::tests::concurrent_misses_materialize_once_and_each_caller_owns_a_tensor_reference ... ok
+test shared_base::tests::immutable_hits_content_changes_dtype_readout_eviction_and_clear ... ok
+
+test result: ok. 48 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 1.22s
+
+     Running tests/candidate_readout.rs (target/debug/deps/candidate_readout-26c4f85a671c302a)
+
+running 2 tests
+test buffered_cpu_kernels_preserve_f3_candidate_projection_probabilities ... ok
+test candidate_only_projection_preserves_probabilities_at_existing_temperatures ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.20s
+
+     Running tests/candle_integration.rs (target/debug/deps/candle_integration-7227dd63e55d6ce1)
+
+running 6 tests
+test forward_empty_positions_returns_empty_features ... ok
+test forward_is_deterministic ... ok
+test forward_rejects_sequence_over_max_context ... ok
+test forward_returns_features_at_positions ... ok
+test loads_and_reports_capabilities ... ok
+test refuses_to_claim_a_precision_it_does_not_execute ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/chunked_prefill.rs (target/debug/deps/chunked_prefill-0923c19517adfd40)
+
+running 3 tests
+test chunked_cpu_prefill_preserves_original_probabilities_and_accounts_for_actual_calls ... ok
+test engine_qualification_requires_actual_chunking_and_keeps_original_goldens_and_usage ... ok
+test resumable_native_prefixes_interleave_without_changing_chunk_arithmetic ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.67s
+
+     Running tests/clef_batch.rs (target/debug/deps/clef_batch-dd57dbc833064986)
+
+running 3 tests
+test native_complete_schemas_keep_original_joint_head_lengths_and_physical_rectangles ... ok
+test native_schema_validation_fails_before_any_forward_and_oversized_singletons_stay_intact ... ok
+test opaque_whole_request_collation_preserves_wire_cache_ownership_and_fresh_fixed_gates ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 30.59s
+
+     Running tests/clef_reference.rs (target/debug/deps/clef_reference-daea96a254910c8a)
+
+running 6 tests
+test buffered_clef_cpu_kernels_match_independent_joint_logits ... ok
+test grouped_clef_pooling_preserves_mixed_cardinalities_and_span_boundaries_on_cpu ... ok
+test native_clef_matches_reference_tokens_spans_and_logits ... ok
+test native_clef_rejects_unsupported_contracts_and_cpu_bf16 ... ok
+test native_tokenizer_never_truncates_or_pads_prompt_fragments ... ok
+test vectorized_clef_head_preserves_probabilities_and_original_option_order_on_cpu ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 116.10s
+
+     Running tests/conformance.rs (target/debug/deps/conformance-0fa5c7eeec6561b9)
+
+running 5 tests
+test argmax_gate_and_outcome_metrics_follow_candidate_order_on_ties ... ok
+test labeled_suite_reports_outcome_calibration_without_changing_fidelity ... ok
+test malformed_or_incomplete_golden_suites_cannot_pass ... ok
+test mock_deterministic_across_runs ... ok
+test mock_reproduces_golden_suite ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/cpu_blas.rs (target/debug/deps/cpu_blas-3bf123e5db5af4dd)
+
+running 2 tests
+test native_blas_clef_keeps_joint_heads_and_f3_candidate_selection ... ignored, requires explicit HUNCHO_CPU_BLAS_LIBRARY pointing to LP64 pthread OpenBLAS
+test native_blas_kev_preserves_frozen_probabilities_prefix_batch_and_replica_identity ... ignored, requires explicit HUNCHO_CPU_BLAS_LIBRARY pointing to LP64 pthread OpenBLAS
+
+test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/kev_reference.rs (target/debug/deps/kev_reference-72d10a8f58fd65c2)
+
+running 1 test
+test kev_candle_matches_upstream_probabilities ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s
+
+     Running tests/kv_pages.rs (target/debug/deps/kv_pages-1d4bb451a3f28f1e)
+
+running 2 tests
+test native_pages_forks_and_chunks_match_flat_storage_and_frozen_typed_goldens ... ok
+test pages_are_bounded_transactional_and_compose_with_retention_and_partial_prefills ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.48s
+
+     Running tests/laya_padded.rs (target/debug/deps/laya_padded-e35a4b200cc2df74)
+
+running 2 tests
+test engine_uses_real_masked_rectangles_and_keeps_complete_typed_calibration_gates ... ok
+test masked_cpu_batches_preserve_bare_and_typed_heads_lengths_order_and_replicas ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.58s
+
+     Running tests/laya_selected.rs (target/debug/deps/laya_selected-20194dd2ea1d33b8)
+
+running 2 tests
+test bare_encoders_refuse_selected_trained_head ... ok
+test selected_head_preserves_types_order_repetition_native_batches_and_replicas ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s
+
+     Running tests/llamacpp.rs (target/debug/deps/llamacpp-c57b542772ecbc67)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/native_batch.rs (target/debug/deps/native_batch-6c8bd5a83ccdcf9f)
+
+running 5 tests
+test buffered_cpu_kernels_preserve_kev_reference_batches_and_prefixes ... ok
+test execution_profiles_preserve_fixture_readouts_and_cache_semantics ... ok
+test kev_cpu_cross_request_collation_qualifies_unchanged_upstream_vectors ... ok
+test modernbert_batches_preserve_rows_and_candidate_positions ... ok
+test qwen_pointer_batches_preserve_probabilities_and_reject_cache_branches ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.10s
+
+     Running tests/onnx_conformance.rs (target/debug/deps/onnx_conformance-b1aff29fb1da35a0)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/onnx_integrated.rs (target/debug/deps/onnx_integrated-94fcae35c405ad19)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/onnx_integration.rs (target/debug/deps/onnx_integration-79a21b0b9821a711)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/onnx_padded.rs (target/debug/deps/onnx_padded-989a1804f39ffc92)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/onnx_replicas.rs (target/debug/deps/onnx_replicas-5f91ef7d4a9badb9)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/padded_batch.rs (target/debug/deps/padded_batch-023799a5bd183afe)
+
+running 3 tests
+test engine_padded_qualification_preserves_frozen_probabilities_and_counts_real_rectangles ... ok
+test native_cpu_candidate_padding_preserves_selected_columns_and_positions ... ok
+test native_cpu_pointer_padding_preserves_final_valid_decisions_and_isolation ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.46s
+
+     Running tests/prefix_cache.rs (target/debug/deps/prefix_cache-98a7853b3dac8fb9)
+
+running 4 tests
+test cache_handles_are_owned_bounded_and_transactional ... ok
+test engine_fanout_preserves_wire_usage_and_releases_on_later_errors ... ok
+test native_forks_chunks_and_short_prefixes_preserve_probabilities ... ok
+test persistent_prefixes_are_exact_bounded_and_isolate_active_handles_on_cpu ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.68s
+
+     Running tests/quantized_kev.rs (target/debug/deps/quantized_kev-119619806ede569d)
+
+running 1 test
+test durable_quantized_artifacts_run_packed_kernels_and_preserve_native_cache_and_batch_isolation ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.75s
+
+     Running tests/query_attention.rs (target/debug/deps/query_attention-b34e276175994cca)
+
+running 4 tests
+test grouped_gqa_profile_cannot_change_shared_or_partial_prefix_arithmetic ... ok
+test query_blocks_preserve_complete_joint_schema_heads_and_usage ... ok
+test query_blocks_preserve_frozen_pointer_probabilities_prefixes_and_padded_batches ... ok
+test query_blocks_preserve_selected_candidate_logits ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 50.39s
+
+     Running tests/replicas.rs (target/debug/deps/replicas-76d54b26728c0440)
+
+running 3 tests
+test cpu_clef_replicas_preserve_whole_request_joint_logits_concurrently ... ok
+test cpu_modernbert_and_native_kev_replicas_preserve_independent_float_bits_concurrently ... ok
+test packed_cpu_kev_replicas_keep_the_same_packed_arithmetic_and_independent_state ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.79s
+
+     Running tests/runtime_lora.rs (target/debug/deps/runtime_lora-c887ec8c2902053e)
+
+running 2 tests
+test runtime_adapters_preserve_frozen_typed_scores_batches_forks_and_owned_outputs ... ok
+test separate_live_adapters_keep_weights_and_prefixes_isolated_and_reject_other_precision ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.62s
+
+     Running tests/shared_base.rs (target/debug/deps/shared_base-cce20a513cdf9c9a)
+
+running 1 test
+test distinct_adapters_share_only_unmerged_storage_and_preserve_independent_logits ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.61s
+
+     Running tests/vllm_cpu.rs (target/debug/deps/vllm_cpu-30c4f65b459da6e5)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests huncho_backend
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
