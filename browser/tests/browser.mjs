@@ -92,6 +92,7 @@ try {
   assert.equal(report.work.forward_calls, 12);
   assert.equal(report.work.result_cache_hits, 0);
   assert.equal(report.execution_metadata.onnx_execution_provider, 'wasm');
+  assert.equal(report.execution_metadata.browser_execution, 'calling-thread-v1');
   assert.equal(report.execution_metadata.model_sha256, config.model.sha256);
   assert.ok(report.max_prob_delta <= 1e-5);
   checks.push('fresh actual CPU WASM inference for every labeled fixture question');
@@ -172,6 +173,105 @@ try {
   assert.equal(overwrite, true);
   checks.push('self-contained bundle, pinned descriptor/SDK, fresh session qualification and overwrite refusal');
 
+  const workerDescriptor = JSON.parse(await readFile(resolve(root, bundle, 'config.json'), 'utf8'));
+  const workerSource = await readFile(resolve(root, 'src/worker.mjs'), 'utf8');
+  await writeFile(resolve(generated, 'worker-crash.mjs'), "throw new Error('synthetic startup crash');\n");
+  await writeFile(resolve(generated, 'worker-forward-crash.mjs'), workerSource.replace(
+    'const { id, kind } = data ?? {};',
+    "const { id, kind } = data ?? {}; if (kind === 'eval') { setTimeout(() => { throw new Error('synthetic forward crash'); }, 0); return; }"));
+  const variants = {
+    'worker-unlabeled': { golden: await asset('tests/generated/unlabeled.json') },
+    'worker-drift': { golden: await asset('tests/generated/drift.json') },
+    'worker-bad-hash': { worker: { module: { ...workerDescriptor.worker.module, sha256: '0'.repeat(64) } } },
+    'worker-crash': { worker: { module: await asset('tests/generated/worker-crash.mjs') } },
+    'worker-forward-crash': { worker: { module: await asset('tests/generated/worker-forward-crash.mjs') } },
+  };
+  const workerSpecs = {};
+  for (const [name, changes] of Object.entries(variants)) {
+    const path = `${bundle}/${name}.json`;
+    await writeFile(resolve(root, path), JSON.stringify({ ...workerDescriptor, ...changes }));
+    workerSpecs[name] = await asset(path);
+  }
+  const workerSpec = { url: `${base}/${bundle}/config.json`, sha256: packaged.config_sha256 };
+  await page.evaluate(async ({ spec, url }) => {
+    const { HunchoBrowserWorker } = await import(new URL('index.mjs', url).href);
+    window.HunchoBrowserWorker = HunchoBrowserWorker;
+    window.workerEngine = await HunchoBrowserWorker.loadPackage(spec);
+  }, { spec: workerSpec, url: workerSpec.url });
+  const workerReport = await page.evaluate(() => workerEngine.qualification);
+  assert.equal(workerReport.passed, true);
+  assert.equal(workerReport.execution_metadata.browser_execution, 'dedicated-worker-v1');
+  assert.equal(workerReport.execution_metadata.worker_module_sha256, workerDescriptor.worker.module.sha256);
+  assert.equal(workerReport.execution_metadata.package_sha256, packaged.config_sha256);
+  assert.equal(workerReport.work.forward_calls, 12);
+  assert.equal(workerReport.outcome_calibration.questions, 12);
+  for (let i = 0; i < requests.length; i++) {
+    const result = await page.evaluate(request => workerEngine.evalWithStats(request, { extensions: true }), requests[i]);
+    close(result.response, reference.responses[i], `worker case ${i}`);
+    const callingThread = await page.evaluate(request => engine.evalWithStats(request, { extensions: true }), requests[i]);
+    assert.deepEqual(result.response, callingThread.response, `worker/page bitwise wire parity ${i}`);
+    assert.equal(result.work.forward_calls, 3);
+    assert.equal(result.work.processed_tokens, result.response.usage.input_tokens);
+  }
+  checks.push('actual dedicated CPU WASM worker: fresh complete labeled gate and unchanged typed/native probability parity');
+  for (const [name, pattern] of [['worker-unlabeled', /complete observed-label/],
+    ['worker-drift', /conformance failed/], ['worker-bad-hash', /SHA-256 mismatch/],
+    ['worker-crash', /synthetic startup crash/]]) {
+    const error = await page.evaluate(async spec => {
+      try { const loaded = await HunchoBrowserWorker.loadPackage(spec); await loaded.dispose(); return ''; }
+      catch (error) { return String(error); }
+    }, workerSpecs[name]);
+    assert.match(error, pattern);
+  }
+  const workerQueue = await page.evaluate(async request => {
+    let invalid = '';
+    try { await workerEngine.eval({ ...request, model: 'alias' }); } catch (error) { invalid = String(error); }
+    let options = '';
+    try { await workerEngine.eval(request, { extensions: 'yes' }); } catch (error) { options = String(error); }
+    const pending = Array.from({ length: 8 }, () => workerEngine.eval(request));
+    let overflow = '';
+    try { await workerEngine.eval(request); } catch (error) { overflow = String(error); }
+    request.state = 'changed after worker submission';
+    const copy = workerEngine.qualification;
+    copy.passed = false;
+    const immutable = workerEngine.qualification.passed;
+    const first = workerEngine.dispose();
+    const same = first === workerEngine.dispose();
+    const responses = await Promise.all(pending);
+    await first;
+    let disposed = '';
+    try { await workerEngine.eval(request); } catch (error) { disposed = String(error); }
+    return { invalid, options, overflow, immutable, same, responses, disposed };
+  }, structuredClone(requests[0]));
+  assert.ok(workerQueue.invalid);
+  assert.match(workerQueue.options, /boolean/);
+  assert.match(workerQueue.overflow, /queue is full/);
+  assert.equal(workerQueue.immutable && workerQueue.same, true);
+  workerQueue.responses.forEach(response => close(response.answers, reference.responses[0].answers));
+  assert.match(workerQueue.disposed, /disposed/);
+  const fatal = await page.evaluate(async ({ spec, request }) => {
+    const loaded = await HunchoBrowserWorker.loadPackage(spec);
+    const pending = Array.from({ length: 8 }, () => loaded.eval(request));
+    const results = await Promise.allSettled(pending);
+    const errors = results.map(result => result.status === 'rejected' ? String(result.reason) : '');
+    let refused = '';
+    try { await loaded.eval(request); } catch (error) { refused = String(error); }
+    await loaded.dispose();
+    return { errors, refused };
+  }, { spec: workerSpecs['worker-forward-crash'], request: requests[0] });
+  fatal.errors.forEach(error => assert.match(error, /synthetic forward crash/));
+  assert.match(fatal.refused, /disposed/);
+  const terminated = await page.evaluate(async ({ spec, request }) => {
+    const loaded = await HunchoBrowserWorker.loadPackage(spec);
+    const pending = Array.from({ length: 8 }, () => loaded.eval(request));
+    loaded.terminate();
+    const results = await Promise.allSettled(pending);
+    await loaded.dispose();
+    return results.map(result => result.status === 'rejected' ? String(result.reason) : '');
+  }, { spec: workerSpec, request: requests[0] });
+  terminated.forEach(error => assert.match(error, /terminated/));
+  checks.push('worker hash/outcome refusal, bounded immutable requests, drain/dispose, fatal failure and explicit termination reject all pending work');
+
   const errors = await page.evaluate(async request => {
     const invalids = [ { ...request, model: 'alias' }, { ...request, questions: {} },
       { ...request, images: [] }, { ...request, questions: { bad: { type: 'choice', criteria: {} } } },
@@ -217,7 +317,7 @@ try {
   assert.match(queued.disposed, /disposed/);
   checks.push('bounded queue, input snapshots, immutable qualification and drain-before-dispose');
   const summary = { qualified: false, synthetic_fixture_only: true, actual_runtime: 'ONNX Runtime Web 1.30.0 CPU WASM',
-    browser: await browser.version(), gpu_checks: false, checks, report, package_report: packageResult.report,
+    browser: await browser.version(), gpu_checks: false, checks, report, package_report: packageResult.report, worker_report: workerReport,
     note: 'Synthetic labels test gate plumbing only; no released-model calibration or speed acceptance.' };
   if (process.env.HUNCHO_BROWSER_TEST_REPORT) {
     await writeFile(process.env.HUNCHO_BROWSER_TEST_REPORT, JSON.stringify(summary, null, 2) + '\n');

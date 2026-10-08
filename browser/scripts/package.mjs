@@ -21,6 +21,7 @@ const files = {
   'ort-wasm-simd-threaded.mjs': resolve(root, 'node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.mjs'),
   'ort-wasm-simd-threaded.wasm': resolve(root, 'node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.wasm'),
   'index.mjs': resolve(root, 'src/index.mjs'),
+  'worker.mjs': resolve(root, 'src/worker.mjs'),
 };
 const budgets = { 'huncho-model.json': 1, 'tokenizer.json': 16, 'model.onnx': 64,
   'golden.json': 32, 'huncho_browser_core_bg.wasm': 32, 'ort-wasm-simd-threaded.wasm': 64 };
@@ -43,6 +44,7 @@ const config = { provider: 'wasm', head: 'graph-integrated-f1-v1', qualified: fa
   core: { module: spec('huncho_browser_core.js'), wasm: spec('huncho_browser_core_bg.wasm') },
   runtime: { module: spec('ort.wasm.min.mjs'), loader: spec('ort-wasm-simd-threaded.mjs'), wasm: spec('ort-wasm-simd-threaded.wasm') },
   sdk: spec('index.mjs'), note: 'No serving acceptance is inherited. loadPackage performs fresh complete labeled CPU WASM conformance.' };
+config.worker = { module: spec('worker.mjs') };
 const descriptor = Buffer.from(JSON.stringify(config, null, 2) + '\n');
 const output = inputs['--out'];
 await mkdir(output);

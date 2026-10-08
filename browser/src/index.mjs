@@ -3,6 +3,7 @@
 const VERSION = '1.30.0';
 const MiB = 1024 * 1024;
 const constructorKey = Symbol('qualified Huncho browser instance');
+const workerConstructorKey = Symbol('qualified Huncho worker instance');
 let runtime;
 let coreModule;
 
@@ -52,6 +53,40 @@ async function importBytes(bytes) {
   } finally {
     URL.revokeObjectURL(url);
   }
+}
+
+async function packageConfig(spec) {
+  spec = snapshot(spec);
+  const bytes = await asset(spec, 64 * 1024, 'package descriptor');
+  const config = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+  const base = new URL(spec.url, globalThis.location.href);
+  const assets = [config.manifest, config.tokenizer, config.model, config.golden,
+    config.core?.module, config.core?.wasm, config.runtime?.module, config.runtime?.loader, config.runtime?.wasm];
+  if (config.worker) assets.push(config.worker.module);
+  for (const entry of assets) {
+    if (!entry || typeof entry.url !== 'string') throw new Error('invalid browser package descriptor');
+    entry.url = new URL(entry.url, base).href;
+  }
+  if (!config.sdk || !/^[a-f0-9]{64}$/.test(config.sdk.sha256)) {
+    throw new Error('browser package must pin its SDK module');
+  }
+  const sdkBytes = await asset({ url: import.meta.url, sha256: config.sdk.sha256 }, 2 * MiB, 'executing SDK module');
+  config.sdk_sha256 = config.sdk.sha256;
+  config.package_sha256 = spec.sha256;
+  return { config, sdkBytes };
+}
+
+function evaluationInput(request, options) {
+  if (!options || Object.keys(options).some(key => key !== 'extensions')) {
+    throw new Error('browser evaluations support only the extensions option');
+  }
+  const { extensions = false } = options;
+  if (typeof extensions !== 'boolean') throw new Error('extensions must be boolean');
+  const json = JSON.stringify(request);
+  if (typeof json !== 'string' || new TextEncoder().encode(json).length > MiB) {
+    throw new Error('browser request exceeds the memory budget or is not serializable');
+  }
+  return { json, extensions };
 }
 
 function initializeCore(config, moduleBytes, wasmBytes) {
@@ -138,22 +173,7 @@ export class HunchoBrowser {
   }
 
   static async loadPackage(spec) {
-    spec = snapshot(spec);
-    const bytes = await asset(spec, 64 * 1024, 'package descriptor');
-    const config = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
-    const base = new URL(spec.url, globalThis.location.href);
-    const assets = [config.manifest, config.tokenizer, config.model, config.golden,
-      config.core?.module, config.core?.wasm, config.runtime?.module, config.runtime?.loader, config.runtime?.wasm];
-    for (const asset of assets) {
-      if (!asset || typeof asset.url !== 'string') throw new Error('invalid browser package descriptor');
-      asset.url = new URL(asset.url, base).href;
-    }
-    if (!config.sdk || !/^[a-f0-9]{64}$/.test(config.sdk.sha256)) {
-      throw new Error('browser package must pin its SDK module');
-    }
-    await asset({ url: import.meta.url, sha256: config.sdk.sha256 }, 2 * MiB, 'executing SDK module');
-    config.sdk_sha256 = config.sdk.sha256;
-    config.package_sha256 = spec.sha256;
+    const { config } = await packageConfig(spec);
     return HunchoBrowser.load(config);
   }
 
@@ -176,6 +196,10 @@ export class HunchoBrowser {
     const identity = { onnx_execution_provider: 'wasm', onnx_web_version: VERSION,
       native_execution: 'onnxruntime-web-integrated-f1-v1', browser_user_agent: navigator.userAgent,
       wasm_threads: '1', wasm_simd: 'fixed', graph_optimization: 'all' };
+    identity.browser_execution = typeof document === 'undefined' &&
+      typeof DedicatedWorkerGlobalScope !== 'undefined' && globalThis instanceof DedicatedWorkerGlobalScope
+      ? 'dedicated-worker-v1' : 'calling-thread-v1';
+    if (config.worker?.module) identity.worker_module_sha256 = config.worker.module.sha256;
     if (config.package_sha256) identity.package_sha256 = config.package_sha256;
     if (config.sdk_sha256) identity.sdk_sha256 = config.sdk_sha256;
     labels.forEach((label, i) => { identity[`${label.replaceAll(' ', '_')}_sha256`] = specs[i].sha256; });
@@ -258,20 +282,12 @@ export class HunchoBrowser {
 
   evalWithStats(request, options = {}) {
     if (this.#closed) return Promise.reject(new Error('browser engine is disposed'));
-    if (!options || Object.keys(options).some(key => key !== 'extensions')) {
-      return Promise.reject(new Error('browser evaluations support only the extensions option'));
-    }
-    const { extensions = false } = options;
-    if (typeof extensions !== 'boolean') return Promise.reject(new Error('extensions must be boolean'));
     if (this.#pending >= 8) return Promise.reject(new Error('browser evaluation queue is full'));
-    let json;
-    try { json = JSON.stringify(request); }
+    let input;
+    try { input = evaluationInput(request, options); }
     catch (error) { return Promise.reject(error); }
-    if (typeof json !== 'string' || new TextEncoder().encode(json).length > MiB) {
-      return Promise.reject(new Error('browser request exceeds the memory budget or is not serializable'));
-    }
     this.#pending++;
-    const result = this.#queue.then(() => this.#execute(json, extensions));
+    const result = this.#queue.then(() => this.#execute(input.json, input.extensions));
     this.#queue = result.then(() => {}, () => {}).finally(() => { this.#pending--; });
     return result;
   }
@@ -288,4 +304,118 @@ export class HunchoBrowser {
     }
     return this.#disposal;
   }
+}
+
+// One dedicated single-thread CPU runtime per instance. Only frozen JSON and
+// copied wire results cross the boundary; no unqualified engine is exposed.
+export class HunchoBrowserWorker {
+  #worker;
+  #urls;
+  #requests = new Map();
+  #next = 1;
+  #closed = false;
+  #disposal;
+  #report;
+
+  constructor(key, worker, urls) {
+    if (key !== workerConstructorKey) throw new Error('use HunchoBrowserWorker.loadPackage()');
+    this.#worker = worker;
+    this.#urls = urls;
+    worker.onerror = event => {
+      event.preventDefault();
+      this.#fail(new Error(event.message || 'browser worker failed'));
+    };
+    worker.onmessageerror = () => this.#fail(new Error('browser worker message could not be decoded'));
+    worker.onmessage = ({ data }) => {
+      const pending = data && this.#requests.get(data.id);
+      if (!pending || typeof data.ok !== 'boolean') {
+        this.#fail(new Error('browser worker returned an invalid protocol response'));
+        return;
+      }
+      this.#requests.delete(data.id);
+      if (data.ok) pending.resolve(data.value);
+      else pending.reject(new Error(typeof data.error === 'string' ? data.error : 'browser worker request failed'));
+    };
+  }
+
+  static async loadPackage(spec) {
+    const { config, sdkBytes } = await packageConfig(spec);
+    const workerBytes = await asset(config.worker?.module, 2 * MiB, 'worker module');
+    const urls = [workerBytes, sdkBytes].map(bytes =>
+      URL.createObjectURL(new Blob([bytes], { type: 'text/javascript' })));
+    let instance;
+    let timer;
+    try {
+      instance = new HunchoBrowserWorker(workerConstructorKey,
+        new Worker(urls[0], { type: 'module', name: 'Huncho CPU inference' }), urls);
+      const report = await Promise.race([
+        instance.#send('init', { config, sdkUrl: urls[1] }),
+        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('browser worker initialization timed out')), 120_000); }),
+      ]);
+      if (!report?.passed || !report.outcome_calibration ||
+          report.execution_metadata?.browser_execution !== 'dedicated-worker-v1' ||
+          report.execution_metadata?.worker_module_sha256 !== config.worker.module.sha256 ||
+          report.execution_metadata?.package_sha256 !== config.package_sha256) {
+        throw new Error('browser worker lacks fresh matching labeled qualification');
+      }
+      instance.#report = snapshot(report);
+      return instance;
+    } catch (error) {
+      if (instance) instance.#fail(error);
+      else urls.forEach(url => URL.revokeObjectURL(url));
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  #send(kind, payload = {}) {
+    if (!Number.isSafeInteger(this.#next)) return Promise.reject(new Error('browser worker request ids exhausted'));
+    const id = this.#next++;
+    return new Promise((resolve, reject) => {
+      this.#requests.set(id, { resolve, reject });
+      try { this.#worker.postMessage({ id, kind, ...payload }); }
+      catch (error) { this.#fail(error); }
+    });
+  }
+
+  #fail(error) {
+    this.#closed = true;
+    this.#worker.terminate();
+    this.#urls.forEach(url => URL.revokeObjectURL(url));
+    this.#urls = [];
+    for (const pending of this.#requests.values()) pending.reject(error);
+    this.#requests.clear();
+  }
+
+  get qualification() { return snapshot(this.#report); }
+
+  evalWithStats(request, options = {}) {
+    if (this.#closed) return Promise.reject(new Error('browser worker is disposed'));
+    if (this.#requests.size >= 8) return Promise.reject(new Error('browser evaluation queue is full'));
+    let input;
+    try { input = evaluationInput(request, options); }
+    catch (error) { return Promise.reject(error); }
+    return this.#send('eval', input);
+  }
+
+  async eval(request, options) { return (await this.evalWithStats(request, options)).response; }
+
+  dispose() {
+    if (!this.#disposal) {
+      if (this.#closed) this.#disposal = Promise.resolve();
+      else {
+        this.#closed = true;
+        this.#disposal = this.#send('dispose').finally(() => {
+          this.#worker.terminate();
+          this.#urls.forEach(url => URL.revokeObjectURL(url));
+          this.#urls = [];
+        });
+      }
+    }
+    return this.#disposal;
+  }
+
+  // Immediately abandon queued/in-flight work and release the worker runtime.
+  terminate() { this.#fail(new Error('browser worker terminated')); }
 }

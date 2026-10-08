@@ -42,9 +42,27 @@ These variants remain unqualified.
 | O24 distributed/sharded inference | Actual two-rank local CPU vLLM tensor sharding available | Released fitting/acceptance, capacity/latency; pipeline/multi-node/device implementation and multi-GPU qualification |
 | O25 prefill scheduling | Resumable CPU prefix/question scheduling available | Released labeled qualification and latency; tensor/device scheduling open |
 | O26 MLX | Skipped by user | Apple work deferred |
-| O27 browser WASM/WebGPU | Separate CPU WASM F1 integrated-head SDK, packaging and fresh labeled gates available | Released exports/calibration, other families and browser scheduling; WebGPU deferred |
+| O27 browser WASM/WebGPU | Separate CPU WASM F1 integrated-head SDK, packaging, dedicated bounded CPU workers and fresh per-session labeled gates available | Released exports/calibration, native batches/prefixes, other families and multithread tuning; WebGPU deferred |
 
 ## Implemented increments
+
+### Dedicated CPU browser inference workers
+
+O06/O27 now move actual model loading, tokenizer preparation, conformance and
+CPU WASM graph execution off the page thread. Packaged descriptors pin the
+worker module and SDK; verified immutable Blob snapshots start the worker.
+Every session runs its own fresh complete labeled gate before an engine is
+returned. Frozen JSON submissions, eight pending evaluations, typed response
+ownership, drain/dispose, fatal failure and explicit termination are bounded
+and checked against actual CPU browser execution. Native Rust references and
+bitwise page/worker wire answers keep their original temperatures/goldens.
+
+This improves scheduling/isolation without changing arithmetic. Worker
+instances add complete runtime/session residency and message serialization;
+fixture success establishes no released calibration, isolated speedup or RSS.
+Native browser batches/prefixes, shared-weight worker pools, other families and
+multithread tuning remain open. Apple and actual GPU/WebGPU checks stay
+deferred. [Evidence](verification/browser-worker-cpu-20261008/README.md).
 
 ### Fresh qualification for core and HTTP serving
 

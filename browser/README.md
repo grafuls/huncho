@@ -53,6 +53,28 @@ console.log(response.answers);
 await engine.dispose();
 ```
 
+To move model loading, tokenization, conformance and CPU inference into a
+dedicated worker, use the same newly packaged descriptor:
+
+```js
+import { HunchoBrowserWorker } from '/models/example/index.mjs';
+const engine = await HunchoBrowserWorker.loadPackage({
+  url: '/models/example/config.json',
+  sha256: '<descriptor SHA-256 from packaging>',
+});
+const response = await engine.eval(request, { extensions: true });
+await engine.dispose();
+```
+
+The descriptor also hashes `worker.mjs`. The SDK verifies both worker and
+executing SDK bytes before starting a module Worker from immutable Blob
+snapshots. Every worker independently loads its model/assets and passes fresh
+complete labeled conformance; the page's report cannot authorize it. Reports
+record `browser_execution=dedicated-worker-v1` and the worker module hash.
+Calling-thread sessions record their own distinct execution context.
+Deployment must allow Blob module workers/imports under its CSP. See
+[module Worker semantics](https://developer.mozilla.org/en-US/docs/Web/API/Worker/Worker).
+
 `loadPackage` resolves assets relative to the descriptor and checks the
 executing SDK source hash. `load(config)` accepts explicitly hashed absolute
 asset URLs for applications with a separately trusted/bundled SDK. One page
@@ -100,9 +122,21 @@ can exceed them. Byte snapshots, JSON transport, tokenizer storage, runtime
 buffers and activations increase peak memory beyond artifact size. Evaluations
 are serialized and snapshot input on submission. Failures release plans/tensors.
 `dispose()` rejects new work and drains existing work before session release.
-There is no in-flight kernel interrupt. CPU work runs on the calling thread;
-applications may host the SDK in their own Worker. An HTTP server, dedicated
-worker protocol and multithread tuning are separate increments.
+Calling-thread sessions have no in-flight kernel interrupt. Dedicated workers
+use the same bounded eight-evaluation queue, immutable JSON submissions and
+typed responses/work counters. `dispose()` stops admission, drains accepted
+work, releases the session and terminates the worker; repeated calls share one
+promise. Fatal worker/message failures reject every pending result and refuse
+new work. `terminate()` immediately abandons queued/in-flight worker requests
+and releases its runtime. Startup failure/timeout also tears down the worker
+and verified Blob URLs.
+
+Worker execution frees the page from synchronous model/tokenizer CPU work; it
+does not reduce arithmetic or promise a throughput/latency improvement. Each
+instance owns another complete runtime/session, and JSON/message transport
+adds copying/serialization cost. No worker pool or shared weights are implied.
+An HTTP server, native browser batches/prefixes and multithread tuning remain
+separate increments.
 
 ## CPU-only tests
 
@@ -120,7 +154,10 @@ GPU, software rasterization and WebGL and selects only CPU WASM. It compares
 actual graph execution to independent native Rust fixture arithmetic/shared
 answers for all types, JSON/unicode/long states, and exact tokenizer inputs.
 It checks gate/signature/hash refusal, plan cleanup, queues, snapshots,
-disposal and actual bundled deployment. Generated artifacts/dependencies are
+disposal and actual bundled deployment. Dedicated-worker tests execute the
+real CPU WASM graph, verify bitwise page/worker wire parity and fresh labeled
+reports, and cover hash/outcome refusal, bounded snapshots, draining, fatal
+worker failures and explicit termination. Generated artifacts/dependencies are
 ignored. Fixed synthetic weights/labels test implementation only; they supply
 no released calibration acceptance, isolated speedup or memory measurement.
 
