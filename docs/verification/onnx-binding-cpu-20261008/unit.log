@@ -1,0 +1,14 @@
+   Compiling huncho-backend v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-backend)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.81s
+     Running unittests src/lib.rs (target/debug/deps/huncho_backend-8fab4b9bd9ded8b3)
+
+running 2 tests
+test onnx::output_binding_tests::actual_native_output_uses_the_retained_allocation_and_preserves_owned_answers ... ok
+test onnx::output_binding_tests::retained_binding_clears_request_inputs_after_success_and_output_validation_failure ... [1;31m2026-10-08 20:55:41.871572959 [E:onnxruntime:, sequential_executor.cc:671 ExecuteKernel] Non-zero status code returned while running Gather node. Name:'embed_lookup' Status Message: /home/runner/work/ort-artifacts/ort-artifacts/onnxruntime/include/onnxruntime/core/framework/op_kernel_context.h:42 const T *onnxruntime::OpKernelContext::Input(int) const [T = onnxruntime::Tensor] Missing Input: input_ids
+[m
+[1;31m2026-10-08 20:55:41.874251538 [E:onnxruntime:, sequential_executor.cc:671 ExecuteKernel] Non-zero status code returned while running Cast node. Name:'' Status Message: /home/runner/work/ort-artifacts/ort-artifacts/onnxruntime/include/onnxruntime/core/framework/op_kernel_context.h:42 const T *onnxruntime::OpKernelContext::Input(int) const [T = onnxruntime::Tensor] Missing Input: qtype
+[m
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.02s
+

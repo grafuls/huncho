@@ -635,6 +635,14 @@ readout copies. Graph-side gathering reduces the host output from sequence rows
 to selected rows; buffer reuse avoids repeated output allocation. Neither has a
 production latency claim or a device-resident head in this increment.
 
+The retained binding owns the original output tensor and reuses its actual
+storage address. Inputs are rebound for each call and cleared on both success
+and validation/execution errors, so the binding does not retain a preceding
+request's tokens. This fixes the earlier implementation's use of
+`Tensor::clone()`, which makes a deep allocation/copy in the pinned ORT crate;
+the previous counter alone did not establish reuse. Native address/ownership
+and error-cleanup checks now cover it. All calibration gates remain unchanged.
+
 Both profiles require fresh `--qualification-golden MODEL=PATH` at server startup
 and are included in persisted execution identity. Exact CPU fixture rows and
 unchanged mock probability goldens pass; real Laya exports still require their

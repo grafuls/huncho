@@ -44,6 +44,25 @@ still times out. These variants remain unqualified.
 
 ## Implemented increments
 
+### Actual ONNX output allocation ownership
+
+O02/O08's retained-output path now binds the original preallocated tensor once
+and keeps its owning ORT I/O binding. The previous implementation bound
+`Tensor::clone()` on each call; in the pinned crate that deep-copies storage,
+so its reuse counter overstated actual allocation reuse. A native address
+regression failed on that implementation and passes with the owning binding.
+Changing input values uses the same output address while previously returned
+core tensors remain independent. Request inputs clear on every return path;
+changed shapes/oversize/empty outputs keep their existing byte-bounded behavior.
+
+Actual CPU generic/compact/integrated/masked/batched/shared-session checks and
+the three affected CLI qualification groups preserve frozen results and the
+unchanged probability/argmax/labeled/parity gates. No temperature, reference
+or threshold changes. Default-disabled options and default dependency profile
+are retained. CPU fixture correctness does not establish released calibration,
+speed/RSS or device qualification. No actual GPU check was run.
+[Retained reproduction and verification](verification/onnx-binding-cpu-20261008/README.md).
+
 ### Actual local CPU tensor sharding
 
 O24 now uses vLLM's pinned two-process CPU tensor-parallel executor for Kev.

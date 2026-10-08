@@ -1,0 +1,192 @@
+   Compiling huncho-backend v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-backend)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.49s
+     Running unittests src/lib.rs (target/debug/deps/huncho_backend-8fab4b9bd9ded8b3)
+
+running 6 tests
+test mock::tests::fork_is_isolated ... ok
+test mock::tests::deterministic_output ... ok
+test onnx_shared::tests::external_ranges_reject_traversal_duplicates_overflow_and_mixed_storage ... ok
+test onnx_shared::tests::typed_values_preserve_raw_bits_and_reject_unsupported_or_malformed_data ... ok
+test onnx_shared::tests::shared_snapshot_rejects_ambiguous_names_dimensions_and_nested_graphs ... ok
+test onnx::output_binding_tests::actual_native_output_uses_the_retained_allocation_and_preserves_owned_answers ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/candidate_readout.rs (target/debug/deps/candidate_readout-87940b9ef88e57de)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/candle_integration.rs (target/debug/deps/candle_integration-defac556219135c1)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/chunked_prefill.rs (target/debug/deps/chunked_prefill-1c8995fc2ac3b329)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/clef_batch.rs (target/debug/deps/clef_batch-da4bac671ff9b766)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/clef_reference.rs (target/debug/deps/clef_reference-246990ac82368428)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/conformance.rs (target/debug/deps/conformance-c7769aa181c28f3f)
+
+running 5 tests
+test malformed_or_incomplete_golden_suites_cannot_pass ... ok
+test argmax_gate_and_outcome_metrics_follow_candidate_order_on_ties ... ok
+test mock_reproduces_golden_suite ... ok
+test mock_deterministic_across_runs ... ok
+test labeled_suite_reports_outcome_calibration_without_changing_fidelity ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/cpu_blas.rs (target/debug/deps/cpu_blas-af8326ad64338fca)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/kev_reference.rs (target/debug/deps/kev_reference-d4136eb6ae79aa75)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/laya_padded.rs (target/debug/deps/laya_padded-850791dd4dc23b9c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/laya_selected.rs (target/debug/deps/laya_selected-676a9d6b5b907976)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/llamacpp.rs (target/debug/deps/llamacpp-091e7ef7a130658c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/native_batch.rs (target/debug/deps/native_batch-131cd51e737c3137)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/onnx_conformance.rs (target/debug/deps/onnx_conformance-0a5dff1852921ba8)
+
+running 4 tests
+test actual_shared_cpu_contexts_pass_unchanged_probability_goldens_concurrently ... ok
+test onnx_backend_passes_reference_golden ... ok
+test native_onnx_batches_qualify_per_request_and_cross_request_work ... ok
+test graph_side_readout_and_bound_buffer_pass_unchanged_probability_goldens ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/onnx_integrated.rs (target/debug/deps/onnx_integrated-aac57829344960a4)
+
+running 3 tests
+test integrated_shared_replicas_keep_raw_scores_and_independent_buffers_after_primary_drop ... ok
+test integrated_contract_rejects_unsupported_profiles_bad_graphs_and_inputs_without_gpu_probes ... ok
+test raw_typed_graph_scores_match_independent_native_frozen_reference_and_reuse_owned_outputs ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/onnx_integration.rs (target/debug/deps/onnx_integration-97b386111d7ebf50)
+
+running 11 tests
+test forward_returns_hidden_states_at_positions ... ok
+test forward_slices_subset_of_positions ... ok
+test prefill_with_no_positions_returns_empty ... ok
+test rejects_sequence_over_max_context ... ok
+test loads_and_reports_capabilities ... ok
+test selected_rows_preserve_repeated_positions_and_exact_float_bits ... ok
+test provider_and_thread_configuration_validate_without_gpu_probes ... ok
+test disabled_or_oversized_binding_retains_no_output_storage ... ok
+test rejects_invalid_positions_and_retains_graph_width_semantics ... ok
+test native_dynamic_batches_preserve_isolated_rows_and_validate_contract ... ok
+test compact_graph_and_bound_output_reuse_preserve_exact_rows ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/onnx_padded.rs (target/debug/deps/onnx_padded-85cd99a1a6c71d2c)
+
+running 3 tests
+test actual_masked_rectangles_match_independent_scores_and_preserve_owned_repeated_readouts ... ok
+test masked_native_shared_contexts_are_concurrently_independent ... ok
+test whole_engine_native_padding_counts_actual_work_and_passes_fixed_synthetic_labeled_gates ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/onnx_replicas.rs (target/debug/deps/onnx_replicas-715b9d6dff6c9c84)
+
+running 2 tests
+test shared_loading_rejects_gpu_selection_before_runtime_initialization ... ok
+test actual_cpu_sessions_preserve_rows_after_source_mutation_and_primary_drop ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/padded_batch.rs (target/debug/deps/padded_batch-8051d41e7077fb4f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/prefix_cache.rs (target/debug/deps/prefix_cache-a37a455d43c02560)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/quantized_kev.rs (target/debug/deps/quantized_kev-01a40ccdd011647a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/query_attention.rs (target/debug/deps/query_attention-52e654d4f33f2347)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/replicas.rs (target/debug/deps/replicas-39ffd0442456b721)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/shared_base.rs (target/debug/deps/shared_base-02e625227bb2c6c2)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/vllm_cpu.rs (target/debug/deps/vllm_cpu-bba19871de9e0667)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests huncho_backend
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

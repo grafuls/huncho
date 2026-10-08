@@ -1,0 +1,27 @@
+   Compiling huncho-backend v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-backend)
+   Compiling huncho-core v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-core)
+   Compiling ort-sys v2.0.0-rc.13
+   Compiling ort v2.0.0-rc.13
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.31s
+     Running unittests src/lib.rs (target/debug/deps/huncho_backend-8fab4b9bd9ded8b3)
+
+running 1 test
+test onnx::output_binding_tests::actual_native_output_uses_the_retained_allocation_and_preserves_owned_answers ... FAILED
+
+failures:
+
+---- onnx::output_binding_tests::actual_native_output_uses_the_retained_allocation_and_preserves_owned_answers stdout ----
+
+thread 'onnx::output_binding_tests::actual_native_output_uses_the_retained_allocation_and_preserves_owned_answers' (437422) panicked at crates/huncho-backend/src/onnx.rs:758:9:
+assertion `left == right` failed: the bound output must use the original preallocated storage
+  left: Some(140605894647808)
+ right: Some(140605894630752)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    onnx::output_binding_tests::actual_native_output_uses_the_retained_allocation_and_preserves_owned_answers
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.02s
+
+error: test failed, to rerun pass `-p huncho-backend --lib`

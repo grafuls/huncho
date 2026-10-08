@@ -11,8 +11,9 @@
 //! at the requested positions.
 
 use std::collections::BTreeMap;
+use std::sync::Mutex;
 
-use ort::session::{builder::GraphOptimizationLevel, Session};
+use ort::session::{builder::GraphOptimizationLevel, IoBinding, Session};
 use ort::value::{Tensor, TensorElementType, ValueType};
 
 use huncho_core::backend::{Backend, CacheHandle, Capabilities, ForwardInput, ForwardOutput};
@@ -53,8 +54,30 @@ pub struct OnnxBackend {
     families: Vec<Family>,
     options: OnnxOptions,
     output_shape: Option<Vec<i64>>,
-    output_buffer: Option<(Vec<usize>, Tensor<f32>)>,
+    // IoBinding owns the one original output value. Tensor::clone() in the
+    // pinned ORT crate makes a deep copy and must never bind a cached clone.
+    output_buffer: Option<(Vec<usize>, Mutex<IoBinding>)>,
     output_buffer_reuses: u64,
+    #[cfg(test)]
+    expected_bound_output_address: Option<usize>,
+    #[cfg(test)]
+    last_native_output_address: Option<usize>,
+}
+
+/// A forward may return early after native execution/validation errors. Clear
+/// bound inputs on every path so the persistent output binding never retains
+/// a preceding request's token buffers or extends the output-only byte budget.
+struct OutputBindingGuard<'a>(&'a mut IoBinding);
+impl std::ops::Deref for OutputBindingGuard<'_> {
+    type Target = IoBinding;
+    fn deref(&self) -> &Self::Target {
+        self.0
+    }
+}
+impl Drop for OutputBindingGuard<'_> {
+    fn drop(&mut self) {
+        self.0.clear_inputs();
+    }
 }
 
 /// Optional execution profiles. Neither changes the default ONNX contract.
@@ -428,6 +451,10 @@ impl OnnxBackend {
             output_shape,
             output_buffer: None,
             output_buffer_reuses: 0,
+            #[cfg(test)]
+            expected_bound_output_address: None,
+            #[cfg(test)]
+            last_native_output_address: None,
         })
     }
 
@@ -632,24 +659,34 @@ impl OnnxBackend {
                 let count = shape.iter().product::<usize>();
                 let buffer = Tensor::from_array((shape.clone(), vec![0_f32; count]))
                     .map_err(|e| Error::Backend(OnnxError::Inference(e.to_string()).to_string()))?;
-                self.output_buffer = Some((shape, buffer));
-            }
-            let mut binding = self
-                .session
-                .create_binding()
-                .map_err(|e| Error::Backend(OnnxError::Inference(e.to_string()).to_string()))?;
-            for (name, input) in &inputs {
+                #[cfg(test)]
+                {
+                    self.expected_bound_output_address = Some(buffer.data_ptr() as usize);
+                }
+                let mut binding = self
+                    .session
+                    .create_binding()
+                    .map_err(|e| Error::Backend(OnnxError::Inference(e.to_string()).to_string()))?;
                 binding
+                    .bind_output(&self.output_name, buffer)
+                    .map_err(|e| Error::Backend(OnnxError::Inference(e.to_string()).to_string()))?;
+                self.output_buffer = Some((shape, Mutex::new(binding)));
+            }
+            let binding = self
+                .output_buffer
+                .as_mut()
+                .unwrap()
+                .1
+                .get_mut()
+                .map_err(|_| Error::Backend("ONNX output binding lock poisoned".into()))?;
+            let guard = OutputBindingGuard(binding);
+            for (name, input) in &inputs {
+                guard
+                    .0
                     .bind_input(name, input)
                     .map_err(|e| Error::Backend(OnnxError::Inference(e.to_string()).to_string()))?;
             }
-            binding
-                .bind_output(
-                    &self.output_name,
-                    self.output_buffer.as_ref().unwrap().1.clone(),
-                )
-                .map_err(|e| Error::Backend(OnnxError::Inference(e.to_string()).to_string()))?;
-            Some(binding)
+            Some(guard)
         } else {
             self.output_buffer = None;
             None
@@ -673,6 +710,10 @@ impl OnnxBackend {
         let (shape, data) = value
             .try_extract_tensor::<f32>()
             .map_err(|e| Error::Backend(OnnxError::Inference(e.to_string()).to_string()))?;
+        #[cfg(test)]
+        {
+            self.last_native_output_address = Some(data.as_ptr() as usize);
+        }
 
         let (output_seq, hidden) = match &shape[..] {
             [b, seq, hidden] if *b == batch as i64 && *seq >= 0 && *hidden > 0 => {
@@ -728,6 +769,109 @@ impl OnnxBackend {
                 CoreTensor::new(vec![positions.len(), width], selected)
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod output_binding_tests {
+    use super::*;
+
+    #[test]
+    fn actual_native_output_uses_the_retained_allocation_and_preserves_owned_answers() {
+        let fixture = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/tiny_encoder.onnx"
+        );
+        let mut backend = OnnxBackend::load_with_options(
+            fixture,
+            8,
+            512,
+            "fp32",
+            OnnxOptions {
+                output_buffer_bytes: 1024,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let first = backend
+            .forward(ForwardInput::new(vec![3, 10, 5], vec![2, 0, 2]))
+            .unwrap();
+        let frozen: Vec<_> = first.values().data().iter().map(|v| v.to_bits()).collect();
+        assert_eq!(
+            backend.last_native_output_address, backend.expected_bound_output_address,
+            "the bound output must use the original preallocated storage"
+        );
+        let address = backend.last_native_output_address.unwrap();
+        for tokens in [vec![5, 3, 10], vec![10, 5, 3], vec![3, 10, 5]] {
+            backend
+                .forward(ForwardInput::new(tokens, vec![0, 2, 1]))
+                .unwrap();
+            assert_eq!(backend.last_native_output_address, Some(address));
+            assert_eq!(
+                backend.last_native_output_address,
+                backend.expected_bound_output_address
+            );
+            assert_eq!(
+                first
+                    .values()
+                    .data()
+                    .iter()
+                    .map(|v| v.to_bits())
+                    .collect::<Vec<_>>(),
+                frozen
+            );
+        }
+        assert_eq!(backend.output_buffer_reuses(), 3);
+        assert_eq!(backend.retained_output_bytes(), 96);
+    }
+
+    #[test]
+    fn retained_binding_clears_request_inputs_after_success_and_output_validation_failure() {
+        for (graph, integrated_head, hidden_size) in [
+            ("tiny_encoder.onnx", false, 8),
+            ("integrated_f1/nonfinite.onnx", true, 4),
+        ] {
+            let root = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures"));
+            let mut backend = OnnxBackend::load_with_options(
+                root.join(graph),
+                hidden_size,
+                512,
+                "fp32",
+                OnnxOptions {
+                    integrated_head,
+                    output_buffer_bytes: 1024,
+                    intra_threads: 1,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let input = if integrated_head {
+                let reference: serde_json::Value = serde_json::from_slice(
+                    &std::fs::read(root.join("integrated_f1/reference.json")).unwrap(),
+                )
+                .unwrap();
+                let row = &reference["readouts"][0][0];
+                ForwardInput::new(
+                    serde_json::from_value(row["tokens"].clone()).unwrap(),
+                    serde_json::from_value(row["positions"].clone()).unwrap(),
+                )
+                .with_qtype(row["qtype"].as_u64().unwrap() as u32)
+            } else {
+                ForwardInput::new(vec![3, 10, 5], vec![2, 0])
+            };
+            let result = backend.forward(input.clone());
+            assert_eq!(result.is_err(), integrated_head);
+            if integrated_head {
+                assert!(result.err().unwrap().to_string().contains("nonfinite"));
+            }
+            assert!(backend.retained_output_bytes() > 0);
+            // The output allocation remains bound, but the native runtime must
+            // refuse a run without new inputs instead of retaining token data.
+            let binding = backend.output_buffer.as_mut().unwrap().1.get_mut().unwrap();
+            assert!(backend.session.run_binding(binding).is_err());
+            let retry = backend.forward(input);
+            assert_eq!(retry.is_err(), integrated_head);
+        }
     }
 }
 
