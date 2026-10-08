@@ -2749,6 +2749,19 @@ impl Backend for Qwen3_5Backend {
         self.device.is_cpu() && matches!(self.head.as_ref(), Readout::Pointer(_))
     }
 
+    fn fork_batch_limits(&self) -> huncho_core::backend::BatchLimits {
+        let mut limits = self.batch_limits();
+        limits.max_rows = if self.supports_fork_batch() {
+            limits
+                .max_rows
+                .min(63)
+                .min(64usize.saturating_sub(self.caches.len()))
+        } else {
+            0
+        };
+        limits
+    }
+
     fn forward_fork_batch(
         &mut self,
         parent: CacheHandle,

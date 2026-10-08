@@ -323,11 +323,179 @@ fn cached_branch_cli_requires_actual_native_batches_and_fresh_labeled_gates() {
             .unwrap()
             <= 1e-4
     );
+    let mut cooperative = mixed.clone();
+    cooperative.push("--cooperative-prefill");
+    let output = run_storage_profile(&cooperative, "3", "7", "1", "16");
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["cooperative_prefill"], true);
+    for key in ["prefill_yields", "prefill_interleaves", "fork_batch_calls", "fork_padded_batch_calls"] {
+        assert!(report["work"][key].as_u64().unwrap() > 0);
+    }
     let mut invalid = serve.to_vec();
     invalid.push("--cooperative-prefill");
-    let output = run_storage_profile(&invalid, "3", "7", "1", "16");
+    let output = run_storage_profile(&invalid, "0", "7", "1", "16");
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("cooperative prefill"));
+}
+
+#[cfg(feature = "qualification")]
+#[test]
+fn native_cpu_cooperative_groups_start_with_fresh_proofs_and_serve_original_typed_probabilities() {
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    struct Stop(std::process::Child);
+    impl Drop for Stop {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let (_tmp, manifest, golden) = package();
+    let mut suite: Value = serde_json::from_slice(&std::fs::read(&golden).unwrap()).unwrap();
+    for case in suite["cases"].as_array_mut().unwrap() {
+        case["targets"] = Value::Object(
+            case["expected"]
+                .as_object()
+                .unwrap()
+                .iter()
+                .map(|(id, p)| {
+                    (
+                        id.clone(),
+                        json!(p.as_object().unwrap().keys().next().unwrap()),
+                    )
+                })
+                .collect(),
+        );
+    }
+    std::fs::write(&golden, serde_json::to_vec(&suite).unwrap()).unwrap();
+    let reservation = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = reservation.local_addr().unwrap();
+    drop(reservation);
+    let binding = format!("tiny-kev={}", golden.display());
+    let mut command = Command::new(env!("CARGO_BIN_EXE_huncho"));
+    for (name, value) in [
+        ("HUNCHO_DEVICE", "cpu"),
+        ("RAYON_NUM_THREADS", "1"),
+        ("CANDLE_NUM_THREADS", "1"),
+        ("HUNCHO_PREFILL_CHUNK_TOKENS", "3"),
+        ("HUNCHO_ATTENTION_QUERY_ROWS", "7"),
+        ("HUNCHO_GROUPED_GQA", "1"),
+        ("HUNCHO_KV_PAGE_TOKENS", "16"),
+        ("HUNCHO_DIRECT_PAGED_ATTENTION", "1"),
+        ("HUNCHO_RUNTIME_LORA", "1"),
+    ] {
+        command.env(name, value);
+    }
+    for name in [
+        "HUNCHO_CPU_BLAS_LIBRARY",
+        "HUNCHO_CPU_DELTA_RULE",
+        "HUNCHO_CPU_CAUSAL_CONV",
+        "HUNCHO_CPU_FUSED_GATE",
+        "HUNCHO_REPLICAS",
+        "HUNCHO_BATCH_MAX_REQUESTS",
+    ] {
+        command.env_remove(name);
+    }
+    let mut server = Stop(
+        command
+            .args([
+                "serve",
+                "--manifest",
+                manifest.to_str().unwrap(),
+                "--backend",
+                "candle",
+                "--dtype",
+                "fp32",
+                "--prefix-cache",
+                "--cooperative-prefill",
+                "--max-batch-tokens",
+                "4096",
+                "--max-batch-padding-percent",
+                "25",
+                "--qualification-golden",
+                &binding,
+                "--bind",
+                &address.to_string(),
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let started = Instant::now();
+    let mut stream = loop {
+        if let Ok(stream) = TcpStream::connect(address) {
+            break stream;
+        }
+        if let Some(status) = server.0.try_wait().unwrap() {
+            let mut error = String::new();
+            server
+                .0
+                .stderr
+                .as_mut()
+                .unwrap()
+                .read_to_string(&mut error)
+                .unwrap();
+            panic!("native server exited {status}: {error}");
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "native startup qualification hung"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let body = serde_json::to_string(&suite["cases"][0]["request"]).unwrap();
+    write!(stream, "POST /v1/systemone HTTP/1.1\r\nHost: {address}\r\nContent-Type: application/json\r\nX-Huncho-Extensions: true\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}", body.len()).unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    let response: Value = serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap();
+    for (id, expected) in suite["cases"][0]["expected"].as_object().unwrap() {
+        let answer = &response["answers"][id];
+        for (label, p) in expected.as_object().unwrap() {
+            let actual = if answer.get("probabilities").is_some() {
+                answer["probabilities"][label].as_f64().unwrap()
+            } else {
+                let yes = answer["noul"].as_f64().unwrap();
+                if label == "yes" {
+                    yes
+                } else {
+                    1. - yes
+                }
+            };
+            assert!((actual - p.as_f64().unwrap()).abs() <= 1e-3, "{id}/{label}");
+        }
+    }
+    assert_eq!(response["usage"]["output_tokens"], 0);
+    let mut stream = TcpStream::connect(address).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    write!(
+        stream,
+        "GET /metrics HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n"
+    )
+    .unwrap();
+    let mut metrics = String::new();
+    stream.read_to_string(&mut metrics).unwrap();
+    for name in [
+        "huncho_fork_batch_count",
+        "huncho_fork_padded_batch_count",
+        "huncho_fork_count",
+    ] {
+        let value: u64 = metrics
+            .lines()
+            .find_map(|line| line.strip_prefix(&format!("{name} ")))
+            .unwrap_or_else(|| panic!("missing {name}: {metrics}"))
+            .trim()
+            .parse()
+            .unwrap();
+        assert!(value > 0);
+    }
 }
 
 #[test]

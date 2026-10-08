@@ -185,8 +185,8 @@ fn validate_scheduling(args: &ServeArgs) -> anyhow::Result<()> {
     );
     anyhow::ensure!(
         !(args.prefix_cache && args.max_batch_tokens.is_some())
-            || (!args.cooperative_prefill && args.batch_max_requests.is_none()),
-        "cached-branch batches require no cooperative prefill and no cross-request collation"
+            || args.batch_max_requests.is_none(),
+        "cached-branch batches require no cross-request collation"
     );
     anyhow::ensure!(
         args.persistent_prefix_bytes == 0 || args.prefix_cache,

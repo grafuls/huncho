@@ -784,11 +784,10 @@ impl Engine {
         if opts.prefix_cache
             && opts.max_batch_tokens.is_some()
             && (!self.supports_fork_batch()
-                || opts.cooperative_prefill
                 || (opts.max_batch_padding_percent > 0 && !self.supports_padded_fork_batch()))
         {
             return Err(Error::Unsupported(
-                "cached-branch batching requires CPU Kev, supported suffix padding and no cooperative scheduling".into(),
+                "cached-branch batching requires CPU Kev and supported suffix padding".into(),
             ));
         }
         if opts.max_batch_padding_percent > 0

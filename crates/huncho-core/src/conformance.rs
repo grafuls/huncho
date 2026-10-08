@@ -176,9 +176,16 @@ pub fn run_suite_with_resumable_prefill(
     }
     let mut responses = Vec::with_capacity(suite.cases.len());
     let mut work = crate::engine::EvalStats::default();
-    // At most 63 parents plus one temporary question branch fit the backend's
-    // existing 64-handle bound. No padding or native cached-branch batch.
-    for group in suite.cases.chunks(63) {
+    // Scalar jobs can hold 63 parents plus one child. Native question groups
+    // reserve room with 32 active parents; each call also rechecks live child
+    // capacity under its backend lock. A saturated scalar-only run must not
+    // make the required native-batch qualification vacuous.
+    let active_requests = if options.max_batch_tokens.is_some() {
+        32
+    } else {
+        63
+    };
+    for group in suite.cases.chunks(active_requests) {
         engine.clear_prefix_cache()?;
         let mut cursors = group
             .iter()

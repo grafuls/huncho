@@ -255,6 +255,18 @@ pub trait Backend: Send + Sync {
         false
     }
 
+    /// Live child-row capacity while this backend lock is held. Implementations
+    /// with bounded cache handles must subtract all active/partial parents.
+    fn fork_batch_limits(&self) -> BatchLimits {
+        let mut limits = self.batch_limits();
+        limits.max_rows = if self.supports_fork_batch() {
+            limits.max_rows.min(63)
+        } else {
+            0
+        };
+        limits
+    }
+
     /// Fork one complete parent into private rows and evaluate nonempty,
     /// equal-length suffixes. Positions are relative to each suffix. No input
     /// may retain state or supply another handle. Return owned readouts in input

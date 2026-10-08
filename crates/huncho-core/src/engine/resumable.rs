@@ -2,6 +2,8 @@
 
 use super::*;
 use std::collections::VecDeque;
+#[path = "resumable_batch.rs"]
+mod batch;
 
 /// Single-use, context-bound request state. Dropping it releases a partial or
 /// complete prefix. It never holds the backend mutex between steps.
@@ -20,6 +22,7 @@ pub struct ResumableEvaluation {
     result_key: Option<Vec<u8>>,
     cached: Option<SystemOneResponse>,
     finished: bool,
+    batches: Option<VecDeque<batch::ResumableBatch>>,
 }
 
 impl ResumableEvaluation {
@@ -52,7 +55,7 @@ impl Engine {
         }
         if !prepared.options.cooperative_prefill
             || !prepared.options.prefix_cache
-            || prepared.options.max_batch_tokens.is_some()
+            || (prepared.options.max_batch_tokens.is_some() && !self.supports_fork_batch())
             || !self.supports_resumable_prefill()
         {
             return Err(Error::Unsupported(
@@ -70,13 +73,21 @@ impl Engine {
         };
         let total_tokens = prompts.iter().map(|prompt| prompt.token_len() as u64).sum();
         let use_prefix = prepared.request.questions.len() > 1;
-        let questions = prepared
+        let questions: VecDeque<_> = prepared
             .request
             .questions
             .into_iter()
             .zip(prompts)
             .map(|((id, question), prompt)| (id, question, prompt))
             .collect();
+        let (questions, batches, prefix_tokens) = if prepared.options.max_batch_tokens.is_some()
+            && cached.is_none()
+        {
+            let (batches, prefix) = self.prepare_resumable_batches(questions, &prepared.options)?;
+            (VecDeque::new(), Some(batches), prefix)
+        } else {
+            (questions, None, Vec::new())
+        };
         Ok(ResumableEvaluation {
             backend: self.backend.clone(),
             model: prepared.request.model,
@@ -86,17 +97,19 @@ impl Engine {
             raw_logits: BTreeMap::new(),
             total_tokens,
             prefix: None,
-            prefix_tokens: Vec::new(),
+            prefix_tokens,
             prefix_ready: false,
             use_prefix,
             result_key: prepared.result_key,
             cached,
             finished: false,
+            batches,
         })
     }
 
-    /// Execute one prefix chunk or one complete question, then release the
-    /// backend lock. `None` is a scheduling boundary; `Some` finishes the job.
+    /// Execute one prefix chunk, question or bounded native question group,
+    /// then release the backend lock. `None` is a scheduling boundary;
+    /// `Some` finishes the job.
     /// Stats describe this step only, including failed native attempts.
     pub fn advance_resumable_evaluation(
         &self,
@@ -129,6 +142,9 @@ impl Engine {
     ) -> Result<Option<SystemOneResponse>> {
         if let Some(response) = cursor.cached.take() {
             return Ok(Some(response));
+        }
+        if cursor.batches.is_some() {
+            return self.resumable_batch_step(cursor, stats);
         }
         if let Some((_, _, prompt)) = cursor.questions.front() {
             let prefix_len = prompt.prefix_len;
@@ -234,6 +250,13 @@ impl Engine {
         if !cursor.questions.is_empty() {
             return Ok(None);
         }
+        self.finish_resumable_response(cursor)
+    }
+
+    pub(super) fn finish_resumable_response(
+        &self,
+        cursor: &mut ResumableEvaluation,
+    ) -> Result<Option<SystemOneResponse>> {
         let mut response = SystemOneResponse::new(
             cursor.model.clone(),
             std::mem::take(&mut cursor.answers),

@@ -7,7 +7,8 @@ use axum::{
 use huncho_api::{AppState, Metrics, ModelRegistry, ServerConfig};
 use huncho_core::{
     backend::{
-        Backend, CacheHandle, CachedPrefill, Capabilities, ForwardInput, ForwardOutput, PrefillWork,
+        Backend, BatchLimits, CacheHandle, CachedPrefill, Capabilities, ForkBatchWork,
+        ForwardInput, ForwardOutput, PrefillWork,
     },
     engine::Engine,
     manifest::{BackendId, Family, ModelManifest},
@@ -34,6 +35,7 @@ struct Control {
     next: AtomicU64,
     fail: AtomicBool,
     forwards: AtomicUsize,
+    fail_batch: AtomicBool,
 }
 impl Control {
     fn release(&self) {
@@ -50,6 +52,7 @@ impl Drop for Release {
 struct Stepped {
     control: Arc<Control>,
     caches: BTreeMap<u64, (usize, usize)>,
+    batching: bool,
 }
 impl Backend for Stepped {
     fn id(&self) -> BackendId {
@@ -136,18 +139,78 @@ impl Backend for Stepped {
         if let Some(handle) = input.fork_from {
             assert!(self.caches.contains_key(&handle.id));
         }
-        Ok(ForwardOutput::Logits {
-            values: Tensor::new(
-                vec![input.positions.len(), 4],
-                input
-                    .positions
-                    .iter()
-                    .flat_map(|_| [0., 0.5, 1., 1.5])
-                    .collect(),
-            )?,
-            positions: input.positions,
-        })
+        output(input)
     }
+    fn supports_batch(&self) -> bool {
+        self.batching
+    }
+    fn supports_fork_batch(&self) -> bool {
+        self.batching
+    }
+    fn supports_padded_fork_batch(&self) -> bool {
+        self.batching
+    }
+    fn fork_batch_limits(&self) -> BatchLimits {
+        BatchLimits {
+            max_rows: if self.batching {
+                (64 - self.caches.len()).min(63)
+            } else {
+                0
+            },
+            ..Default::default()
+        }
+    }
+    fn forward_fork_batch(
+        &mut self,
+        parent: CacheHandle,
+        inputs: Vec<ForwardInput>,
+        work: &mut ForkBatchWork,
+    ) -> huncho_core::Result<Vec<ForwardOutput>> {
+        assert!(self.batching && inputs.len() <= self.fork_batch_limits().max_rows);
+        assert_eq!(self.caches[&parent.id].0, self.caches[&parent.id].1);
+        self.control.forwards.fetch_add(1, Ordering::SeqCst);
+        work.forward_calls += 1;
+        work.batch_calls += u64::from(inputs.len() > 1);
+        let physical = inputs.len() * inputs.iter().map(|i| i.tokens.len()).max().unwrap();
+        let padding = physical - inputs.iter().map(|i| i.tokens.len()).sum::<usize>();
+        work.processed_tokens += physical as u64;
+        work.padded_tokens += padding as u64;
+        work.padded_batch_calls += u64::from(padding > 0);
+        if self.control.fail_batch.load(Ordering::SeqCst) {
+            return Err(huncho_core::Error::Backend("injected group failure".into()));
+        }
+        inputs
+            .into_iter()
+            .map(|input| {
+                let child = self.fork(parent)?;
+                work.cache_forks += 1;
+                let result = output(input);
+                self.release_cache(child)?;
+                result
+            })
+            .collect()
+    }
+    fn forward_padded_fork_batch(
+        &mut self,
+        parent: CacheHandle,
+        inputs: Vec<ForwardInput>,
+        work: &mut ForkBatchWork,
+    ) -> huncho_core::Result<Vec<ForwardOutput>> {
+        self.forward_fork_batch(parent, inputs, work)
+    }
+}
+fn output(input: ForwardInput) -> huncho_core::Result<ForwardOutput> {
+    Ok(ForwardOutput::Logits {
+        values: Tensor::new(
+            vec![input.positions.len(), 4],
+            input
+                .positions
+                .iter()
+                .flat_map(|_| [0., 0.5, 1., 1.5])
+                .collect(),
+        )?,
+        positions: input.positions,
+    })
 }
 
 fn setup() -> (
@@ -166,6 +229,17 @@ fn setup_with_coalescing(
     tokio::sync::oneshot::Receiver<()>,
     Release,
 ) {
+    setup_profile(coalesce_bytes, false)
+}
+fn setup_profile(
+    coalesce_bytes: usize,
+    batching: bool,
+) -> (
+    Arc<AppState>,
+    Arc<Control>,
+    tokio::sync::oneshot::Receiver<()>,
+    Release,
+) {
     let (started, receiver) = tokio::sync::oneshot::channel();
     let control = Arc::new(Control {
         released: Mutex::new(false),
@@ -176,6 +250,7 @@ fn setup_with_coalescing(
         next: AtomicU64::new(1),
         fail: AtomicBool::new(false),
         forwards: AtomicUsize::new(0),
+        fail_batch: AtomicBool::new(false),
     });
     let mut manifest: Value = serde_json::from_slice(
         &std::fs::read(concat!(
@@ -196,6 +271,7 @@ fn setup_with_coalescing(
         Box::new(Stepped {
             control: control.clone(),
             caches: BTreeMap::new(),
+            batching,
         }),
         Box::new(SimpleTokenizer::new(512)),
         Default::default(),
@@ -212,6 +288,8 @@ fn setup_with_coalescing(
             max_queued_per_model: 1,
             max_prepared_per_model: 2,
             coalesce_bytes,
+            max_batch_tokens: batching.then_some(512),
+            max_batch_padding_percent: if batching { 100 } else { 0 },
             ..Default::default()
         },
         registry,
@@ -367,4 +445,68 @@ async fn queued_cancellation_submits_no_prefix_work_and_failed_chunk_releases_al
     assert_eq!(state.metrics.queue_depth.get(), 0);
     control.fail.store(false, Ordering::SeqCst);
     assert_eq!(send(state.clone(), body("retry")).await.0, StatusCode::OK);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn cooperative_question_groups_keep_fairness_physical_metrics_and_parent_ownership() {
+    let (state, control, started, _release) = setup_profile(0, true);
+    let mut long = body("long");
+    long["state"] = json!((0..40)
+        .map(|i| format!("word{i}"))
+        .collect::<Vec<_>>()
+        .join(" "));
+    let long = tokio::spawn(send(state.clone(), long));
+    started.await.unwrap();
+    let short = tokio::spawn(send(state.clone(), body("short")));
+    until(|| {
+        state.metrics.questions_prepared.get() == 4 && state.metrics.requests_waiting.get() == 1
+    })
+    .await;
+    assert_eq!(
+        send(state.clone(), body("overflow")).await.0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    control.release();
+    let (a, a_body) = long.await.unwrap();
+    let (b, b_body) = short.await.unwrap();
+    assert_eq!((a, b), (StatusCode::OK, StatusCode::OK));
+    assert_eq!(a_body["answers"], b_body["answers"]);
+    let trace = control.trace.lock().unwrap();
+    assert_ne!(
+        trace[0].0, trace[1].0,
+        "another prefix must run before a long prefill finishes"
+    );
+    assert!(state.metrics.prefill_interleaves.get() > 0);
+    assert_eq!(state.metrics.fork_batch_count.get(), 2);
+    assert_eq!(control.forwards.load(Ordering::SeqCst), 2);
+    assert_eq!(control.live.load(Ordering::SeqCst), 0);
+    assert_eq!(state.metrics.queue_depth.get(), 0);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn cooperative_group_coalescing_cancellation_and_failures_release_every_parent() {
+    let (state, control, started, _release) = setup_profile(1 << 20, true);
+    let leader = tokio::spawn(send(state.clone(), body("identical")));
+    started.await.unwrap();
+    let follower = tokio::spawn(send(state.clone(), body("identical")));
+    until(|| state.metrics.requests_coalesced.get() == 1).await;
+    leader.abort();
+    let _ = leader.await;
+    control.release();
+    assert_eq!(follower.await.unwrap().0, StatusCode::OK);
+    until(|| state.metrics.queue_depth.get() == 0).await;
+    assert_eq!(control.forwards.load(Ordering::SeqCst), 1);
+    assert_eq!(control.live.load(Ordering::SeqCst), 0);
+    control.fail_batch.store(true, Ordering::SeqCst);
+    assert_eq!(
+        send(state.clone(), body("failed group")).await.0,
+        StatusCode::INTERNAL_SERVER_ERROR
+    );
+    assert_eq!(control.live.load(Ordering::SeqCst), 0);
+    control.fail_batch.store(false, Ordering::SeqCst);
+    assert_eq!(
+        send(state.clone(), body("retry group")).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(control.live.load(Ordering::SeqCst), 0);
 }

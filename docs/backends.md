@@ -259,7 +259,12 @@ CPU Kev has a separate equal-suffix `forward_fork_batch` path that materializes
 one immutable prefix into isolated complete-state rows; it cannot retain
 suffixes. `forward_padded_fork_batch` additionally handles causal right-padding
 while retaining original marker/final-decision lengths. `--prefix-cache --max-batch-tokens N` charges complete contexts against
-its token budget and requires actual cached-batch qualification. GPU padding is unsupported. CPU ModernBERT/Laya and masked native ONNX feature
+its token budget and requires actual cached-batch qualification. With
+`--cooperative-prefill` and configured prefix chunks, each resumable step
+submits one bounded request-local group. Live child capacity includes other
+partial parents; padding and complete-context budgets remain enforced under
+the submitting lock. Cross-request cached collation remains unsupported.
+GPU padding is unsupported. CPU ModernBERT/Laya and masked native ONNX feature
 graphs have separate original-length/masked paths. CPU Clef F5 now collates
 complete schemas with `--batch-max-requests`; each causal backbone row is
 unpadded before its bidirectional joint head. F5 never splits a schema.
@@ -341,8 +346,12 @@ controlled released latency/RSS and outcome acceptance remain open.
 `HUNCHO_PREFILL_CHUNK_TOKENS=1..4096` optionally bounds CPU Kev prefix query
 length. It requires `--prefix-cache` when serving, a representative prefix
 longer than the selected chunk size, and fresh labeled/paired qualification.
-It reduces attention's temporary score shape but retains complete KV/state and
-holds the execution lock throughout; it does not yet interleave serving jobs.
+It reduces attention's temporary score shape but retains complete KV/state.
+Ordinary prefix evaluation holds the execution lock throughout. The opt-in
+`--cooperative-prefill` scheduler releases it after each chunk/question or
+bounded native question group and interleaves admitted jobs on one context.
+Fresh qualification requires actual split-prefix interleaving and the selected
+cached batch/padding work. See [operation and limits](operations.md).
 
 With `--features hf,candle,tokenizers`, `serve --model jaredpalmer/kev-4b` loads
 Kev directly. The Hub resolver distinguishes Kev's

@@ -93,10 +93,9 @@ async fn systemone(
             || !engine.supports_resumable_prefill()
             || engine.replica_engines().len() != 1
             || state.config.max_queued_per_model > 62
-            || state.config.max_batch_tokens.is_some()
             || engine.batch.is_some())
     {
-        return map_error(&Error::Unsupported("cooperative prefill requires CPU Kev, prefix reuse, configured chunks, one context, no batching and at most 62 queued requests".into()));
+        return map_error(&Error::Unsupported("cooperative prefill requires CPU Kev, prefix reuse, configured chunks, one context, no cross-request collation and at most 62 queued requests".into()));
     }
     if state.config.prefix_cache
         && state.config.max_batch_tokens.is_some()

@@ -40,11 +40,33 @@ These variants remain unqualified.
 | O22 shared bases/residency | Immutable CPU bases, lazy residency/preload/idle eviction and standard CPU FP32 F2/F3 runtime LoRA available | Released residency/calibration measurements, mixed-adapter collation and other profiles |
 | O23 vLLM custom readouts | Pinned actual CPU Kev F2 raw pooling and equal-length batches available | Released fitting/held-out acceptance; other families, prefixes, quantization and device profiles |
 | O24 distributed/sharded inference | Actual two-rank local CPU vLLM tensor sharding available | Released fitting/acceptance, capacity/latency; pipeline/multi-node/device implementation and multi-GPU qualification |
-| O25 prefill scheduling | Resumable CPU prefix/question scheduling available | Released labeled qualification and latency; tensor/device scheduling open |
+| O25 prefill scheduling | Resumable CPU prefix/question and bounded equal/padded cached question-group scheduling with live child capacity available | Released labeled qualification/latency, cross-request cached groups and device scheduling open |
 | O26 MLX | Skipped by user | Apple work deferred |
 | O27 browser WASM/WebGPU | Separate CPU WASM F1 scalar/native equal/masked row/marker heads, packaging, dedicated bounded CPU workers and fresh per-session labeled/paired gates available | Released exports/calibration, cross-request batches/prefixes, other families and multithread tuning; WebGPU deferred |
 
 ## Implemented increments
+
+### Cooperative CPU Kev suffix groups with live child capacity
+
+O12/O19/O25 now compose resumable prefix chunks with bounded equal/padded
+request-local native question groups. Each step releases the backend lock
+after one chunk/group. Immutable original prompts/typed readouts remain paired
+through length sorting, prefix-relative positions and native scatter; parent
+KV/recurrence/convolution never advance. Live `fork_batch_limits` subtracts
+all active/partial parents, and regrouping under the submitting lock preserves
+padding/complete-context limits. Pressure may reduce a group to one row while
+the existing 64-handle cap remains enforced.
+
+Fresh gates require real split-prefix interleaving and native/padded cached
+work plus unchanged labeled and paired thresholds. Batch qualification reserves
+room with at most 32 active parents; scalar qualification retains 63. Actual
+CPU FP32/FP16 kernel/page/direct-page/runtime-LoRA cases preserve frozen
+probabilities. Sixty-two competing partial prefixes, repeated cancellation,
+large cohorts, HTTP fairness/coalescing/failures and a real qualified CPU Kev
+CLI HTTP server cover the runtime boundaries. Released CPU acceptance and
+latency/RSS remain separate. Cross-request cached groups and device scheduling
+remain open; Apple and actual GPU checks stay deferred.
+[Evidence and limits](verification/cooperative-batch-cpu-20261008/README.md).
 
 ### Native CPU browser row/marker batches
 

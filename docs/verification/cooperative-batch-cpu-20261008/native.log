@@ -1,0 +1,21 @@
+   Compiling huncho-core v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-core)
+   Compiling huncho-backend v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-backend)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.51s
+     Running tests/chunked_prefill.rs (target/debug/deps/chunked_prefill-82763aa7d0ee7d3d)
+
+running 3 tests
+test chunked_cpu_prefill_preserves_original_probabilities_and_accounts_for_actual_calls ... ok
+test engine_qualification_requires_actual_chunking_and_keeps_original_goldens_and_usage ... ok
+test resumable_native_prefixes_interleave_without_changing_chunk_arithmetic ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.70s
+
+     Running tests/cooperative_batches.rs (target/debug/deps/cooperative_batches-d066dae351878029)
+
+running 3 tests
+test large_qualification_cohorts_leave_live_room_for_actual_native_groups ... ok
+test live_partial_parents_shrink_native_groups_without_leaks_or_probability_drift ... ok
+test native_equal_and_padded_cooperative_groups_keep_frozen_probabilities_and_fresh_gates ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.11s
+

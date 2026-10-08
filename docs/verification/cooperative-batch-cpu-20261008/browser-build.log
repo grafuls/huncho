@@ -1,0 +1,3 @@
+   Compiling huncho-core v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-core)
+   Compiling huncho-browser-core v0.1.0 (/home/grafuls/Sources/huncho/browser/wasm)
+    Finished `release` profile [optimized] target(s) in 6.58s

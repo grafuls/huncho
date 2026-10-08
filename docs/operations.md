@@ -38,7 +38,11 @@ CPU Kev can opt into fair scheduling between prefix chunks with
 Supply the same complete labeled `--qualification-golden MODEL=PATH` binding
 used by other native serving profiles. Startup requires actual interleaving of
 split prefixes from distinct requests, external conformance and independent
-parity. One context, no batching and at most 62 queued requests are supported.
+parity. One context and at most 62 queued requests are supported. Optional
+`--max-batch-tokens` and supported suffix padding collate bounded request-local
+question groups after prefill; each group is another scheduling boundary.
+Live child-row capacity accounts for every active/partial parent. Cross-request
+tensor collation remains unsupported for this prefix profile.
 This remains experimental: current released CPU Kev profiles have not passed
 the full held-out gate. [Implementation and limits](optimization-roadmap.md#resumable-cpu-prefill-scheduling-2026-10-08).
 
@@ -1232,7 +1236,19 @@ count actual prefill chunks and submitted suffixes, including failed attempts.
 `fork_batch_calls` in reports and `huncho_fork_batch_count` in metrics count
 actual multiple-row prefix batches, separately from independent batches.
 
-The profile is CPU Kev only and defaults off. Cooperative scheduling and cross-request collation cannot combine with it.
+The profile is CPU Kev only and defaults off. Optional `--cooperative-prefill`
+combines chunked prefix scheduling with one bounded suffix group per step;
+one context and at most 62 queued requests remain required. Groups recheck
+`fork_batch_limits` under the submitting backend lock and shrink/repartition
+when other partial/complete parents use handles. Padding and complete-context
+budgets remain enforced, including after repartition. This can reduce native
+groups to single rows under pressure without overcommitting the 64-handle cap.
+Fresh complete labeled qualification requires real interleaving, native cached
+batches and configured padding work; batch cohorts reserve capacity with up
+to 32 active parents. Ordinary scalar cooperative qualification keeps its
+63-parent bound. CPU fixture/HTTP evidence does not qualify released Kev.
+Cross-request collation remains unsupported for this prefix profile.
+[Verification](verification/cooperative-batch-cpu-20261008/README.md).
 Optional `--max-batch-padding-percent 1..100` permits mixed suffix lengths.
 Padding is bounded against submitted suffix positions, while the workspace
 budget still charges complete contexts. Each valid readout and final decision
