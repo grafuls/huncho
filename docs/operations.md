@@ -29,7 +29,7 @@ records the available CPU algorithm; requested options and actual padded work
 are required in conformance evidence. Every native serving context still needs
 fresh complete observed labels and unchanged external/independent gates.
 Padding adds physical work and may increase attention memory; throughput and
-released Laya calibration need workload qualification. ONNX/F5 padding and
+released Laya calibration need workload qualification. F5 padding and
 actual device checks remain open/deferred.
 
 CPU Kev can opt into fair scheduling between prefix chunks with
@@ -687,18 +687,37 @@ not released-model calibration, throughput or memory savings. See the
 `attention_mask`, `token_type_ids`, and `position_ids`, all int64 with dynamic
 `[batch,seq]` dimensions. The output must be `last_hidden_state`, float32 with
 dynamic `[batch,seq]` and a fixed positive hidden width. The backend verifies
-this schema at load. Mask values are one, token-type values zero, and explicit
+this schema at load. Independent/equal-length masks are one, token-type values zero, and explicit
 position IDs run from zero to sequence length minus one. Other required inputs,
 fixed-batch graphs and the separate compact-readout contract are rejected.
 
 Use `--max-batch-tokens N` to batch equal-length questions and, optionally,
 `--batch-max-requests 2..64` to collate prepared requests. Native calls take at
-most 64 equal-length rows, preserve each row's selected positions, and never
-pad or truncate. The serving scheduler bounds admission, preparation, collation
+most 64 rows and preserve each row's selected positions. CPU feature graphs
+that explicitly declare `attention_mask` can also use
+`--max-batch-padding-percent 1..100`. This profile right-pads token zero and
+builds masks from original lengths, including valid real token zeros. Position
+IDs restart at zero in every row. Original readouts must fall within the
+original row length, and no padding readout is returned. The scheduler charges
+the full batch-by-maximum-length rectangle against the token budget, caps the
+fraction of that rectangle used by padding and preserves oversized singletons
+without truncation. Padding is default-disabled. Graphs without a mask, ordinary
+non-batch graphs, integrated/compact graphs and GPU profiles do not expose it.
+`padded_batch_execution=onnx-cpu-right-mask-v1` records availability; active
+options and physical work bind conformance/receipts. The graph signature alone
+cannot prove it actually honors the mask.
+
+The serving scheduler bounds admission, preparation, collation
 and total tensor tokens. This opt-in profile requires labeled pinned goldens
 and fresh startup conformance; enabled scheduling must perform actual batch work
 and pass the tighter independent-forward parity gate. CPU deterministic
-fixtures pass; real exported Laya graphs and CUDA batching remain unqualified.
+fixtures pass, including a mask-sensitive graph compared to independent scalar
+features, real token zero, duplicated/reordered positions, output reuse and
+shared concurrent CPU sessions. Complete synthetic typed gates preserve wire
+usage and count actual padding; incomplete/drifted suites fail. These are generic
+feature/mean-head fixtures, not trained Laya releases. Native CLI tests exercise
+real rectangles/replicas and refuse unlabeled startup. Released graph exports,
+labeled calibration, throughput/RSS and CUDA batching remain unqualified.
 
 ### Qualification of all real serving runtimes
 

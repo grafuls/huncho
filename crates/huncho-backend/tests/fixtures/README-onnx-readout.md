@@ -30,3 +30,16 @@ both new files with `python scripts/generate_onnx_external_fixture.py` after
 removing the old fixture pair. The generator refuses existing outputs. CPU
 shared-initializer tests compare embedded and external graph paths and replay
 independently owned sessions after the original files change.
+
+`tiny_encoder_masked.onnx` is a different synthetic context-sensitive graph:
+embedding plus a masked sequence mean and a position offset. The actual mask,
+position and token-type input construction affects its output. A nonzero token
+zero embedding exposes accidental unmasked padding, while zero can also occur
+inside a valid row. Tests use independent scalar arithmetic for fixed feature
+and typed probability comparisons. `tiny_encoder_batch_nomask.onnx` removes the
+old Gather graph's unused mask declaration to check explicit profile refusal.
+`tiny_encoder_masked-tokenizer.json` is a sixteen-token WordLevel fixture for
+actual CLI tests, which require the native tokenizers feature. Regenerate these
+files with `python scripts/generate_onnx_padded_fixture.py` using ONNX 1.20.1 and
+NumPy. Targets are synthetic plumbing, not released outcome evidence; the generic
+mean head is not a trained Laya head. No speed, memory or release claim follows.

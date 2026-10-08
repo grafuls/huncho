@@ -109,6 +109,14 @@ replicas. It cannot combine with native batching, compact feature gathering,
 prefix retention or GPU providers. Synthetic graphs cover the implementation;
 export and qualification of released trained Laya graphs remain open.
 
+Native dynamic feature graphs with an explicit `attention_mask` support optional
+mixed-length CPU batches. Original lengths own masks/readout bounds; the existing
+token/padding limits charge the complete rectangle. Mask-sensitive independent
+fixtures, shared replicas and fresh serving parity gates cover this path. It
+does not batch the separate integrated trained-head contract, and compatible
+mask metadata alone cannot establish a released graph's numerical/calibration
+behavior. See [native batches](operations.md#native-onnx-tensor-batches).
+
 The ONNX feature also enables `ort`'s `download-binaries` and `tls-native`
 features, so a build with this feature:
 

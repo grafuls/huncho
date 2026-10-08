@@ -702,7 +702,7 @@ impl Engine {
         }
         if opts.max_batch_padding_percent > 0 && !self.supports_padded_batch() {
             return Err(Error::Unsupported(
-                "padded batching currently requires a CPU ModernBERT F1 or Qwen F2/F3 backend".into(),
+                "padded batching currently requires a CPU ModernBERT F1, masked native ONNX F1 or Qwen F2/F3 backend".into(),
             ));
         }
         Ok(())
@@ -908,7 +908,7 @@ impl Engine {
         };
         if opts.max_batch_padding_percent > 0 && !self.supports_padded_batch() {
             return Err(Error::Unsupported(
-                "padded batching currently requires a CPU ModernBERT F1 or Qwen F2/F3 backend".into(),
+                "padded batching currently requires a CPU ModernBERT F1, masked native ONNX F1 or Qwen F2/F3 backend".into(),
             ));
         }
         let max_context = opts

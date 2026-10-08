@@ -73,8 +73,9 @@ pub struct OnnxOptions {
     pub execution_provider: OnnxExecutionProvider,
     /// Intra-op threads; zero preserves ORT's automatic choice (maximum 256).
     pub intra_threads: usize,
-    /// Opt into native equal-length tensor batches on a validated dynamic graph.
-    /// Compact readout graphs use a different contract and cannot enable this.
+    /// Opt into native tensor batches on a validated dynamic feature graph.
+    /// CPU graphs with an explicit attention_mask also support right-padding.
+    /// Compact/integrated graphs use different contracts and cannot enable this.
     pub native_batch: bool,
     /// Snapshot a supported flat CPU graph and share initializer/prepack storage
     /// across independently owned sessions. Requires `onnx-shared`; default off.
@@ -447,6 +448,7 @@ impl OnnxBackend {
         &mut self,
         requests: &[(&[u32], &[usize])],
         qtype: Option<u32>,
+        padded: bool,
     ) -> Result<Vec<CoreTensor>> {
         let batch = requests.len();
         if batch == 0 || batch > 64 || (batch > 1 && !self.options.native_batch) {
@@ -455,7 +457,20 @@ impl OnnxBackend {
                     .into(),
             ));
         }
-        let seq = requests[0].0.len();
+        if padded && !self.supports_padded_batch() {
+            return Err(Error::Unsupported(
+                "padded ONNX batches require a native CPU graph with attention_mask".into(),
+            ));
+        }
+        let seq = if padded {
+            requests
+                .iter()
+                .map(|(tokens, _)| tokens.len())
+                .max()
+                .unwrap()
+        } else {
+            requests[0].0.len()
+        };
         if self.options.integrated_head && (seq == 0 || qtype.is_none_or(|q| q > 2)) {
             return Err(Error::Backend(
                 "integrated ONNX head needs nonempty tokens and qtype 0..2".into(),
@@ -468,14 +483,18 @@ impl OnnxBackend {
             )));
         }
         for &(tokens, positions) in requests {
-            if tokens.len() != seq {
+            if padded && tokens.is_empty() {
+                return Err(Error::Backend("padded ONNX rows must be nonempty".into()));
+            }
+            if !padded && tokens.len() != seq {
                 return Err(Error::Unsupported(
                     "ONNX native batches require equal sequence lengths without padding".into(),
                 ));
             }
-            if let Some(pos) = positions.iter().find(|&&pos| pos >= seq) {
+            if let Some(pos) = positions.iter().find(|&&pos| pos >= tokens.len()) {
                 return Err(Error::Backend(format!(
-                    "position {pos} out of range for sequence of length {seq}"
+                    "position {pos} out of range for sequence of length {}",
+                    tokens.len()
                 )));
             }
         }
@@ -540,7 +559,18 @@ impl OnnxBackend {
             let data: Vec<i64> = if name == &self.input_ids_name {
                 requests
                     .iter()
-                    .flat_map(|(tokens, _)| tokens.iter().map(|&t| t as i64))
+                    .flat_map(|(tokens, _)| {
+                        tokens
+                            .iter()
+                            .map(|&t| i64::from(t))
+                            .chain(std::iter::repeat(0))
+                            .take(seq)
+                    })
+                    .collect()
+            } else if padded && name == "attention_mask" {
+                requests
+                    .iter()
+                    .flat_map(|(tokens, _)| (0..seq).map(move |p| i64::from(p < tokens.len())))
                     .collect()
             } else if self.options.native_batch && name == "position_ids" {
                 (0..batch)
@@ -769,6 +799,12 @@ impl Backend for OnnxBackend {
                 if self.options.native_batch {
                     extra.insert("onnx_native_batch".into(), "equal-length-v1".into());
                 }
+                if self.supports_padded_batch() {
+                    extra.insert(
+                        "padded_batch_execution".into(),
+                        "onnx-cpu-right-mask-v1".into(),
+                    );
+                }
                 if self.options.compact_readout {
                     extra.insert("onnx_readout".into(), "gather-v1".into());
                 }
@@ -802,7 +838,11 @@ impl Backend for OnnxBackend {
             ));
         }
         let values = self
-            .run_readouts(&[(&input.tokens, &input.positions)], Some(input.qtype))?
+            .run_readouts(
+                &[(&input.tokens, &input.positions)],
+                Some(input.qtype),
+                false,
+            )?
             .remove(0);
         if self.options.integrated_head {
             return Ok(ForwardOutput::Logits {
@@ -821,7 +861,11 @@ impl Backend for OnnxBackend {
     }
 
     fn forward_batch(&mut self, inputs: Vec<ForwardInput>) -> Result<Vec<ForwardOutput>> {
-        if !self.options.native_batch || inputs.iter().any(|input| input.fork_from.is_some()) {
+        if !self.options.native_batch
+            || inputs.iter().any(|input| {
+                input.fork_from.is_some() || input.retain_cache || input.logit_codes.is_some()
+            })
+        {
             return Err(Error::Unsupported(
                 "ONNX native batching needs an enabled dynamic graph and uncached inputs".into(),
             ));
@@ -830,7 +874,38 @@ impl Backend for OnnxBackend {
             .iter()
             .map(|input| (input.tokens.as_slice(), input.positions.as_slice()))
             .collect::<Vec<_>>();
-        let values = self.run_readouts(&requests, None)?;
+        let values = self.run_readouts(&requests, None, false)?;
+        Ok(inputs
+            .into_iter()
+            .zip(values)
+            .map(|(input, values)| ForwardOutput::Features {
+                positions: input.positions,
+                values,
+            })
+            .collect())
+    }
+
+    fn supports_padded_batch(&self) -> bool {
+        self.options.native_batch
+            && self.options.execution_provider == OnnxExecutionProvider::Cpu
+            && self.mask_name.as_deref() == Some("attention_mask")
+    }
+
+    fn forward_padded_batch(&mut self, inputs: Vec<ForwardInput>) -> Result<Vec<ForwardOutput>> {
+        if !self.supports_padded_batch()
+            || inputs.iter().any(|input| {
+                input.fork_from.is_some() || input.retain_cache || input.logit_codes.is_some()
+            })
+        {
+            return Err(Error::Unsupported(
+                "padded ONNX batches require independent CPU feature rows with attention_mask and no cache retention or vocabulary codes".into(),
+            ));
+        }
+        let requests = inputs
+            .iter()
+            .map(|input| (input.tokens.as_slice(), input.positions.as_slice()))
+            .collect::<Vec<_>>();
+        let values = self.run_readouts(&requests, None, true)?;
         Ok(inputs
             .into_iter()
             .zip(values)

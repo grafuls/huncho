@@ -23,7 +23,7 @@ also show drift. Packed CPU fitting/held-out evaluation is still running.
 | O09 fused/bounded compute | CPU SiLU/multiply, causal query blocks and unexpanded grouped K/V available | FlashAttention and further fused native/device kernels |
 | O10 precision/calibration gates | Every real serving runtime requires fresh labeled conformance | Released CPU acceptance remains rejected/pending; no GPU checks |
 | O11 native Kev prefix forks | Available | Released CPU paired/labeled acceptance |
-| O12 dynamic batching | Equal-length collation and bounded CPU Qwen/ModernBERT right-padding available | F5/ONNX masked padding, device qualification and cached-branch batching |
+| O12 dynamic batching | Equal-length collation and bounded CPU Qwen/ModernBERT/masked ONNX feature right-padding available | F5 and integrated-head graph batching, device qualification and cached-branch batching |
 | O13 family head work | CPU Clef vectorized heads/grouped spans, optional Laya final marker queries and integrated ONNX F1 heads available | Released graph exports and Clef/Laya labeled qualification |
 | O14 concurrent execution contexts | CPU shared-weight replicas, including optional ONNX initializers, available | Released concurrent workloads, memory and affinity measurements |
 | O15 device buffers/graph replay | Open | CUDA implementation and later device qualification |
@@ -41,6 +41,28 @@ also show drift. Packed CPU fitting/held-out evaluation is still running.
 | O27 browser WASM/WebGPU | Separate CPU WASM F1 integrated-head SDK, packaging and fresh labeled gates available | Released exports/calibration, other families and browser scheduling; WebGPU deferred |
 
 ## Implemented increments
+
+### Masked CPU ONNX feature batches
+
+O12 now also collates mixed-length CPU native feature graphs that explicitly
+declare `attention_mask`. Token zero padding is masked by original lengths;
+each row retains its positions/order and explicit position IDs restart at zero.
+Cache retention, branches and vocabulary-code hints are rejected. Complete
+rectangles are charged by the existing bounded scheduler and actual padding
+work is recorded. Output reuse and shared initializer replicas compose without
+shared inference buffers. Non-batch/maskless graphs, integrated/compact
+contracts and GPU profiles remain unsupported for this path.
+
+A context-sensitive graph checks independent scalar features, all question
+types, original usage, real token zero, duplicate/out-of-order readouts, empty
+readouts, contexts 1..128, oversized/invalid inputs, equal-length identity and
+concurrent shared contexts. Deliberately unmasked padding changes its valid
+features. Whole-engine fixed synthetic labeled/parity gates count real batches
+and reject incomplete/drifted suites. CLI processes bind work/replicas and reject
+missing/unlabeled serving. Synthetic generic feature/mean heads are not released
+Laya exports. The graph must really honor its mask and fresh observed-label
+qualification remains mandatory; no speed/RSS or released acceptance follows.
+F5, integrated graph heads, cached branches and device work remain open.
 
 ### Native CPU ONNX integrated F1 raw heads
 

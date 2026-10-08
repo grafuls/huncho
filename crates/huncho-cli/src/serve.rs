@@ -513,7 +513,7 @@ fn qualify_optimizations(registry: &ModelRegistry, args: &ServeArgs) -> anyhow::
         let replicated = replicas.len() > 1;
         let opts = evaluation_options(engine, args);
         anyhow::ensure!(args.max_batch_padding_percent <= 100 && (args.max_batch_padding_percent == 0 || (opts.max_batch_tokens.is_some() && engine.supports_padded_batch())),
-            "padded serving requires CPU ModernBERT F1 or Qwen F2/F3, a batch token budget and padding percent in 1..100 for every model");
+            "padded serving requires CPU ModernBERT F1, masked native ONNX F1 or Qwen F2/F3, a batch token budget and padding percent in 1..100 for every model");
         anyhow::ensure!(!args.cooperative_prefill || engine.supports_resumable_prefill(),
             "cooperative prefill requires CPU Kev with HUNCHO_PREFILL_CHUNK_TOKENS configured for every model");
         anyhow::ensure!(!engine.execution_metadata().contains_key("prefill_chunk_tokens") || opts.prefix_cache,
