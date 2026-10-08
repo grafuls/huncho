@@ -4,7 +4,7 @@ use std::path::Path;
 
 use clap::Args;
 use huncho_core::conformance::{self, ConformanceReport, ConformanceThresholds};
-use huncho_core::engine::Engine;
+use huncho_core::engine::{Engine, EvalOptions};
 use huncho_core::manifest::{BackendId, Family, ModelManifest};
 
 use crate::load::{engine_from_resolved_manifest, mock_engine, resolve_model, BackendChoice};
@@ -53,6 +53,22 @@ pub struct ConformArgs {
     #[arg(long, default_value_t = false)]
     pub json: bool,
 
+    /// Check the legacy F3 readout against the same golden suite.
+    #[arg(long, default_value_t = false)]
+    pub reference_readout: bool,
+
+    /// Qualify request-local Kev prefix reuse against the unchanged golden suite.
+    #[arg(long, default_value_t = false)]
+    pub prefix_cache: bool,
+
+    /// Qualify native equal-length question batching against the same suite.
+    #[arg(long, conflicts_with = "prefix_cache")]
+    pub max_batch_tokens: Option<usize>,
+
+    /// Qualify upfront prompt preparation against unchanged independent forwards.
+    #[arg(long, default_value_t = false)]
+    pub prepare_all: bool,
+
     /// Name for the built-in mock model when no manifest/model is given.
     #[arg(long, default_value = "mock")]
     pub mock_model: String,
@@ -99,10 +115,9 @@ pub fn run(args: ConformArgs) -> anyhow::Result<()> {
             .ok_or_else(|| anyhow::anyhow!("`--golden` is required when using `--manifest`"))?;
         engine = engine_from_resolved_manifest(std::path::Path::new(path), backend, dtype)?;
     } else {
-        golden_path = args
-            .golden
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("`--golden` is required when no manifest/model is given"))?;
+        golden_path = args.golden.clone().ok_or_else(|| {
+            anyhow::anyhow!("`--golden` is required when no manifest/model is given")
+        })?;
         engine = mock_engine(&args.mock_model, Family::F1, BackendId::Onnx, "fp32", 1.0)?;
     }
 
@@ -112,7 +127,18 @@ pub fn run(args: ConformArgs) -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    let report = conformance::run_suite(&engine, &suite, &thresholds)?;
+    let report = conformance::run_suite_with_options(
+        &engine,
+        &suite,
+        &thresholds,
+        &EvalOptions {
+            reference_readout: args.reference_readout,
+            prefix_cache: args.prefix_cache,
+            max_batch_tokens: args.max_batch_tokens,
+            prepare_all: args.prepare_all,
+            ..Default::default()
+        },
+    )?;
 
     if args.json {
         println!("{}", serde_json::to_string_pretty(&report)?);
@@ -128,17 +154,47 @@ pub fn run(args: ConformArgs) -> anyhow::Result<()> {
 
 fn print_report(report: &ConformanceReport) {
     println!(
-        "Conformance: model={} backend={} dtype={}",
-        report.model, report.backend, report.dtype
+        "Conformance: model={} backend={} dtype={} device={} reference_readout={} prefix_cache={} batch_tokens={:?} prepare_all={}",
+        report.model,
+        report.backend,
+        report.dtype,
+        report.device,
+        report.reference_readout,
+        report.prefix_cache,
+        report.max_batch_tokens,
+        report.prepare_all
     );
     println!("  cases: {}", report.cases.len());
+    println!(
+        "  native batches: {}; forks: {}; physical token positions: {}",
+        report.work.batch_calls, report.work.cache_forks, report.work.processed_tokens
+    );
     println!("  max probability delta: {:.6}", report.max_prob_delta);
     println!("  argmax agreement:      {:.3}", report.argmax_agreement);
     println!("  ECE drift:             {:.6}", report.ece);
-    println!(
-        "  status: {}",
-        if report.passed { "PASS" } else { "FAIL" }
-    );
+    if let Some(parity) = &report.optimization_parity {
+        println!(
+            "  independent parity:    delta={:.6}; argmax={:.3} (requires <=0.0001 and 1.0)",
+            parity.max_prob_delta, parity.argmax_agreement
+        );
+    }
+    if let Some(outcomes) = &report.outcome_calibration {
+        println!(
+            "  ECE basis:             observed outcomes ({} questions)",
+            outcomes.questions
+        );
+        println!(
+            "  backend/reference ECE: {:.6} / {:.6}",
+            outcomes.backend_ece, outcomes.reference_ece
+        );
+        println!(
+            "  backend/reference Brier: {:.6} / {:.6}",
+            outcomes.backend_brier, outcomes.reference_brier
+        );
+    } else {
+        println!("  ECE basis:             reference agreement (unlabeled suite)");
+    }
+    println!("  status: {}", if report.passed { "PASS" } else { "FAIL" });
     if !report.passed {
         for c in &report.cases {
             if !c.argmax_match {

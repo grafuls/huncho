@@ -23,6 +23,25 @@ use serde_json::{json, Value};
 use tower::ServiceExt;
 
 fn mock_engine(name: &str) -> Engine {
+    engine_with_backend(
+        name,
+        Box::new(
+            MockBackend::with_vocab(4096)
+                .with_backend(BackendId::Onnx)
+                .with_dtype("fp32"),
+        ),
+    )
+}
+
+fn engine_with_backend(name: &str, backend: Box<dyn Backend>) -> Engine {
+    engine_with_parts(name, backend, Box::new(SimpleTokenizer::new(32768)))
+}
+
+fn engine_with_parts(
+    name: &str,
+    backend: Box<dyn Backend>,
+    tokenizer: Box<dyn Tokenizer>,
+) -> Engine {
     let manifest = ModelManifest {
         schema_version: manifest::MANIFEST_SCHEMA_VERSION.into(),
         name: name.into(),
@@ -71,12 +90,6 @@ fn mock_engine(name: &str) -> Engine {
     };
     manifest.validate().unwrap();
 
-    let backend: Box<dyn Backend> = Box::new(
-        MockBackend::with_vocab(4096)
-            .with_backend(BackendId::Onnx)
-            .with_dtype("fp32"),
-    );
-    let tokenizer: Box<dyn Tokenizer> = Box::new(SimpleTokenizer::new(32768));
     Engine::new(
         manifest,
         backend,
@@ -96,6 +109,12 @@ fn state(auth_token: Option<&str>) -> Arc<AppState> {
         auth_token: auth_token.map(|s| s.to_string()),
         metrics: true,
         default_extensions: false,
+        max_queued_per_model: 32,
+        max_prepared_per_model: 0,
+        coalesce_bytes: 0,
+        prefix_cache: false,
+        max_batch_tokens: None,
+        candidate_readout: false,
     };
     Arc::new(AppState::new(config, registry, Metrics::new()))
 }
@@ -179,7 +198,15 @@ async fn rejects_media_instead_of_silently_discarding_it() {
     for field in ["images", "videos"] {
         let mut request = choice_request();
         request[field] = json!(["media"]);
-        let (status, body) = send(state(None), Method::POST, "/v1/systemone", Some(request), None, false).await;
+        let (status, body) = send(
+            state(None),
+            Method::POST,
+            "/v1/systemone",
+            Some(request),
+            None,
+            false,
+        )
+        .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(body["error"]["code"], "unsupported_media");
     }
@@ -206,11 +233,160 @@ async fn metrics_exposes_prometheus_registry() {
 }
 
 #[tokio::test]
+async fn exact_result_cache_preserves_extensions_auth_and_physical_metrics() {
+    let mut registry = ModelRegistry::new();
+    registry.insert(
+        "mock-laya",
+        mock_engine("mock-laya").with_result_cache(1024 * 1024),
+    );
+    let s = Arc::new(AppState::new(
+        ServerConfig {
+            auth_token: Some("secret".into()),
+            ..Default::default()
+        },
+        registry,
+        Metrics::new(),
+    ));
+    let (status, first) = send(
+        s.clone(),
+        Method::POST,
+        "/v1/systemone",
+        Some(choice_request()),
+        Some("secret"),
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let physical_tokens = s.metrics.tokens_prefilled.get();
+    assert!(physical_tokens > 0);
+    let (status, second) = send(
+        s.clone(),
+        Method::POST,
+        "/v1/systemone",
+        Some(choice_request()),
+        Some("secret"),
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(first, second);
+    assert_eq!(s.metrics.tokens_prefilled.get(), physical_tokens);
+    assert_eq!(s.metrics.result_cache_hits.get(), 1);
+    let (status, _) = send(
+        s.clone(),
+        Method::POST,
+        "/v1/systemone",
+        Some(choice_request()),
+        None,
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(s.metrics.result_cache_hits.get(), 1);
+    let (_, extended) = send(
+        s.clone(),
+        Method::POST,
+        "/v1/systemone",
+        Some(choice_request()),
+        Some("secret"),
+        true,
+    )
+    .await;
+    assert!(extended["extensions"]["raw_logits"].is_object());
+    assert_eq!(s.metrics.result_cache_hits.get(), 1);
+    let (_, repeated) = send(
+        s.clone(),
+        Method::POST,
+        "/v1/systemone",
+        Some(choice_request()),
+        Some("secret"),
+        true,
+    )
+    .await;
+    assert_eq!(extended, repeated);
+    assert_eq!(s.metrics.result_cache_hits.get(), 2);
+    assert_eq!(s.metrics.tokens_prefilled.get(), 2 * physical_tokens);
+}
+
+#[tokio::test]
 async fn health_reports_ok_and_model_count() {
     let (status, body) = send(state(None), Method::GET, "/health", None, None, false).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["status"], "ok");
     assert_eq!(body["models"], 1);
+}
+
+#[tokio::test]
+async fn prepared_prompt_hits_keep_physical_metrics_and_authentication() {
+    let mut registry = ModelRegistry::new();
+    registry.insert(
+        "mock-laya",
+        mock_engine("mock-laya").with_prompt_cache(1024 * 1024),
+    );
+    let state = Arc::new(AppState::new(
+        ServerConfig {
+            auth_token: Some("secret".into()),
+            ..Default::default()
+        },
+        registry,
+        Metrics::new(),
+    ));
+    let mut first = None;
+    let mut tokens = 0;
+    for iteration in 0..2 {
+        let (status, response) = send(
+            state.clone(),
+            Method::POST,
+            "/v1/systemone",
+            Some(choice_request()),
+            Some("secret"),
+            false,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        if let Some(first) = &first {
+            assert_eq!(&response, first);
+        } else {
+            first = Some(response);
+            tokens = state.metrics.tokens_prefilled.get();
+        }
+        assert!(tokens > 0);
+        assert_eq!(
+            state.metrics.tokens_prefilled.get(),
+            tokens * (iteration + 1)
+        );
+        assert_eq!(state.metrics.prompt_cache_hits.get(), iteration);
+        assert_eq!(state.metrics.result_cache_hits.get(), 0);
+    }
+    let (status, _) = send(
+        state.clone(),
+        Method::POST,
+        "/v1/systemone",
+        Some(choice_request()),
+        None,
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(state.metrics.tokens_prefilled.get(), 2 * tokens);
+    assert_eq!(state.metrics.prompt_cache_hits.get(), 1);
+    let (status, response) = send(
+        state.clone(),
+        Method::POST,
+        "/v1/systemone",
+        Some(choice_request()),
+        Some("secret"),
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(response["extensions"]["raw_logits"].is_object());
+    assert_eq!(state.metrics.tokens_prefilled.get(), 3 * tokens);
+    assert_eq!(state.metrics.prompt_cache_hits.get(), 2);
+    assert!(state
+        .metrics
+        .render()
+        .contains("huncho_prompt_cache_hits 2"));
 }
 
 #[tokio::test]
@@ -243,8 +419,18 @@ async fn choice_returns_summing_distribution() {
     assert!((p_billing + p_returns - 1.0).abs() < 1e-5);
     let choice = body["answers"]["department"]["choice"].as_str().unwrap();
     assert!(choice == "billing" || choice == "returns");
-    assert!(body["answers"]["department"]["confidence"].as_f64().unwrap() >= 0.0);
-    assert!(body["answers"]["department"]["confidence"].as_f64().unwrap() <= 1.0);
+    assert!(
+        body["answers"]["department"]["confidence"]
+            .as_f64()
+            .unwrap()
+            >= 0.0
+    );
+    assert!(
+        body["answers"]["department"]["confidence"]
+            .as_f64()
+            .unwrap()
+            <= 1.0
+    );
     assert!(body["usage"]["input_tokens"].as_u64().unwrap() > 0);
     assert_eq!(body["usage"]["output_tokens"].as_u64().unwrap(), 0);
 }
@@ -267,7 +453,15 @@ async fn noul_and_score_questions_serve() {
             }
         }
     });
-    let (status, body) = send(state(None), Method::POST, "/v1/systemone", Some(req), None, false).await;
+    let (status, body) = send(
+        state(None),
+        Method::POST,
+        "/v1/systemone",
+        Some(req),
+        None,
+        false,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     let noul = body["answers"]["is_refund"]["noul"].as_f64().unwrap();
     assert!((0.0..=1.0).contains(&noul));
@@ -283,7 +477,15 @@ async fn noul_and_score_questions_serve() {
 async fn unknown_model_returns_422() {
     let mut req = choice_request();
     req["model"] = json!("does-not-exist");
-    let (status, body) = send(state(None), Method::POST, "/v1/systemone", Some(req), None, false).await;
+    let (status, body) = send(
+        state(None),
+        Method::POST,
+        "/v1/systemone",
+        Some(req),
+        None,
+        false,
+    )
+    .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(body["error"]["code"], "model_not_found");
 }
@@ -330,16 +532,748 @@ async fn missing_auth_token_returns_401() {
 #[tokio::test]
 async fn extensions_returned_only_when_requested() {
     // Default: no extensions.
-    let (_, body) = send(state(None), Method::POST, "/v1/systemone", Some(choice_request()), None, false).await;
+    let (_, body) = send(
+        state(None),
+        Method::POST,
+        "/v1/systemone",
+        Some(choice_request()),
+        None,
+        false,
+    )
+    .await;
     assert!(body.get("extensions").is_none());
 
     // Opt in via header.
-    let (_, body) = send(state(None), Method::POST, "/v1/systemone", Some(choice_request()), None, true).await;
+    let (_, body) = send(
+        state(None),
+        Method::POST,
+        "/v1/systemone",
+        Some(choice_request()),
+        None,
+        true,
+    )
+    .await;
     let ext = body["extensions"].as_object().unwrap();
     assert_eq!(ext["backend"], "onnx");
     assert_eq!(ext["dtype"], "fp32");
     assert_eq!(ext["calibration_status"], "fit");
-    assert!(ext["prompt_contract_hash"].as_str().unwrap().contains("test-hash"));
+    assert!(ext["prompt_contract_hash"]
+        .as_str()
+        .unwrap()
+        .contains("test-hash"));
     let raw = ext["raw_logits"].as_object().unwrap();
     assert!(raw["department"].as_array().unwrap().len() >= 2);
+}
+
+type SlowGate = Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>;
+
+struct ReleaseSlowJob(SlowGate);
+impl Drop for ReleaseSlowJob {
+    fn drop(&mut self) {
+        *self.0 .0.lock().unwrap() = true;
+        self.0 .1.notify_all();
+    }
+}
+
+fn slow_state(
+    max_queued: u16,
+) -> (
+    Arc<AppState>,
+    tokio::sync::oneshot::Receiver<()>,
+    ReleaseSlowJob,
+) {
+    slow_state_with_config(ServerConfig {
+        max_queued_per_model: max_queued,
+        ..Default::default()
+    })
+}
+
+fn slow_state_with_config(
+    config: ServerConfig,
+) -> (
+    Arc<AppState>,
+    tokio::sync::oneshot::Receiver<()>,
+    ReleaseSlowJob,
+) {
+    struct SlowBackend {
+        inner: MockBackend,
+        gate: SlowGate,
+        started: Option<tokio::sync::oneshot::Sender<()>>,
+    }
+    impl Backend for SlowBackend {
+        fn id(&self) -> BackendId {
+            self.inner.id()
+        }
+        fn capabilities(&self) -> huncho_core::backend::Capabilities {
+            self.inner.capabilities()
+        }
+        fn fork(
+            &mut self,
+            handle: huncho_core::backend::CacheHandle,
+        ) -> huncho_core::error::Result<huncho_core::backend::CacheHandle> {
+            self.inner.fork(handle)
+        }
+        fn forward(
+            &mut self,
+            input: huncho_core::backend::ForwardInput,
+        ) -> huncho_core::error::Result<huncho_core::backend::ForwardOutput> {
+            if let Some(started) = self.started.take() {
+                let _ = started.send(());
+                let mut released = self.gate.0.lock().unwrap();
+                while !*released {
+                    let (guard, deadline) = self
+                        .gate
+                        .1
+                        .wait_timeout(released, std::time::Duration::from_secs(2))
+                        .unwrap();
+                    released = guard;
+                    if deadline.timed_out() {
+                        break;
+                    }
+                }
+            }
+            self.inner.forward(input)
+        }
+    }
+    let gate = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+    let (started, receiver) = tokio::sync::oneshot::channel();
+    let backend = SlowBackend {
+        inner: MockBackend::with_vocab(4096),
+        gate: gate.clone(),
+        started: Some(started),
+    };
+    let mut registry = ModelRegistry::new();
+    registry.insert(
+        "mock-laya",
+        engine_with_backend("mock-laya", Box::new(backend)),
+    );
+    (
+        Arc::new(AppState::new(config, registry, Metrics::new())),
+        receiver,
+        ReleaseSlowJob(gate),
+    )
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn preparation_overlaps_execution_and_bounds_ready_requests() {
+    let (state, started, release) = slow_state_with_config(ServerConfig {
+        max_queued_per_model: 2,
+        max_prepared_per_model: 1,
+        ..Default::default()
+    });
+    let submit = || {
+        tokio::spawn(send(
+            state.clone(),
+            Method::POST,
+            "/v1/systemone",
+            Some(choice_request()),
+            None,
+            false,
+        ))
+    };
+    let active = submit();
+    started.await.unwrap();
+    let ready = submit();
+    wait_for(|| state.metrics.prepared_waiting.get() == 1).await;
+    assert_eq!(state.metrics.questions_prepared.get(), 2);
+    assert_eq!(state.metrics.tokens_prefilled.get(), 0);
+    let pending = submit();
+    wait_for(|| state.metrics.queue_depth.get() == 3).await;
+    // The ready packet owns the sole preparation slot until execution or
+    // cancellation. Another admitted request cannot retain prepared prompts.
+    assert_eq!(state.metrics.questions_prepared.get(), 2);
+    let (status, _) = tokio::time::timeout(
+        std::time::Duration::from_millis(100),
+        send(state.clone(), Method::GET, "/health", None, None, false),
+    )
+    .await
+    .unwrap();
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = send(
+        state.clone(),
+        Method::POST,
+        "/v1/systemone",
+        Some(choice_request()),
+        None,
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    ready.abort();
+    assert!(ready.await.unwrap_err().is_cancelled());
+    wait_for(|| {
+        state.metrics.questions_prepared.get() == 3 && state.metrics.prepared_waiting.get() == 1
+    })
+    .await;
+    assert_eq!(state.metrics.prepared_waiting.get(), 1);
+    assert_eq!(state.metrics.queue_depth.get(), 2);
+    drop(release);
+    let (status, original) = active.await.unwrap();
+    assert_eq!(status, StatusCode::OK);
+    let (status, response) = pending.await.unwrap();
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(response, original);
+    assert_eq!(
+        state.metrics.tokens_prefilled.get(),
+        original["usage"]["input_tokens"].as_u64().unwrap() * 2
+    );
+    assert_eq!(state.metrics.queue_depth.get(), 0);
+    assert_eq!(state.metrics.prepared_waiting.get(), 0);
+    assert_eq!(state.metrics.requests_preparing.get(), 0);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn canceled_blocking_preparation_retains_admission_and_submits_no_forward() {
+    struct SlowTokenizer {
+        inner: SimpleTokenizer,
+        gate: SlowGate,
+        started: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    }
+    impl Tokenizer for SlowTokenizer {
+        fn encode(&self, text: &str, special: bool) -> huncho_core::Result<Vec<u32>> {
+            if let Some(started) = self.started.lock().unwrap().take() {
+                let _ = started.send(());
+                let released = self.gate.0.lock().unwrap();
+                let _ = self
+                    .gate
+                    .1
+                    .wait_timeout_while(released, std::time::Duration::from_secs(2), |released| {
+                        !*released
+                    })
+                    .unwrap();
+            }
+            self.inner.encode(text, special)
+        }
+        fn decode(&self, ids: &[u32]) -> huncho_core::Result<String> {
+            self.inner.decode(ids)
+        }
+        fn id_for(&self, token: &str) -> Option<u32> {
+            self.inner.id_for(token)
+        }
+        fn name(&self) -> &str {
+            self.inner.name()
+        }
+        fn mask_token_id(&self) -> Option<u32> {
+            self.inner.mask_token_id()
+        }
+        fn cls_token_id(&self) -> Option<u32> {
+            self.inner.cls_token_id()
+        }
+        fn sep_token_id(&self) -> Option<u32> {
+            self.inner.sep_token_id()
+        }
+    }
+    let gate = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+    let release = ReleaseSlowJob(gate.clone());
+    let (started, receiver) = tokio::sync::oneshot::channel();
+    let mut registry = ModelRegistry::new();
+    registry.insert(
+        "mock-laya",
+        engine_with_parts(
+            "mock-laya",
+            Box::new(MockBackend::with_vocab(4096)),
+            Box::new(SlowTokenizer {
+                inner: SimpleTokenizer::new(32768),
+                gate,
+                started: std::sync::Mutex::new(Some(started)),
+            }),
+        ),
+    );
+    let state = Arc::new(AppState::new(
+        ServerConfig {
+            max_queued_per_model: 0,
+            max_prepared_per_model: 1,
+            ..Default::default()
+        },
+        registry,
+        Metrics::new(),
+    ));
+    let active = tokio::spawn(send(
+        state.clone(),
+        Method::POST,
+        "/v1/systemone",
+        Some(choice_request()),
+        None,
+        false,
+    ));
+    receiver.await.unwrap();
+    active.abort();
+    assert!(active.await.unwrap_err().is_cancelled());
+    assert_eq!(state.metrics.queue_depth.get(), 1);
+    assert_eq!(state.metrics.requests_preparing.get(), 1);
+    let (status, _) = send(state.clone(), Method::GET, "/health", None, None, false).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = send(
+        state.clone(),
+        Method::POST,
+        "/v1/systemone",
+        Some(choice_request()),
+        None,
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    drop(release);
+    wait_for(|| state.metrics.queue_depth.get() == 0).await;
+    assert_eq!(state.metrics.questions_prepared.get(), 1);
+    assert_eq!(state.metrics.tokens_prefilled.get(), 0);
+    assert_eq!(state.metrics.prepared_waiting.get(), 0);
+    let (status, _) = send(
+        state.clone(),
+        Method::POST,
+        "/v1/systemone",
+        Some(choice_request()),
+        None,
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(state.metrics.tokens_prefilled.get() > 0);
+    assert_eq!(state.metrics.requests_preparing.get(), 0);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn slow_inference_keeps_health_registry_and_overload_responsive_after_cancellation() {
+    let (state, started, release) = slow_state(0);
+    let active = tokio::spawn(send(
+        state.clone(),
+        Method::POST,
+        "/v1/systemone",
+        Some(choice_request()),
+        None,
+        false,
+    ));
+    tokio::time::timeout(std::time::Duration::from_secs(2), started)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        state.registry.try_write().is_ok(),
+        "inference must release the model registry"
+    );
+    let (status, _) = tokio::time::timeout(
+        std::time::Duration::from_millis(100),
+        send(state.clone(), Method::GET, "/health", None, None, false),
+    )
+    .await
+    .unwrap();
+    assert_eq!(status, StatusCode::OK);
+    let (status, body) = send(
+        state.clone(),
+        Method::POST,
+        "/v1/systemone",
+        Some(choice_request()),
+        None,
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body["error"]["code"], "queue_full");
+    active.abort();
+    assert!(active.await.unwrap_err().is_cancelled());
+    // The running blocking job owns its permits even after the HTTP future dies.
+    assert_eq!(state.metrics.queue_depth.get(), 1);
+    let (status, _) = send(
+        state.clone(),
+        Method::POST,
+        "/v1/systemone",
+        Some(choice_request()),
+        None,
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    drop(release);
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while state.metrics.queue_depth.get() != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let (status, _) = send(
+        state.clone(),
+        Method::POST,
+        "/v1/systemone",
+        Some(choice_request()),
+        None,
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(state.metrics.queue_depth.get(), 0);
+    assert_eq!(state.metrics.requests_waiting.get(), 0);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn queued_request_cancellation_releases_admission_without_running_inference() {
+    let (state, started, release) = slow_state(1);
+    let active = tokio::spawn(send(
+        state.clone(),
+        Method::POST,
+        "/v1/systemone",
+        Some(choice_request()),
+        None,
+        false,
+    ));
+    tokio::time::timeout(std::time::Duration::from_secs(2), started)
+        .await
+        .unwrap()
+        .unwrap();
+    let waiting = tokio::spawn(send(
+        state.clone(),
+        Method::POST,
+        "/v1/systemone",
+        Some(choice_request()),
+        None,
+        false,
+    ));
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while state.metrics.requests_waiting.get() != 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let (status, _) = send(
+        state.clone(),
+        Method::POST,
+        "/v1/systemone",
+        Some(choice_request()),
+        None,
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    waiting.abort();
+    assert!(waiting.await.unwrap_err().is_cancelled());
+    assert_eq!(state.metrics.requests_waiting.get(), 0);
+    assert_eq!(state.metrics.queue_depth.get(), 1);
+    let replacement = tokio::spawn(send(
+        state.clone(),
+        Method::POST,
+        "/v1/systemone",
+        Some(choice_request()),
+        None,
+        false,
+    ));
+    drop(release);
+    assert_eq!(active.await.unwrap().0, StatusCode::OK);
+    assert_eq!(replacement.await.unwrap().0, StatusCode::OK);
+    assert_eq!(state.metrics.queue_depth.get(), 0);
+    assert_eq!(
+        state
+            .metrics
+            .queue_wait
+            .with_label_values(&["mock-laya"])
+            .get_sample_count(),
+        2
+    );
+    assert_eq!(
+        state
+            .metrics
+            .evaluation_latency
+            .with_label_values(&["mock-laya"])
+            .get_sample_count(),
+        2
+    );
+}
+
+async fn wait_for(condition: impl Fn() -> bool) {
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while !condition() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn inflight_sharing_preserves_auth_extensions_admission_and_exact_answers() {
+    let (state, started, release) = slow_state_with_config(ServerConfig {
+        max_queued_per_model: 2,
+        max_prepared_per_model: 1,
+        coalesce_bytes: 1024 * 1024,
+        auth_token: Some("secret".into()),
+        ..Default::default()
+    });
+    let first = tokio::spawn(send(
+        state.clone(),
+        Method::POST,
+        "/v1/systemone",
+        Some(choice_request()),
+        Some("secret"),
+        false,
+    ));
+    started.await.unwrap();
+    let follower = tokio::spawn(send(
+        state.clone(),
+        Method::POST,
+        "/v1/systemone",
+        Some(choice_request()),
+        Some("secret"),
+        false,
+    ));
+    wait_for(|| state.metrics.requests_coalesced.get() == 1).await;
+    let extended = tokio::spawn(send(
+        state.clone(),
+        Method::POST,
+        "/v1/systemone",
+        Some(choice_request()),
+        Some("secret"),
+        true,
+    ));
+    wait_for(|| state.metrics.requests_waiting.get() == 1).await;
+    assert_eq!(state.metrics.queue_depth.get(), 3);
+    assert_eq!(state.metrics.coalesced_waiting.get(), 1);
+    let (status, _) = send(
+        state.clone(),
+        Method::POST,
+        "/v1/systemone",
+        Some(choice_request()),
+        None,
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, body) = send(
+        state.clone(),
+        Method::POST,
+        "/v1/systemone",
+        Some(choice_request()),
+        Some("secret"),
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body["error"]["code"], "queue_full");
+    drop(release);
+    let (status, original) = first.await.unwrap();
+    assert_eq!(status, StatusCode::OK);
+    let (status, shared) = follower.await.unwrap();
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(original, shared);
+    assert!(shared.get("extensions").is_none());
+    let (status, extended) = extended.await.unwrap();
+    assert_eq!(status, StatusCode::OK);
+    assert!(extended["extensions"]["raw_logits"].is_object());
+    let tokens = original["usage"]["input_tokens"].as_u64().unwrap();
+    assert_eq!(state.metrics.tokens_prefilled.get(), tokens * 2);
+    assert_eq!(state.metrics.questions_prepared.get(), 2);
+    assert_eq!(state.metrics.requests_coalesced.get(), 1);
+    assert_eq!(state.metrics.result_cache_hits.get(), 0);
+    // Coalescing alone retains no completed answers.
+    let (status, repeated) = send(
+        state.clone(),
+        Method::POST,
+        "/v1/systemone",
+        Some(choice_request()),
+        Some("secret"),
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(original, repeated);
+    assert_eq!(state.metrics.tokens_prefilled.get(), tokens * 3);
+    assert_eq!(state.metrics.queue_depth.get(), 0);
+    assert_eq!(state.metrics.coalesced_waiting.get(), 0);
+    assert_eq!(state.metrics.questions_prepared.get(), 3);
+    assert_eq!(state.metrics.prepared_waiting.get(), 0);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn canceling_the_original_caller_does_not_cancel_a_shared_result() {
+    let (state, started, release) = slow_state_with_config(ServerConfig {
+        max_queued_per_model: 1,
+        coalesce_bytes: 1024 * 1024,
+        ..Default::default()
+    });
+    let first = tokio::spawn(send(
+        state.clone(),
+        Method::POST,
+        "/v1/systemone",
+        Some(choice_request()),
+        None,
+        false,
+    ));
+    started.await.unwrap();
+    let follower = tokio::spawn(send(
+        state.clone(),
+        Method::POST,
+        "/v1/systemone",
+        Some(choice_request()),
+        None,
+        false,
+    ));
+    wait_for(|| state.metrics.requests_coalesced.get() == 1).await;
+    first.abort();
+    assert!(first.await.unwrap_err().is_cancelled());
+    assert_eq!(state.metrics.queue_depth.get(), 2);
+    drop(release);
+    let (status, shared) = follower.await.unwrap();
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        state.metrics.tokens_prefilled.get(),
+        shared["usage"]["input_tokens"].as_u64().unwrap()
+    );
+    assert_eq!(state.metrics.queue_depth.get(), 0);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn abandoning_all_shared_queued_callers_releases_capacity_without_inference() {
+    let (state, started, release) = slow_state_with_config(ServerConfig {
+        max_queued_per_model: 2,
+        coalesce_bytes: 1024 * 1024,
+        ..Default::default()
+    });
+    let active = tokio::spawn(send(
+        state.clone(),
+        Method::POST,
+        "/v1/systemone",
+        Some(choice_request()),
+        None,
+        false,
+    ));
+    started.await.unwrap();
+    let mut different = choice_request();
+    different["state"] = json!("a different exact request");
+    let queued = tokio::spawn(send(
+        state.clone(),
+        Method::POST,
+        "/v1/systemone",
+        Some(different.clone()),
+        None,
+        false,
+    ));
+    wait_for(|| state.metrics.requests_waiting.get() == 1).await;
+    let follower = tokio::spawn(send(
+        state.clone(),
+        Method::POST,
+        "/v1/systemone",
+        Some(different),
+        None,
+        false,
+    ));
+    wait_for(|| state.metrics.requests_coalesced.get() == 1).await;
+    queued.abort();
+    assert!(queued.await.unwrap_err().is_cancelled());
+    assert_eq!(state.metrics.queue_depth.get(), 3);
+    follower.abort();
+    assert!(follower.await.unwrap_err().is_cancelled());
+    wait_for(|| state.metrics.queue_depth.get() == 1 && state.metrics.requests_waiting.get() == 0)
+        .await;
+    drop(release);
+    let (status, response) = active.await.unwrap();
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        state.metrics.tokens_prefilled.get(),
+        response["usage"]["input_tokens"].as_u64().unwrap()
+    );
+    assert_eq!(state.metrics.queue_depth.get(), 0);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn coalesced_failures_keep_the_error_contract_and_are_retried() {
+    struct FailingBackend {
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+        gate: SlowGate,
+        started: Option<tokio::sync::oneshot::Sender<()>>,
+    }
+    impl Backend for FailingBackend {
+        fn id(&self) -> BackendId {
+            BackendId::Onnx
+        }
+        fn capabilities(&self) -> huncho_core::backend::Capabilities {
+            MockBackend::with_vocab(512).capabilities()
+        }
+        fn fork(
+            &mut self,
+            _: huncho_core::backend::CacheHandle,
+        ) -> huncho_core::error::Result<huncho_core::backend::CacheHandle> {
+            Err(huncho_core::error::Error::Unsupported("no cache".into()))
+        }
+        fn forward(
+            &mut self,
+            _: huncho_core::backend::ForwardInput,
+        ) -> huncho_core::error::Result<huncho_core::backend::ForwardOutput> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if let Some(started) = self.started.take() {
+                let _ = started.send(());
+                let released = self.gate.0.lock().unwrap();
+                let _ = self
+                    .gate
+                    .1
+                    .wait_timeout_while(released, std::time::Duration::from_secs(2), |released| {
+                        !*released
+                    })
+                    .unwrap();
+            }
+            Err(huncho_core::error::Error::Backend(
+                "observed failure".into(),
+            ))
+        }
+    }
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let gate = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+    let release = ReleaseSlowJob(gate.clone());
+    let (started, receiver) = tokio::sync::oneshot::channel();
+    let mut registry = ModelRegistry::new();
+    registry.insert(
+        "mock-laya",
+        engine_with_backend(
+            "mock-laya",
+            Box::new(FailingBackend {
+                calls: calls.clone(),
+                gate,
+                started: Some(started),
+            }),
+        ),
+    );
+    let state = Arc::new(AppState::new(
+        ServerConfig {
+            coalesce_bytes: 1024 * 1024,
+            ..Default::default()
+        },
+        registry,
+        Metrics::new(),
+    ));
+    let first = tokio::spawn(send(
+        state.clone(),
+        Method::POST,
+        "/v1/systemone",
+        Some(choice_request()),
+        None,
+        false,
+    ));
+    receiver.await.unwrap();
+    let follower = tokio::spawn(send(
+        state.clone(),
+        Method::POST,
+        "/v1/systemone",
+        Some(choice_request()),
+        None,
+        false,
+    ));
+    wait_for(|| state.metrics.requests_coalesced.get() == 1).await;
+    drop(release);
+    let original = first.await.unwrap();
+    assert_eq!(original.0, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(original.1["error"]["code"], "backend_error");
+    assert_eq!(original, follower.await.unwrap());
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(
+        original,
+        send(
+            state.clone(),
+            Method::POST,
+            "/v1/systemone",
+            Some(choice_request()),
+            None,
+            false
+        )
+        .await
+    );
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    assert_eq!(state.metrics.queue_depth.get(), 0);
 }

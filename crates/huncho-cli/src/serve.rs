@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use clap::Args;
 use huncho_api::{AppState, Metrics, ModelRegistry, ServerConfig};
-use huncho_core::manifest::{BackendId, Family};
+use huncho_core::manifest::{BackendId, CalibrationStatus, Family};
 
 use crate::load::{engine_from_ref, engine_from_resolved_manifest, mock_engine, BackendChoice};
 
@@ -60,12 +60,54 @@ pub struct ServeArgs {
     #[arg(long, default_value_t = false)]
     pub extensions: bool,
 
+    /// Maximum waiting requests per model; overload returns HTTP 503. Zero disables waiting.
+    #[arg(long, default_value = "32", env = "HUNCHO_MAX_QUEUED_PER_MODEL")]
+    pub max_queued_per_model: u16,
+
+    /// Bound requests preparing/holding prompts while another request executes (0 disables).
+    #[arg(long, default_value = "0", env = "HUNCHO_MAX_PREPARED_PER_MODEL")]
+    pub max_prepared_per_model: u16,
+
+    /// Per-model charged-byte budget for exact successful response reuse (0 disables).
+    /// Retains input text in memory until eviction or model unload.
+    #[arg(long, default_value = "0", env = "HUNCHO_RESULT_CACHE_BYTES")]
+    pub result_cache_bytes: usize,
+
+    /// Per-model metadata budget for identical in-flight request sharing (0 disables).
+    #[arg(long, default_value = "0", env = "HUNCHO_COALESCE_BYTES")]
+    pub coalesce_bytes: usize,
+
+    /// Enable Kev prefix reuse after qualifying the served model/device.
+    #[arg(long, default_value_t = false, env = "HUNCHO_PREFIX_CACHE")]
+    pub prefix_cache: bool,
+
+    /// Enable native equal-length question batching for qualified models/devices.
+    #[arg(long, env = "HUNCHO_MAX_BATCH_TOKENS", conflicts_with = "prefix_cache")]
+    pub max_batch_tokens: Option<usize>,
+
+    /// Enable qualified F3 candidate-only vocabulary projection.
+    #[arg(long, default_value_t = false, env = "HUNCHO_CANDIDATE_READOUT")]
+    pub candidate_readout: bool,
+
+    /// Pinned conformance suite for optimized serving, MODEL=PATH (repeatable).
+    /// Startup checks both external goldens and independent-forward parity.
+    #[arg(long = "qualification-golden")]
+    pub qualification_golden: Vec<String>,
+
     /// Model cache directory (also used by HF resolution; OPS-04). Also read from `HUNCHO_CACHE_DIR`.
     #[arg(long, env = "HUNCHO_CACHE_DIR")]
     pub cache_dir: Option<String>,
 }
 
 fn load_models(args: &ServeArgs) -> anyhow::Result<ModelRegistry> {
+    anyhow::ensure!(
+        args.max_batch_tokens != Some(0),
+        "max batch tokens must be positive"
+    );
+    anyhow::ensure!(
+        !(args.prefix_cache && args.max_batch_tokens.is_some()),
+        "prefix reuse and batching cannot be combined yet"
+    );
     let mut registry = ModelRegistry::new();
 
     if args.mock {
@@ -77,7 +119,10 @@ fn load_models(args: &ServeArgs) -> anyhow::Result<ModelRegistry> {
         for name in &names {
             let engine = mock_engine(name, Family::F1, BackendId::Onnx, "fp32", 1.0)?;
             let device = engine.device().to_owned();
-            registry.insert(name.clone(), engine);
+            registry.insert(
+                name.clone(),
+                engine.with_result_cache(args.result_cache_bytes),
+            );
             tracing::info!("registered mock model `{name}` on {device} (F1 / onnx / fp32)");
         }
     }
@@ -93,7 +138,10 @@ fn load_models(args: &ServeArgs) -> anyhow::Result<ModelRegistry> {
         )?;
         let name = engine.manifest().name.clone();
         let device = engine.device().to_owned();
-        registry.insert(name.clone(), engine);
+        registry.insert(
+            name.clone(),
+            engine.with_result_cache(args.result_cache_bytes),
+        );
         tracing::info!("registered model `{name}` on {device}");
     }
 
@@ -120,14 +168,88 @@ fn load_models(args: &ServeArgs) -> anyhow::Result<ModelRegistry> {
         )?;
         let name = engine.manifest().name.clone();
         let device = engine.device().to_owned();
-        registry.insert(name.clone(), engine);
+        registry.insert(
+            name.clone(),
+            engine.with_result_cache(args.result_cache_bytes),
+        );
         tracing::info!("registered model `{name}` on {device} (from `{model}`)");
     }
 
     if registry.is_empty() {
         tracing::warn!("no models registered; /v1/systemone will return 422 for every model");
     }
+    qualify_optimizations(&registry, args)?;
     Ok(registry)
+}
+
+fn qualify_optimizations(registry: &ModelRegistry, args: &ServeArgs) -> anyhow::Result<()> {
+    use huncho_core::conformance::{load_suite, run_suite_with_options, ConformanceThresholds};
+    use huncho_core::engine::EvalOptions;
+    let mut paths = std::collections::BTreeMap::new();
+    for binding in &args.qualification_golden {
+        let (name, path) = binding
+            .split_once('=')
+            .ok_or_else(|| anyhow::anyhow!("qualification golden must be MODEL=PATH"))?;
+        anyhow::ensure!(
+            !name.is_empty() && !path.is_empty(),
+            "qualification golden must be MODEL=PATH"
+        );
+        anyhow::ensure!(
+            registry.get(name).is_some(),
+            "qualification model `{name}` is not registered"
+        );
+        anyhow::ensure!(
+            paths.insert(name, path).is_none(),
+            "duplicate qualification binding for `{name}`"
+        );
+    }
+    for (name, engine) in registry.models() {
+        anyhow::ensure!(
+            engine.calibration().status != CalibrationStatus::Pending,
+            "serving `{name}` requires fitted calibration; {}:{} is pending",
+            engine.backend_id(),
+            engine.dtype()
+        );
+        let refit = engine.calibration().status == CalibrationStatus::Refit;
+        let kernel_profile = [
+            "projection_chunk_rows",
+            "attention_compute_dtype",
+            "device_path",
+        ]
+        .iter()
+        .any(|key| engine.execution_metadata().contains_key(*key));
+        let opts = EvalOptions {
+            prefix_cache: args.prefix_cache && engine.supports_prefix_cache(),
+            max_batch_tokens: args.max_batch_tokens.filter(|_| engine.supports_batch()),
+            reference_readout: !args.candidate_readout,
+            prepare_all: args.max_prepared_per_model > 0 && engine.family() != Family::F5,
+            ..Default::default()
+        };
+        if !opts.prefix_cache
+            && opts.max_batch_tokens.is_none()
+            && !(args.candidate_readout && engine.family() == Family::F3)
+            && !paths.contains_key(name.as_str())
+            && !refit
+            && !kernel_profile
+            && !opts.prepare_all
+        {
+            continue;
+        }
+        let path=paths.get(name.as_str()).ok_or_else(||anyhow::anyhow!("serving a refitted or optimized variant of `{name}` requires --qualification-golden {name}=/path/to/pinned-golden.json"))?;
+        let suite = load_suite(path)?;
+        anyhow::ensure!(!(refit || kernel_profile) || suite.cases.iter().any(|case| !case.targets.is_empty()),
+            "refitted or changed-kernel serving for `{name}` requires held-out golden vectors with observed target labels");
+        let report =
+            run_suite_with_options(engine, &suite, &ConformanceThresholds::default(), &opts)?;
+        anyhow::ensure!(report.passed,"qualification failed for `{name}` on {} / {}: golden delta={}, argmax={}, ECE drift={}, parity={:?}",engine.device(),engine.dtype(),report.max_prob_delta,report.argmax_agreement,report.ece,report.optimization_parity);
+        tracing::info!(
+            model = name,
+            device = engine.device(),
+            dtype = engine.dtype(),
+            "qualification passed against pinned goldens (with independent parity for optimized paths)"
+        );
+    }
+    Ok(())
 }
 
 pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
@@ -137,17 +259,353 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
         auth_token: args.auth_token.clone(),
         metrics: true,
         default_extensions: args.extensions,
+        max_queued_per_model: args.max_queued_per_model,
+        max_prepared_per_model: args.max_prepared_per_model,
+        coalesce_bytes: args.coalesce_bytes,
+        prefix_cache: args.prefix_cache,
+        max_batch_tokens: args.max_batch_tokens,
+        candidate_readout: args.candidate_readout,
     };
 
     let state = AppState::new(config, registry, Metrics::new());
-    tracing::info!(
-        "huncho starting (bind={}, mock={})",
-        args.bind,
-        args.mock,
-    );
+    tracing::info!("huncho starting (bind={}, mock={})", args.bind, args.mock,);
 
     huncho_api::serve(Arc::new(state)).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod qualification_tests {
+    use super::*;
+    use clap::Parser;
+    use huncho_core::backend::{Backend, CacheHandle, Capabilities, ForwardInput, ForwardOutput};
+    use huncho_core::conformance::{GoldenCase, GoldenSuite};
+    use huncho_core::engine::{Engine, EvalOptions};
+    use huncho_core::head::HeadParams;
+    use huncho_core::tensor::Tensor;
+    use huncho_core::tokenizer::SimpleTokenizer;
+    use std::collections::BTreeMap;
+
+    struct BatchBackend {
+        drift: f32,
+        execution_metadata: BTreeMap<String, String>,
+    }
+    impl Backend for BatchBackend {
+        fn id(&self) -> BackendId {
+            BackendId::Onnx
+        }
+        fn capabilities(&self) -> Capabilities {
+            Capabilities {
+                id: BackendId::Onnx,
+                dtype: "fp32".into(),
+                families: vec![Family::F1],
+                extra: self.execution_metadata.clone(),
+                ..Default::default()
+            }
+        }
+        fn supports_batch(&self) -> bool {
+            true
+        }
+        fn forward(&mut self, input: ForwardInput) -> huncho_core::Result<ForwardOutput> {
+            output(input, 0.)
+        }
+        fn forward_batch(
+            &mut self,
+            inputs: Vec<ForwardInput>,
+        ) -> huncho_core::Result<Vec<ForwardOutput>> {
+            inputs
+                .into_iter()
+                .map(|input| output(input, self.drift))
+                .collect()
+        }
+        fn fork(&mut self, _: CacheHandle) -> huncho_core::Result<CacheHandle> {
+            unreachable!()
+        }
+    }
+    fn output(input: ForwardInput, drift: f32) -> huncho_core::Result<ForwardOutput> {
+        let values = (0..input.positions.len())
+            .map(|row| if row == 0 { drift } else { 1. })
+            .collect();
+        Ok(ForwardOutput::Logits {
+            values: Tensor::new(vec![input.positions.len(), 1], values)?,
+            positions: input.positions,
+        })
+    }
+    fn registry(drift: f32) -> ModelRegistry {
+        registry_with_calibration(drift, CalibrationStatus::Fit)
+    }
+    fn registry_with_calibration(drift: f32, status: CalibrationStatus) -> ModelRegistry {
+        registry_with_profile(drift, status, false)
+    }
+    fn registry_with_profile(
+        drift: f32,
+        status: CalibrationStatus,
+        kernel_profile: bool,
+    ) -> ModelRegistry {
+        registry_with_execution_metadata(
+            drift,
+            status,
+            if kernel_profile {
+                BTreeMap::from([("projection_chunk_rows".into(), "64".into())])
+            } else {
+                BTreeMap::new()
+            },
+        )
+    }
+    fn registry_with_execution_metadata(
+        drift: f32,
+        status: CalibrationStatus,
+        execution_metadata: BTreeMap<String, String>,
+    ) -> ModelRegistry {
+        let mut manifest = crate::load::mock_manifest("qual", Family::F1, "fp32", 1.).unwrap();
+        manifest.calibration.default.status = status;
+        for entry in manifest.calibration.entries.values_mut() {
+            entry.status = status;
+        }
+        manifest.prompt_contract.template = "laya-v1".into();
+        let engine = Engine::new(
+            manifest,
+            Box::new(BatchBackend {
+                drift,
+                execution_metadata,
+            }),
+            Box::new(SimpleTokenizer::new(32768)),
+            HeadParams::default(),
+            BackendId::Onnx,
+            "fp32",
+        )
+        .unwrap();
+        let mut registry = ModelRegistry::new();
+        registry.insert("qual", engine);
+        registry
+    }
+    fn args() -> ServeArgs {
+        let crate::Command::Serve(args) =
+            crate::Cli::try_parse_from(["huncho", "serve", "--max-batch-tokens", "1024"])
+                .unwrap()
+                .command
+        else {
+            panic!("serve")
+        };
+        args
+    }
+    fn suite() -> GoldenSuite {
+        // Fixed analytical probabilities for logits [0,1], not regenerated
+        // native reference vectors. Two independent identical questions batch.
+        let low = 1. / (1. + 1f32.exp());
+        let request = serde_json::from_value(
+            serde_json::json!({"model":"qual","state":"state","questions":{
+                "a":{"type":"choice","instructions":"choose","criteria":{"a":null,"b":null}},
+                "b":{"type":"choice","instructions":"choose","criteria":{"a":null,"b":null}}
+            }}),
+        )
+        .unwrap();
+        GoldenSuite {
+            schema_version: "1.0".into(),
+            family: "F1".into(),
+            hash: None,
+            cases: vec![GoldenCase {
+                id: "batch".into(),
+                request,
+                expected: BTreeMap::from([
+                    (
+                        "a".into(),
+                        BTreeMap::from([("a".into(), low), ("b".into(), 1. - low)]),
+                    ),
+                    (
+                        "b".into(),
+                        BTreeMap::from([("a".into(), low), ("b".into(), 1. - low)]),
+                    ),
+                ]),
+                targets: Default::default(),
+            }],
+        }
+    }
+
+    #[test]
+    fn preparing_serving_requires_nonvacuous_paired_qualification() {
+        let registry = registry(0.);
+        let mut args = args();
+        args.max_batch_tokens = None;
+        args.max_prepared_per_model = 1;
+        assert!(qualify_optimizations(&registry, &args)
+            .unwrap_err()
+            .to_string()
+            .contains("requires --qualification-golden"));
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("golden.json");
+        huncho_core::conformance::save_suite(&suite(), &path).unwrap();
+        args.qualification_golden = vec![format!("qual={}", path.display())];
+        qualify_optimizations(&registry, &args).unwrap();
+        let report = huncho_core::conformance::run_suite_with_options(
+            &registry.get("qual").unwrap(),
+            &suite(),
+            &Default::default(),
+            &EvalOptions {
+                prepare_all: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(report.passed);
+        assert_eq!(report.work.prepared_questions, 2);
+        assert_eq!(report.optimization_parity.unwrap().max_prob_delta, 0.);
+    }
+
+    #[test]
+    fn optimized_serving_requires_actual_successful_qualification() {
+        let registry = registry(0.);
+        let mut args = args();
+        assert!(qualify_optimizations(&registry, &args)
+            .unwrap_err()
+            .to_string()
+            .contains("requires --qualification-golden"));
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("golden.json");
+        huncho_core::conformance::save_suite(&suite(), &path).unwrap();
+        args.qualification_golden = vec![format!("qual={}", path.display())];
+        qualify_optimizations(&registry, &args).unwrap();
+        let mut missing_batch = suite();
+        missing_batch.cases[0].request.questions.shift_remove("b");
+        missing_batch.cases[0].expected.remove("b");
+        huncho_core::conformance::save_suite(&missing_batch, &path).unwrap();
+        assert!(qualify_optimizations(&registry, &args).is_err());
+        huncho_core::conformance::save_suite(&suite(), &path).unwrap();
+        args.qualification_golden
+            .push(format!("qual={}", path.display()));
+        assert!(qualify_optimizations(&registry, &args).is_err());
+        args.qualification_golden = vec![format!("unknown={}", path.display())];
+        assert!(qualify_optimizations(&registry, &args).is_err());
+    }
+
+    #[test]
+    fn explicit_baseline_qualification_is_checked_without_optimization_flags() {
+        let registry = registry(0.);
+        let mut args = args();
+        args.max_batch_tokens = None;
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("golden.json");
+        args.qualification_golden = vec![format!("qual={}", path.display())];
+        assert!(qualify_optimizations(&registry, &args).is_err());
+        let mut golden = suite();
+        huncho_core::conformance::save_suite(&golden, &path).unwrap();
+        qualify_optimizations(&registry, &args).unwrap();
+        golden.cases[0].expected.insert(
+            "a".into(),
+            BTreeMap::from([("a".into(), 0.8), ("b".into(), 0.2)]),
+        );
+        huncho_core::conformance::save_suite(&golden, &path).unwrap();
+        assert!(qualify_optimizations(&registry, &args)
+            .unwrap_err()
+            .to_string()
+            .contains("qualification failed"));
+    }
+
+    #[test]
+    fn pending_is_rejected_and_refits_require_labeled_heldout_qualification() {
+        let mut args = args();
+        args.max_batch_tokens = None;
+        assert!(qualify_optimizations(
+            &registry_with_calibration(0., CalibrationStatus::Pending),
+            &args
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("is pending"));
+        let registry = registry_with_calibration(0., CalibrationStatus::Refit);
+        assert!(qualify_optimizations(&registry, &args)
+            .unwrap_err()
+            .to_string()
+            .contains("requires --qualification-golden"));
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("golden.json");
+        args.qualification_golden = vec![format!("qual={}", path.display())];
+        let mut golden = suite();
+        huncho_core::conformance::save_suite(&golden, &path).unwrap();
+        assert!(qualify_optimizations(&registry, &args)
+            .unwrap_err()
+            .to_string()
+            .contains("observed target labels"));
+        golden.cases[0].targets =
+            BTreeMap::from([("a".into(), "b".into()), ("b".into(), "b".into())]);
+        huncho_core::conformance::save_suite(&golden, &path).unwrap();
+        qualify_optimizations(&registry, &args).unwrap();
+        golden.cases[0].targets.remove("b");
+        huncho_core::conformance::save_suite(&golden, &path).unwrap();
+        assert!(qualify_optimizations(&registry, &args).is_err());
+    }
+
+    #[test]
+    fn changed_kernels_require_labeled_qualification_even_with_fit_metadata() {
+        for (key, value) in [
+            ("projection_chunk_rows", "64"),
+            ("attention_compute_dtype", "fp32"),
+            ("device_path", "modernbert-cuda"),
+            ("device_path", "qwen-f3-cuda"),
+        ] {
+            let registry = registry_with_execution_metadata(
+                0.0,
+                CalibrationStatus::Fit,
+                BTreeMap::from([(key.into(), value.into())]),
+            );
+            let mut args = args();
+            args.max_batch_tokens = None;
+            assert!(qualify_optimizations(&registry, &args)
+                .unwrap_err()
+                .to_string()
+                .contains("requires --qualification-golden"));
+            let tmp = tempfile::tempdir().unwrap();
+            let path = tmp.path().join("golden.json");
+            args.qualification_golden = vec![format!("qual={}", path.display())];
+            let mut golden = suite();
+            huncho_core::conformance::save_suite(&golden, &path).unwrap();
+            assert!(qualify_optimizations(&registry, &args)
+                .unwrap_err()
+                .to_string()
+                .contains("observed target labels"));
+            golden.cases[0].targets =
+                BTreeMap::from([("a".into(), "b".into()), ("b".into(), "b".into())]);
+            huncho_core::conformance::save_suite(&golden, &path).unwrap();
+            qualify_optimizations(&registry, &args).unwrap();
+            let report = huncho_core::conformance::run_suite(
+                &registry.get("qual").unwrap(),
+                &golden,
+                &Default::default(),
+            )
+            .unwrap();
+            assert_eq!(report.execution_metadata[key], value);
+        }
+    }
+
+    #[test]
+    fn paired_gate_rejects_drift_that_passes_the_external_golden_threshold() {
+        let registry = registry(0.0008);
+        let engine = registry.get("qual").unwrap();
+        let report = huncho_core::conformance::run_suite_with_options(
+            &engine,
+            &suite(),
+            &Default::default(),
+            &EvalOptions {
+                max_batch_tokens: Some(1024),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(report.max_prob_delta < 0.001);
+        assert_eq!(report.argmax_agreement, 1.);
+        assert!(report.ece < 0.02);
+        assert!(report.optimization_parity.unwrap().max_prob_delta > 1e-4);
+        assert!(!report.passed);
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("golden.json");
+        huncho_core::conformance::save_suite(&suite(), &path).unwrap();
+        let mut args = args();
+        args.qualification_golden = vec![format!("qual={}", path.display())];
+        assert!(qualify_optimizations(&registry, &args)
+            .unwrap_err()
+            .to_string()
+            .contains("qualification failed"));
+    }
 }
 
 #[cfg(all(test, feature = "clef", feature = "onnx"))]

@@ -19,7 +19,7 @@ use huncho_core::manifest::{
 };
 #[cfg(feature = "tokenizers")]
 use huncho_core::tokenizer::HfTokenizer;
-use huncho_core::tokenizer::{SimpleTokenizer, Tokenizer};
+use huncho_core::tokenizer::{CachedTokenizer, SimpleTokenizer, Tokenizer};
 
 /// User intent is separate from the runtime id used for inference/calibration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,7 +59,7 @@ fn available_backends() -> Vec<BackendId> {
 /// reference for the mock backend and the conformance fixtures).
 #[allow(unused_variables)]
 fn load_tokenizer(manifest: &ModelManifest, dir: &Path) -> Result<Box<dyn Tokenizer>> {
-    match &manifest.backbone.tokenizer {
+    let tokenizer: Result<Box<dyn Tokenizer>> = match &manifest.backbone.tokenizer {
         Some(path) => {
             #[cfg(feature = "tokenizers")]
             {
@@ -82,7 +82,32 @@ fn load_tokenizer(manifest: &ModelManifest, dir: &Path) -> Result<Box<dyn Tokeni
             }
         }
         None => Ok(Box::new(SimpleTokenizer::new(32768)) as Box<dyn Tokenizer>),
+    };
+    let tokenizer = tokenizer?;
+    let cache_bytes = match std::env::var("HUNCHO_TOKEN_CACHE_BYTES") {
+        Ok(value) => value.parse::<usize>().map_err(|_| {
+            Error::Package("HUNCHO_TOKEN_CACHE_BYTES must be a nonnegative integer".into())
+        })?,
+        Err(std::env::VarError::NotPresent) => 0,
+        Err(_) => return Err(Error::Package("invalid HUNCHO_TOKEN_CACHE_BYTES value".into())),
+    };
+    if cache_bytes == 0 {
+        Ok(tokenizer)
+    } else {
+        log::info!("retaining exact tokenizer encodings up to {cache_bytes} charged bytes");
+        Ok(Box::new(CachedTokenizer::new(tokenizer, cache_bytes)))
     }
+}
+
+fn configure_prompt_cache(engine: Engine) -> Result<Engine> {
+    let bytes = match std::env::var("HUNCHO_PROMPT_CACHE_BYTES") {
+        Ok(value) => value.parse::<usize>().map_err(|_| {
+            Error::Package("HUNCHO_PROMPT_CACHE_BYTES must be a nonnegative integer".into())
+        })?,
+        Err(std::env::VarError::NotPresent) => 0,
+        Err(_) => return Err(Error::Package("invalid HUNCHO_PROMPT_CACHE_BYTES value".into())),
+    };
+    Ok(engine.with_prompt_cache(bytes))
 }
 
 /// Build an in-memory mock model package and engine for offline/demo serving.
@@ -101,6 +126,7 @@ pub fn mock_engine(
     );
     let tokenizer: Box<dyn Tokenizer> = Box::new(SimpleTokenizer::new(32768));
     Engine::new(manifest, backend, tokenizer, HeadParams::default(), backend_id, dtype)
+        .and_then(configure_prompt_cache)
 }
 
 /// Load a manifest and drive it with the mock backend (no weights required).
@@ -117,6 +143,7 @@ pub fn mock_engine_from_manifest(path: impl AsRef<Path>) -> Result<Engine> {
     );
     let tokenizer: Box<dyn Tokenizer> = Box::new(SimpleTokenizer::new(32768));
     Engine::new(manifest, backend, tokenizer, HeadParams::default(), BackendId::Onnx, "fp32")
+        .and_then(configure_prompt_cache)
 }
 
 /// Build a mock [`ModelManifest`].
@@ -226,6 +253,7 @@ pub fn engine_from_manifest(
     };
     let backend = load_backend(&manifest, backend_id, &dtype, dir)?;
     Engine::new(manifest, backend, tokenizer, HeadParams::default(), backend_id, dtype)
+        .and_then(configure_prompt_cache)
 }
 
 fn load_backend(
@@ -266,7 +294,9 @@ fn load_candle(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<
             manifest.backbone.max_context,
             dtype,
             huncho_backend::device::device_from_env()?,
-        )?;
+        )?
+        .with_projection_chunk_rows(projection_chunk_rows_from_env()?)?
+        .with_fp32_attention(fp32_attention_from_env()?)?;
         return Ok(Box::new(backend));
     }
     // F3 (Bespoke-Nimble) packages are candidate-logit PEFT adapters over a
@@ -279,11 +309,12 @@ fn load_candle(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<
         // downloaded into the base repo's own snapshot dir (same cache).
         let adapter_dir = dir;
         let base_dir = adapter_base_dir(manifest, adapter_dir);
-        let backend = Qwen3_5Backend::load(
+        let backend = Qwen3_5Backend::load_on_device(
             &base_dir,
             Some(adapter_dir),
             manifest.backbone.max_context,
             dtype.to_string(),
+            huncho_backend::device::opt_in_device_from_env()?,
         )
         .map_err(|e| {
             Error::Package(format!(
@@ -291,6 +322,9 @@ fn load_candle(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<
                 manifest.name
             ))
         })?;
+        let backend = backend
+            .with_projection_chunk_rows(projection_chunk_rows_from_env()?)?
+            .with_fp32_attention(fp32_attention_from_env()?)?;
         return Ok(Box::new(backend) as Box<dyn Backend>);
     }
     let artifact = manifest
@@ -299,14 +333,40 @@ fn load_candle(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<
     let weights = dir.join(&artifact.path);
     // The ModernBERT config is stored next to the weights as `config.json`.
     let config = dir.join("config.json");
-    let backend = CandleBackend::load(
+    let backend = CandleBackend::load_on_device(
         &config,
         &weights,
         manifest.backbone.max_context,
         dtype.to_string(),
+        huncho_backend::device::opt_in_device_from_env()?,
     )
     .map_err(|e| Error::Package(format!("failed to load candle backend: {e}")))?;
     Ok(Box::new(backend) as Box<dyn Backend>)
+}
+
+#[cfg(feature = "candle")]
+fn projection_chunk_rows_from_env() -> Result<usize> {
+    match std::env::var("HUNCHO_PROJECTION_CHUNK_ROWS") {
+        Ok(value) => value.parse::<usize>().map_err(|_| {
+            Error::Request("HUNCHO_PROJECTION_CHUNK_ROWS must be an integer from 0 to 4096".into())
+        }),
+        Err(std::env::VarError::NotPresent) => Ok(0),
+        Err(_) => Err(Error::Request(
+            "HUNCHO_PROJECTION_CHUNK_ROWS must be valid UTF-8".into(),
+        )),
+    }
+}
+
+#[cfg(feature = "candle")]
+fn fp32_attention_from_env() -> Result<bool> {
+    match std::env::var("HUNCHO_ATTENTION_FP32") {
+        Ok(value) if matches!(value.as_str(), "1" | "true") => Ok(true),
+        Ok(value) if matches!(value.as_str(), "0" | "false") => Ok(false),
+        Err(std::env::VarError::NotPresent) => Ok(false),
+        _ => Err(Error::Request(
+            "HUNCHO_ATTENTION_FP32 must be 0, 1, false or true".into(),
+        )),
+    }
 }
 
 /// Locate the base-language-model directory for a Kev or Nimble manifest from the

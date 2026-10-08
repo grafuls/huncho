@@ -3,9 +3,9 @@
 use std::path::{Path, PathBuf};
 
 use clap::Args;
-use serde::Deserialize;
-use huncho_core::calibration::fit_temperature;
+use huncho_core::calibration::{bucket_size, fit_temperature};
 use huncho_core::manifest::{BackendId, CalibrationEntry, CalibrationStatus, ModelManifest};
+use serde::Deserialize;
 
 use crate::load::{resolve_model, BackendChoice};
 
@@ -46,14 +46,79 @@ pub struct CalibrateArgs {
     pub data: String,
 
     /// Write the fitted temperature back into the manifest (default true).
-    #[arg(long, default_value_t = true)]
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set, num_args = 0..=1, default_missing_value = "true")]
     pub save: bool,
+
+    /// Emit fitted entry and fitting statistics as standalone JSON.
+    #[arg(long, default_value_t = false)]
+    pub json: bool,
 }
 
 #[derive(Deserialize)]
 struct FitData {
     rows: Vec<Vec<f32>>,
     targets: Vec<usize>,
+    /// Optional row-aligned question types for per-type/cardinality fitting.
+    #[serde(default)]
+    qtypes: Option<Vec<String>>,
+}
+
+fn fit_entry(
+    data: &FitData,
+    confidence: huncho_core::manifest::ConfidenceDef,
+) -> anyhow::Result<(CalibrationEntry, f64)> {
+    let (temperature, nll) = fit_temperature(&data.rows, &data.targets)?;
+    let mut per_type = std::collections::BTreeMap::new();
+    let mut by_options = std::collections::BTreeMap::new();
+    if let Some(qtypes) = &data.qtypes {
+        anyhow::ensure!(
+            qtypes.len() == data.rows.len(),
+            "qtypes must match the number of logit rows"
+        );
+        let mut groups = std::collections::BTreeMap::<String, Vec<usize>>::new();
+        for (index, qtype) in qtypes.iter().enumerate() {
+            anyhow::ensure!(
+                matches!(qtype.as_str(), "choice" | "score" | "noul"),
+                "unknown question type `{qtype}`"
+            );
+            anyhow::ensure!(
+                qtype != "noul" || data.rows[index].len() == 2,
+                "noul fit rows require two logits"
+            );
+            groups.entry(qtype.clone()).or_default().push(index);
+            groups
+                .entry(format!("{qtype}:{}", bucket_size(data.rows[index].len())))
+                .or_default()
+                .push(index);
+        }
+        for (key, indices) in groups {
+            let rows = indices
+                .iter()
+                .map(|&index| data.rows[index].clone())
+                .collect::<Vec<_>>();
+            let targets = indices
+                .iter()
+                .map(|&index| data.targets[index])
+                .collect::<Vec<_>>();
+            let fitted = fit_temperature(&rows, &targets)?.0;
+            if key.contains(':') {
+                by_options.insert(key, fitted);
+            } else {
+                per_type.insert(key, fitted);
+            }
+        }
+    }
+    Ok((
+        CalibrationEntry {
+            temperature,
+            // Never inherit DEFAULT overrides that could shadow this variant's fit.
+            per_type_temperatures: (!per_type.is_empty()).then_some(per_type),
+            temperature_by_options: (!by_options.is_empty()).then_some(by_options),
+            confidence,
+            status: CalibrationStatus::Refit,
+        },
+        nll,
+    ))
 }
 
 pub fn run(args: CalibrateArgs) -> anyhow::Result<()> {
@@ -75,34 +140,23 @@ pub fn run(args: CalibrateArgs) -> anyhow::Result<()> {
     let backend = BackendId::parse(&args.backend)?;
     let data: FitData = serde_json::from_slice(&std::fs::read(&args.data)?)?;
     tracing::info!("fitting temperature on {} rows", data.rows.len());
-    let (temperature, nll) = fit_temperature(&data.rows, &data.targets)?;
+    let manifest_path = Path::new(&manifest_path);
+    let mut manifest = ModelManifest::load(manifest_path)?;
+    let key = huncho_core::manifest::CalibrationConfig::key_for(&backend.to_string(), &args.dtype);
+    let confidence = manifest
+        .calibration
+        .resolve(&backend.to_string(), &args.dtype)
+        .confidence;
+    let (entry, nll) = fit_entry(&data, confidence)?;
+    let temperature = entry.temperature;
     tracing::info!(
         "fitted temperature={temperature:.4} (nll={nll:.4}) for {backend}:{}",
         args.dtype
     );
 
-    let manifest_path = Path::new(&manifest_path);
-    let mut manifest = ModelManifest::load(manifest_path)?;
-    let key = huncho_core::manifest::CalibrationConfig::key_for(&backend.to_string(), &args.dtype);
-    let conf = manifest.calibration.default.confidence.clone();
-    manifest.calibration.entries.insert(
-        key.clone(),
-        CalibrationEntry {
-            temperature,
-            per_type_temperatures: manifest
-                .calibration
-                .default
-                .per_type_temperatures
-                .clone(),
-            temperature_by_options: manifest
-                .calibration
-                .default
-                .temperature_by_options
-                .clone(),
-            confidence: conf,
-            status: CalibrationStatus::Refit,
-        },
-    );
+    manifest.calibration.entries.insert(key.clone(), entry);
+    // The old shared evaluation hash cannot identify newly supplied fit data.
+    manifest.calibration.eval_set_hash = None;
     if args.save {
         let bytes = serde_json::to_vec_pretty(&manifest)?;
         std::fs::write(manifest_path, bytes)?;
@@ -112,6 +166,19 @@ pub fn run(args: CalibrateArgs) -> anyhow::Result<()> {
         );
     } else {
         tracing::info!("dry-run: not writing manifest");
+    }
+
+    if args.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "manifest": manifest_path,
+                "backend": backend.to_string(), "dtype": args.dtype,
+                "fitting_rows": data.rows.len(), "fit_nll": nll,
+                "entry": manifest.calibration.entries[&key], "saved": args.save,
+                "qualification": "refit only; held-out runtime conformance remains required"
+            }))?
+        );
     }
 
     Ok(())
@@ -212,6 +279,7 @@ mod tests {
             dtype: "fp32".into(),
             data: data.to_string_lossy().to_string(),
             save: true,
+            json: false,
         };
         run(args).unwrap();
 
@@ -228,7 +296,11 @@ mod tests {
         let mf = tmp.path().join("huncho-model.json");
         test_manifest(&mf);
         let data = tmp.path().join("data.json");
-        fs::write(&data, serde_json::json!({ "rows": [[1.0, 2.0]], "targets": [1] }).to_string()).unwrap();
+        fs::write(
+            &data,
+            serde_json::json!({ "rows": [[1.0, 2.0]], "targets": [1] }).to_string(),
+        )
+        .unwrap();
 
         let args = CalibrateArgs {
             manifest: Some(mf.to_string_lossy().to_string()),
@@ -240,10 +312,97 @@ mod tests {
             dtype: "fp32".into(),
             data: data.to_string_lossy().to_string(),
             save: false,
+            json: false,
         };
         run(args).unwrap();
 
         let m = ModelManifest::load(&mf).unwrap();
         assert!(m.calibration.entries.is_empty());
+    }
+
+    #[test]
+    fn scalar_refit_does_not_inherit_overrides_or_replace_variant_confidence() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mf = tmp.path().join("huncho-model.json");
+        test_manifest(&mf);
+        let mut manifest = ModelManifest::load(&mf).unwrap();
+        manifest.calibration.default.per_type_temperatures =
+            Some(BTreeMap::from([("choice".into(), 99.0)]));
+        manifest.calibration.default.temperature_by_options =
+            Some(BTreeMap::from([("choice:2".into(), 88.0)]));
+        manifest.calibration.eval_set_hash = Some("old evaluation set".into());
+        let mut old = manifest.calibration.default.clone();
+        old.confidence = ConfidenceDef::Entropy;
+        manifest.calibration.entries.insert("onnx:fp32".into(), old);
+        fs::write(&mf, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        let data = tmp.path().join("fit.json");
+        fs::write(
+            &data,
+            serde_json::json!({"rows": [[1.0, 2.0]], "targets": [1]}).to_string(),
+        )
+        .unwrap();
+        run(CalibrateArgs {
+            manifest: Some(mf.to_string_lossy().into()),
+            model: None,
+            revision: None,
+            token: None,
+            cache_dir: None,
+            backend: "onnx".into(),
+            dtype: "fp32".into(),
+            data: data.to_string_lossy().into(),
+            save: true,
+            json: false,
+        })
+        .unwrap();
+        let updated = ModelManifest::load(&mf).unwrap();
+        let entry = updated.calibration.resolve("onnx", "fp32");
+        assert!(entry.per_type_temperatures.is_none());
+        assert!(entry.temperature_by_options.is_none());
+        assert!(matches!(entry.confidence, ConfidenceDef::Entropy));
+        assert!(updated.calibration.eval_set_hash.is_none());
+        assert_eq!(
+            updated.calibration.default.temperature_by_options.unwrap()["choice:2"],
+            88.0
+        );
+    }
+
+    #[test]
+    fn typed_refit_fits_only_supplied_types_and_buckets() {
+        let data = FitData {
+            rows: vec![
+                vec![2.0, 0.0],
+                vec![0.0, 2.0],
+                vec![1.0, 2.0, 0.0],
+                vec![1.0, 0.0],
+            ],
+            targets: vec![0, 0, 1, 1],
+            qtypes: Some(vec![
+                "choice".into(),
+                "choice".into(),
+                "score".into(),
+                "noul".into(),
+            ]),
+        };
+        let (entry, _) = fit_entry(&data, ConfidenceDef::Peak).unwrap();
+        let buckets = entry.temperature_by_options.unwrap();
+        assert_eq!(buckets.len(), 3);
+        assert_eq!(
+            buckets["choice:2"],
+            fit_temperature(&data.rows[..2], &data.targets[..2])
+                .unwrap()
+                .0
+        );
+        assert_eq!(
+            buckets["score:3-5"],
+            fit_temperature(&data.rows[2..3], &data.targets[2..3])
+                .unwrap()
+                .0
+        );
+        assert!(!buckets.contains_key("choice:11+"));
+        let mut bad = data;
+        bad.qtypes = Some(vec!["choice".into()]);
+        assert!(fit_entry(&bad, ConfidenceDef::Peak).is_err());
+        bad.qtypes = Some(vec!["unknown".into(); 4]);
+        assert!(fit_entry(&bad, ConfidenceDef::Peak).is_err());
     }
 }

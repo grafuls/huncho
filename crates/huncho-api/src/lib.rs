@@ -4,6 +4,7 @@
 //! optional bearer auth, Prometheus `/metrics`, and engine extensions.
 
 pub mod auth;
+mod coalesce;
 pub mod config;
 pub mod metrics;
 pub mod routes;

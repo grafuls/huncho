@@ -3,12 +3,19 @@
 use std::collections::BTreeMap;
 use std::time::Instant;
 
-use clap::Args;
+use clap::{Args, ValueEnum};
 use huncho_core::contract::{Instructions, Question, StateValue, SystemOneRequest};
-use huncho_core::engine::{Engine, EvalOptions};
+use huncho_core::engine::{Engine, EvalOptions, EvalStats};
 use huncho_core::manifest::{BackendId, Family};
 
 use crate::load::{engine_from_resolved_manifest, mock_engine, resolve_model, BackendChoice};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Workload {
+    Choice,
+    Mixed,
+}
 
 #[derive(Args)]
 pub struct BenchArgs {
@@ -41,13 +48,45 @@ pub struct BenchArgs {
     #[arg(long)]
     pub dtype: Option<String>,
 
-    /// Number of questions per request (1, 5, or 20).
+    /// Number of questions per request (typically 1, 5, or 20).
     #[arg(long, default_value = "1")]
     pub questions: usize,
 
     /// Number of timed iterations.
     #[arg(long, default_value = "50")]
     pub iterations: usize,
+
+    /// Concurrent in-process clients; reports closed-loop throughput.
+    #[arg(long, default_value = "1")]
+    pub concurrency: usize,
+
+    /// Choice questions only, or a mix of choice/score/noul.
+    #[arg(long, value_enum, default_value = "choice")]
+    pub workload: Workload,
+
+    /// Repeat identical requests instead of varying state per iteration.
+    #[arg(long, default_value_t = false)]
+    pub repeat_inputs: bool,
+
+    /// Per-model charged-byte budget for exact response reuse (0 disables).
+    #[arg(long, default_value = "0")]
+    pub result_cache_bytes: usize,
+
+    /// Emit benchmark results and execution/workload metadata as JSON.
+    #[arg(long, default_value_t = false)]
+    pub json: bool,
+
+    /// Benchmark the legacy F3 readout instead of candidate-only projection.
+    #[arg(long, default_value_t = false)]
+    pub reference_readout: bool,
+
+    /// Benchmark opt-in native Kev request-local prefix reuse.
+    #[arg(long, default_value_t = false)]
+    pub prefix_cache: bool,
+
+    /// Opt-in native equal-length question batches bounded by total tokens.
+    #[arg(long, conflicts_with = "prefix_cache")]
+    pub max_batch_tokens: Option<usize>,
 
     /// Use a long state (~1500 chars) instead of a short one.
     #[arg(long, default_value_t = false)]
@@ -59,6 +98,10 @@ pub struct BenchArgs {
 }
 
 pub fn run(args: BenchArgs) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        args.questions > 0 && args.iterations > 0 && args.concurrency > 0,
+        "questions, iterations and concurrency must be positive"
+    );
     let backend = BackendChoice::parse(&args.backend)?;
     let dtype = args.dtype.as_deref();
     let engine: Engine = if let Some(model) = &args.model {
@@ -78,22 +121,71 @@ pub fn run(args: BenchArgs) -> anyhow::Result<()> {
         mock_engine(&args.mock_model, Family::F1, BackendId::Onnx, "fp32", 1.0)?
     };
 
-    let request = make_request(args.questions, args.long_state);
-
-    // Warm-up.
-    let _ = engine.eval(&request, &EvalOptions::default())?;
-
-    let mut latencies = Vec::with_capacity(args.iterations);
-    let n = args.iterations.max(1);
-    let start = Instant::now();
-    for _ in 0..n {
-        let t0 = Instant::now();
-        let resp = engine.eval(&request, &EvalOptions::default())?;
-        let dt = t0.elapsed();
-        latencies.push(dt.as_secs_f64() * 1000.0);
-        let _ = resp;
-    }
-    let wall = start.elapsed().as_secs_f64();
+    let engine = engine.with_result_cache(args.result_cache_bytes);
+    let warmup_case = if args.repeat_inputs { 0 } else { usize::MAX };
+    let options = EvalOptions {
+        reference_readout: args.reference_readout,
+        prefix_cache: args.prefix_cache,
+        max_batch_tokens: args.max_batch_tokens,
+        ..Default::default()
+    };
+    engine.eval(
+        &make_request(
+            args.questions,
+            args.long_state,
+            args.workload,
+            warmup_case,
+            &engine.manifest().name,
+        ),
+        &options,
+    )?;
+    let n = args.iterations;
+    let workers = args.concurrency.min(n);
+    let barrier = std::sync::Barrier::new(workers + 1);
+    let (mut latencies, work, wall) = std::thread::scope(|scope| -> anyhow::Result<_> {
+        let mut handles = Vec::with_capacity(workers);
+        for worker in 0..workers {
+            let engine = &engine;
+            let args = &args;
+            let barrier = &barrier;
+            let options = &options;
+            handles.push(
+                scope.spawn(move || -> anyhow::Result<(Vec<f64>, EvalStats)> {
+                    let mut latencies = Vec::new();
+                    let mut work = EvalStats::default();
+                    barrier.wait();
+                    for iteration in (worker..n).step_by(workers) {
+                        let case = if args.repeat_inputs { 0 } else { iteration };
+                        let request = make_request(
+                            args.questions,
+                            args.long_state,
+                            args.workload,
+                            case,
+                            &engine.manifest().name,
+                        );
+                        let start = Instant::now();
+                        let mut stats = EvalStats::default();
+                        engine.eval_with_stats(&request, options, &mut stats)?;
+                        work.accumulate(&stats);
+                        latencies.push(start.elapsed().as_secs_f64() * 1000.0);
+                    }
+                    Ok((latencies, work))
+                }),
+            );
+        }
+        let start = Instant::now();
+        barrier.wait();
+        let mut latencies = Vec::with_capacity(n);
+        let mut work = EvalStats::default();
+        for handle in handles {
+            let (worker_latencies, worker_work) = handle
+                .join()
+                .map_err(|_| anyhow::anyhow!("benchmark worker panicked"))??;
+            latencies.extend(worker_latencies);
+            work.accumulate(&worker_work);
+        }
+        Ok((latencies, work, start.elapsed().as_secs_f64()))
+    })?;
 
     latencies.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let p50 = percentile(&latencies, 0.50);
@@ -102,17 +194,53 @@ pub fn run(args: BenchArgs) -> anyhow::Result<()> {
     let mean = latencies.iter().sum::<f64>() / n as f64;
     let qps = n as f64 / wall;
 
+    if args.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "model": engine.manifest().name, "backend": engine.backend_id().to_string(),
+                "dtype": engine.dtype(), "device": engine.device(), "execution_metadata": engine.execution_metadata(), "questions": args.questions,
+                "iterations": n, "concurrency": workers, "workload": args.workload,
+            "repeat_inputs": args.repeat_inputs, "long_state": args.long_state,
+            "result_cache_bytes": args.result_cache_bytes,
+            "reference_readout": args.reference_readout,
+            "prefix_cache": args.prefix_cache, "max_batch_tokens": args.max_batch_tokens, "work": work,
+                "mean_ms": mean, "p50_ms": p50, "p95_ms": p95, "p99_ms": p99,
+                "requests_per_second": qps, "questions_per_second": qps * args.questions as f64,
+                "measurement": "warm closed-loop in-process engine evaluation"
+            }))?
+        );
+        return Ok(());
+    }
+
     println!(
-        "Bench: model={} questions={} backend={}",
+        "Bench: model={} questions={} backend={} dtype={} device={}",
         engine.manifest().name,
         args.questions,
-        engine.backend_id()
+        engine.backend_id(),
+        engine.dtype(),
+        engine.device()
+    );
+    println!(
+        "  workload: {:?}; concurrency: {workers}; repeated inputs: {}",
+        args.workload, args.repeat_inputs
     );
     println!("  mean   : {mean:.3} ms");
     println!("  p50    : {p50:.3} ms");
     println!("  p95    : {p95:.3} ms");
     println!("  p99    : {p99:.3} ms");
     println!("  req/s  : {qps:.2}");
+    println!("  questions/s: {:.2}", qps * args.questions as f64);
+    println!(
+        "  physical tokens: {}; prefills: {}; forwards: {}; forks: {}; reused prefix positions: {}",
+        work.processed_tokens,
+        work.prefill_calls,
+        work.forward_calls,
+        work.cache_forks,
+        work.reused_prefix_tokens
+    );
+    println!("  exact result cache hits: {}", work.result_cache_hits);
+    println!("  prepared prompt cache hits: {}", work.prompt_cache_hits);
     Ok(())
 }
 
@@ -124,23 +252,31 @@ fn percentile(sorted: &[f64], q: f64) -> f64 {
     sorted[idx]
 }
 
-fn make_request(questions: usize, long_state: bool) -> SystemOneRequest {
+fn make_request(
+    questions: usize,
+    long_state: bool,
+    workload: Workload,
+    case: usize,
+    model: &str,
+) -> SystemOneRequest {
     let state = if long_state {
-        let mut s = String::from("Support conversation:\n");
+        let mut s = format!("Support conversation for ticket {case}:\n");
         for i in 0..40 {
-            s.push_str(&format!("customer: message number {i} about the product issue.\n"));
+            s.push_str(&format!(
+                "customer: message number {i} about the product issue.\n"
+            ));
         }
         StateValue::from(s)
     } else {
-        StateValue::from("A support ticket where the customer asks for a refund.")
+        StateValue::from(format!("Ticket {case}: the customer asks for a refund."))
     };
 
     let mut qs = BTreeMap::new();
     for i in 0..questions {
         let q = Question::Choice {
-            instructions: Instructions::from(serde_json::Value::String(
-                "Which team handles this?".into(),
-            )),
+            instructions: Instructions::from(serde_json::Value::String(format!(
+                "Which team handles routing question {i}?"
+            ))),
             criteria: [
                 (
                     "returns".to_string(),
@@ -158,12 +294,31 @@ fn make_request(questions: usize, long_state: bool) -> SystemOneRequest {
             .into_iter()
             .collect(),
         };
-        qs.insert(format!("q{i}"), q);
+        let q = match (workload, i % 3) {
+            (Workload::Mixed, 1) => Question::Score {
+                instructions: Instructions::from(serde_json::Value::String(format!(
+                    "Severity for question {i}?"
+                ))),
+                criteria: vec![
+                    serde_json::json!("low"),
+                    serde_json::json!("medium"),
+                    serde_json::json!("high"),
+                ],
+            },
+            (Workload::Mixed, 2) => Question::Noul {
+                instructions: Instructions::from(serde_json::Value::String(format!(
+                    "Question {i}: does the customer request a refund?"
+                ))),
+                criteria: None,
+            },
+            _ => q,
+        };
+        qs.insert(format!("q{i:04}"), q);
     }
 
     SystemOneRequest {
         state,
-        model: "mock".into(),
+        model: model.into(),
         questions: qs.into_iter().collect(),
     }
 }
@@ -182,7 +337,7 @@ mod tests {
 
     #[test]
     fn make_request_builds_expected_questions() {
-        let r = make_request(5, false);
+        let r = make_request(5, false, Workload::Choice, 0, "mock");
         assert_eq!(r.model, "mock");
         assert_eq!(r.questions.len(), 5);
         assert!(r.questions.keys().all(|k| k.starts_with('q')));
@@ -194,7 +349,8 @@ mod tests {
                 panic!("expected a choice question");
             }
         }
-        let long = serde_json::to_string(&make_request(1, true).state).unwrap();
+        let long = serde_json::to_string(&make_request(1, true, Workload::Choice, 0, "mock").state)
+            .unwrap();
         assert!(long.len() > 500);
     }
 
@@ -211,10 +367,36 @@ mod tests {
             dtype: None,
             questions: 5,
             iterations: 5,
+            concurrency: 3,
+            workload: Workload::Mixed,
+            repeat_inputs: false,
+            result_cache_bytes: 0,
+            json: true,
+            reference_readout: false,
+            prefix_cache: false,
+            max_batch_tokens: None,
             long_state: false,
             mock_model: "mock".into(),
         };
         // Capturing stdout isn't necessary; we just assert it runs cleanly.
         run(args).unwrap();
+    }
+
+    #[test]
+    fn benchmark_mix_is_valid_distinct_and_uses_loaded_model_name() {
+        let request = make_request(5, false, Workload::Mixed, 42, "kev");
+        request.validate().unwrap();
+        assert_eq!(request.model, "kev");
+        let types = request
+            .questions
+            .values()
+            .map(Question::type_name)
+            .collect::<Vec<_>>();
+        assert_eq!(types, vec!["choice", "score", "noul", "choice", "score"]);
+        let other = make_request(5, false, Workload::Mixed, 43, "kev");
+        assert_ne!(
+            serde_json::to_value(request.state).unwrap(),
+            serde_json::to_value(other.state).unwrap()
+        );
     }
 }
