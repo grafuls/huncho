@@ -295,13 +295,22 @@ impl JointHead {
             let features = Tensor::cat(&[&field, &options, &product, &delta], D::Minus1)?;
             let residual = self.residual.forward(&features)?.squeeze(1)?;
             let joint = ((cosine * self.joint_scale)? + residual)?;
-            logits.push(
-                (prior + (joint * self.gate)?)?
-                    .to_dtype(DType::F32)?
-                    .to_vec1::<f32>()?,
-            );
+            logits.push((prior + (joint * self.gate)?)?.to_dtype(DType::F32)?);
         }
-        Ok(logits)
+        // Transfer all question logits once. Retain each question's original
+        // arithmetic and option order, then scatter the contiguous host data.
+        let values = Tensor::cat(&logits, 0)?.to_vec1::<f32>()?;
+        let mut offset = 0;
+        Ok(record
+            .questions
+            .iter()
+            .map(|question| {
+                let end = offset + question.option_ids.len();
+                let row = values[offset..end].to_vec();
+                offset = end;
+                row
+            })
+            .collect())
     }
 }
 

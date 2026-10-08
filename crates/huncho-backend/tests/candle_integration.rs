@@ -28,6 +28,13 @@ fn loads_and_reports_capabilities() {
 }
 
 #[test]
+fn refuses_to_claim_a_precision_it_does_not_execute() {
+    for dtype in ["fp16", "bf16", "int8", "int4"] {
+        assert!(CandleBackend::load(CONFIG, WEIGHTS, 16, dtype).is_err());
+    }
+}
+
+#[test]
 fn forward_returns_features_at_positions() {
     let mut backend = CandleBackend::load(CONFIG, WEIGHTS, 16, "fp32").unwrap();
 
@@ -52,6 +59,55 @@ fn forward_is_deterministic() {
     let oa = a.forward(input.clone()).unwrap();
     let ob = b.forward(input).unwrap();
     assert_eq!(oa.values().data(), ob.values().data());
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+#[ignore = "requires a compatible CUDA GPU"]
+fn cuda_modernbert_stages_bf16_checkpoints_and_preserves_cpu_readouts() {
+    use huncho_core::calibration::{argmax, calibrate};
+    let device = huncho_backend::device::device_from_env().unwrap();
+    assert!(device.is_cuda(), "GPU parity test must run on CUDA");
+    let package = tempfile::tempdir().unwrap();
+    let weights = package.path().join("bf16.safetensors");
+    let tensors = candle::safetensors::load(WEIGHTS, &candle::Device::Cpu)
+        .unwrap()
+        .into_iter()
+        .map(|(name, tensor)| (name, tensor.to_dtype(candle::DType::BF16).unwrap()))
+        .collect::<std::collections::HashMap<_, _>>();
+    candle::safetensors::save(&tensors, &weights).unwrap();
+    let mut gpu = CandleBackend::load_on_device(CONFIG, &weights, 16, "fp32", device).unwrap();
+    let mut cpu = CandleBackend::load(CONFIG, &weights, 16, "fp32").unwrap();
+    assert_eq!(gpu.capabilities().extra["device_path"], "modernbert-cuda");
+    // This fixture is a bare encoder; calibrated scalar readouts exercise
+    // transfer and numerical parity, not a released trained Laya checkpoint.
+    for positions in [vec![0, 2, 4], vec![4, 1, 1]] {
+        let input = ForwardInput::new(vec![1, 2, 3, 4, 5], positions);
+        let (a, b) = (
+            gpu.forward(input.clone()).unwrap(),
+            cpu.forward(input).unwrap(),
+        );
+        assert_eq!(a.positions(), b.positions());
+        let project = |output: &huncho_core::backend::ForwardOutput| {
+            output
+                .values()
+                .data()
+                .chunks(8)
+                .map(|row| {
+                    row.iter()
+                        .enumerate()
+                        .map(|(i, x)| x * (i as f32 + 1.) / 8.)
+                        .sum()
+                })
+                .collect::<Vec<f32>>()
+        };
+        let (a, b) = (
+            calibrate(&project(&a), 1.).unwrap(),
+            calibrate(&project(&b), 1.).unwrap(),
+        );
+        assert_eq!(argmax(&a), argmax(&b));
+        assert!(a.iter().zip(b).all(|(a, b)| (a - b).abs() <= 1e-3));
+    }
 }
 
 #[test]

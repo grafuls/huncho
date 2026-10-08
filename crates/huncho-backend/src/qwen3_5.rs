@@ -20,11 +20,12 @@
 //!
 //! Reference: `transformers` `modeling_qwen3_5.py` (`Qwen3_5ForConditionalGeneration`).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::Path;
+use std::sync::Mutex;
 
 use crate::kev::PointerHead;
-use candle::{D, Device, DType, Result, Tensor};
+use candle::{DType, Device, Result, Tensor, D};
 use candle_nn::{embedding, linear_b, Activation, Embedding, Linear, Module, VarBuilder};
 
 use huncho_core::backend::{Backend, CacheHandle, Capabilities, ForwardInput, ForwardOutput};
@@ -68,7 +69,10 @@ impl Config {
     pub fn from_value(v: &serde_json::Value) -> Result<Config> {
         let text = v.get("text_config").unwrap_or(v);
         fn usize_of(v: &serde_json::Value, key: &str, default: usize) -> usize {
-            v.get(key).and_then(|x| x.as_u64()).map(|x| x as usize).unwrap_or(default)
+            v.get(key)
+                .and_then(|x| x.as_u64())
+                .map(|x| x as usize)
+                .unwrap_or(default)
         }
         fn f64_of(v: &serde_json::Value, key: &str, default: f64) -> f64 {
             v.get(key).and_then(|x| x.as_f64()).unwrap_or(default)
@@ -163,14 +167,18 @@ impl Config {
 // Norms
 // ---------------------------------------------------------------------------
 
-/// `rms_norm(x) * (1 + weight)` — zero-centered Qwen3.5 RMSNorm.
-fn rms_norm_zero(x: &Tensor, weight: &Tensor, eps: f32) -> Result<Tensor> {
+/// Zero-centered norm weights are immutable; prepare `1 + weight` once at
+/// load time using exactly the former forward dtype and arithmetic.
+fn effective_norm_weight(weight: Tensor) -> Result<Tensor> {
+    weight.to_dtype(DType::F32)?.affine(1.0, 1.0)
+}
+
+fn rms_norm_effective(x: &Tensor, weight: &Tensor, eps: f32) -> Result<Tensor> {
     let x_f = x.to_dtype(DType::F32)?;
     let var = x_f.sqr()?.mean_keepdim(D::Minus1)?;
     let denom = (var + eps as f64)?.sqrt()?;
     let norm = x_f.broadcast_div(&denom)?;
-    let eff = weight.to_dtype(DType::F32)?.affine(1.0, 1.0)?; // 1 + weight
-    norm.broadcast_mul(&eff)?.to_dtype(x.dtype())
+    norm.broadcast_mul(weight)?.to_dtype(x.dtype())
 }
 
 /// `rms_norm(x) * silu(gate)` — Qwen3.5 gated RMSNorm.
@@ -179,7 +187,7 @@ fn rms_norm_gated(x: &Tensor, gate: &Tensor, weight: &Tensor, eps: f32) -> Resul
     let var = x_f.sqr()?.mean_keepdim(D::Minus1)?;
     let denom = (var + eps as f64)?.sqrt()?;
     let norm = x_f.broadcast_div(&denom)?;
-    let norm = norm.broadcast_mul(&weight.to_dtype(DType::F32)?)?;
+    let norm = norm.broadcast_mul(weight)?;
     let g = candle_nn::ops::silu(&gate.to_dtype(DType::F32)?)?;
     norm.broadcast_mul(&g)?.to_dtype(x.dtype())
 }
@@ -187,7 +195,9 @@ fn rms_norm_gated(x: &Tensor, gate: &Tensor, weight: &Tensor, eps: f32) -> Resul
 /// FLA-style L2 norm along the last dim for the delta rule (fp32).
 fn l2norm(x: &Tensor, eps: f64) -> Result<Tensor> {
     let x_f = x.to_dtype(DType::F32)?;
-    let inv = (x_f.sqr()?.sum_keepdim(D::Minus1)? + eps)?.sqrt()?.recip()?;
+    let inv = (x_f.sqr()?.sum_keepdim(D::Minus1)? + eps)?
+        .sqrt()?
+        .recip()?;
     x_f.broadcast_mul(&inv)
 }
 
@@ -216,8 +226,8 @@ impl RotaryEmbedding {
     }
 
     /// `cos`/`sin` for a sequence length at text positions: `[seq, rotary_dim]`.
-    fn cos_sin(&self, seq: usize, device: &Device) -> Result<(Tensor, Tensor)> {
-        let t = Tensor::arange(0u32, seq as u32, device)?
+    fn cos_sin(&self, seq: usize, offset: usize, device: &Device) -> Result<(Tensor, Tensor)> {
+        let t = Tensor::arange(offset as u32, (offset + seq) as u32, device)?
             .to_dtype(DType::F32)?
             .reshape((seq, 1))?;
         let freqs = t.matmul(&self.inv_freq)?; // [seq, rotary_dim/2]
@@ -250,14 +260,16 @@ fn apply_partial_rotary(
 
     let q_rot = q.narrow(3, 0, rotary_dim)?;
     let q_pass = q.narrow(3, rotary_dim, head_dim - rotary_dim)?;
-    let q_embed =
-        q_rot.broadcast_mul(&cos)?.broadcast_add(&rotate_half(&q_rot)?.broadcast_mul(&sin)?)?;
+    let q_embed = q_rot
+        .broadcast_mul(&cos)?
+        .broadcast_add(&rotate_half(&q_rot)?.broadcast_mul(&sin)?)?;
     let q_out = Tensor::cat(&[&q_embed, &q_pass], 3)?;
 
     let k_rot = k.narrow(3, 0, rotary_dim)?;
     let k_pass = k.narrow(3, rotary_dim, head_dim - rotary_dim)?;
-    let k_embed =
-        k_rot.broadcast_mul(&cos)?.broadcast_add(&rotate_half(&k_rot)?.broadcast_mul(&sin)?)?;
+    let k_embed = k_rot
+        .broadcast_mul(&cos)?
+        .broadcast_add(&rotate_half(&k_rot)?.broadcast_mul(&sin)?)?;
     let k_out = Tensor::cat(&[&k_embed, &k_pass], 3)?;
     Ok((q_out, k_out))
 }
@@ -279,11 +291,66 @@ fn repeat_interleave_head(t: &Tensor, n: usize, dim: usize) -> Result<Tensor> {
 // Full attention
 // ---------------------------------------------------------------------------
 
+/// Optional fixed-row projection calls make kernel selection independent of
+/// request/prefix length. The native path is retained when `chunk_rows == 0`.
+/// Zero padding is local to a linear projection and discarded immediately;
+/// it never enters attention, recurrence, positions or logical token usage.
+struct BackboneLinear {
+    linear: Linear,
+    chunk_rows: usize,
+}
+
+impl From<Linear> for BackboneLinear {
+    fn from(linear: Linear) -> Self {
+        Self {
+            linear,
+            chunk_rows: 0,
+        }
+    }
+}
+
+impl Module for BackboneLinear {
+    fn forward(&self, input: &Tensor) -> Result<Tensor> {
+        if self.chunk_rows == 0 {
+            return self.linear.forward(input);
+        }
+        let (batch, sequence, width) = input.dims3()?;
+        let rows = batch * sequence;
+        let input = input.reshape((rows, width))?.contiguous()?;
+        let mut outputs = Vec::with_capacity(rows.div_ceil(self.chunk_rows));
+        for offset in (0..rows).step_by(self.chunk_rows) {
+            let count = self.chunk_rows.min(rows - offset);
+            let chunk = input.narrow(0, offset, count)?.contiguous()?;
+            let chunk = if count == self.chunk_rows {
+                chunk
+            } else {
+                Tensor::cat(
+                    &[
+                        chunk,
+                        Tensor::zeros(
+                            (self.chunk_rows - count, width),
+                            input.dtype(),
+                            input.device(),
+                        )?,
+                    ],
+                    0,
+                )?
+            };
+            // Keep the original rank-three/batch-one Linear call convention.
+            let output = self.linear.forward(&chunk.unsqueeze(0)?)?.squeeze(0)?;
+            outputs.push(output.narrow(0, 0, count)?);
+        }
+        let output = Tensor::cat(&outputs, 0)?;
+        let output_width = output.dim(1)?;
+        output.reshape((batch, sequence, output_width))
+    }
+}
+
 struct Attention {
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
-    o_proj: Linear,
+    q_proj: BackboneLinear,
+    k_proj: BackboneLinear,
+    v_proj: BackboneLinear,
+    o_proj: BackboneLinear,
     q_norm: Tensor,
     k_norm: Tensor,
     num_heads: usize,
@@ -291,6 +358,7 @@ struct Attention {
     head_dim: usize,
     rotary_dim: usize,
     eps: f32,
+    fp32_compute: bool,
 }
 
 impl Attention {
@@ -299,17 +367,37 @@ impl Attention {
         let num_kv_heads = cfg.num_key_value_heads;
         let head_dim = cfg.head_dim;
         let hidden = cfg.hidden_size;
-        let q_proj = linear_b(hidden, num_heads * head_dim * 2, cfg.attention_bias, vb.pp("q_proj"))?;
-        let k_proj = linear_b(hidden, num_kv_heads * head_dim, cfg.attention_bias, vb.pp("k_proj"))?;
-        let v_proj = linear_b(hidden, num_kv_heads * head_dim, cfg.attention_bias, vb.pp("v_proj"))?;
-        let o_proj = linear_b(num_heads * head_dim, hidden, cfg.attention_bias, vb.pp("o_proj"))?;
-        let q_norm = vb.get(head_dim, "q_norm.weight")?;
-        let k_norm = vb.get(head_dim, "k_norm.weight")?;
+        let q_proj = linear_b(
+            hidden,
+            num_heads * head_dim * 2,
+            cfg.attention_bias,
+            vb.pp("q_proj"),
+        )?;
+        let k_proj = linear_b(
+            hidden,
+            num_kv_heads * head_dim,
+            cfg.attention_bias,
+            vb.pp("k_proj"),
+        )?;
+        let v_proj = linear_b(
+            hidden,
+            num_kv_heads * head_dim,
+            cfg.attention_bias,
+            vb.pp("v_proj"),
+        )?;
+        let o_proj = linear_b(
+            num_heads * head_dim,
+            hidden,
+            cfg.attention_bias,
+            vb.pp("o_proj"),
+        )?;
+        let q_norm = effective_norm_weight(vb.get(head_dim, "q_norm.weight")?)?;
+        let k_norm = effective_norm_weight(vb.get(head_dim, "k_norm.weight")?)?;
         Ok(Self {
-            q_proj,
-            k_proj,
-            v_proj,
-            o_proj,
+            q_proj: q_proj.into(),
+            k_proj: k_proj.into(),
+            v_proj: v_proj.into(),
+            o_proj: o_proj.into(),
             q_norm,
             k_norm,
             num_heads,
@@ -317,10 +405,18 @@ impl Attention {
             head_dim,
             rotary_dim: cfg.rotary_dim(),
             eps: cfg.rms_norm_eps,
+            fp32_compute: false,
         })
     }
 
-    fn forward(&self, x: &Tensor, cos: &Tensor, sin: &Tensor, mask: &Tensor) -> Result<Tensor> {
+    fn forward(
+        &self,
+        x: &Tensor,
+        cos: &Tensor,
+        sin: &Tensor,
+        mask: &Tensor,
+        cache: Option<&mut LayerCache>,
+    ) -> Result<Tensor> {
         let b = x.dims()[0];
         let seq = x.dims()[1];
         let q_gate = self.q_proj.forward(x)?; // [B, seq, num_heads*head_dim*2]
@@ -329,13 +425,13 @@ impl Attention {
         let gate = q_gate.narrow(3, self.head_dim, self.head_dim)?; // [B, seq, num_heads, head_dim]
 
         let q = q.transpose(1, 2)?; // [B, num_heads, seq, head_dim]
-        let q = rms_norm_zero(&q, &self.q_norm, self.eps)?;
+        let q = rms_norm_effective(&q, &self.q_norm, self.eps)?;
         let k = self
             .k_proj
             .forward(x)?
             .reshape((b, seq, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
-        let k = rms_norm_zero(&k, &self.k_norm, self.eps)?;
+        let k = rms_norm_effective(&k, &self.k_norm, self.eps)?;
         let v = self
             .v_proj
             .forward(x)?
@@ -343,24 +439,62 @@ impl Attention {
             .transpose(1, 2)?;
 
         let (q, k) = apply_partial_rotary(&q, &k, cos, sin, self.rotary_dim)?;
+        let (k, v) = match cache
+            .as_ref()
+            .and_then(|cache| cache.key.as_ref().zip(cache.value.as_ref()))
+        {
+            Some((past_key, past_value)) => (
+                Tensor::cat(&[past_key, &k], 2)?,
+                Tensor::cat(&[past_value, &v], 2)?,
+            ),
+            None => (k, v),
+        };
+        // Retain unexpanded GQA tensors. A fork shares immutable prefix storage;
+        // appending a branch produces new tensors and cannot mutate its parent.
+        let retained = cache.as_ref().map(|_| (k.clone(), v.clone()));
 
         let n_rep = self.num_heads / self.num_kv_heads;
-        let k = if n_rep > 1 { repeat_interleave_head(&k, n_rep, 1)? } else { k };
-        let v = if n_rep > 1 { repeat_interleave_head(&v, n_rep, 1)? } else { v };
+        let k = if n_rep > 1 {
+            repeat_interleave_head(&k, n_rep, 1)?
+        } else {
+            k
+        };
+        let v = if n_rep > 1 {
+            repeat_interleave_head(&v, n_rep, 1)?
+        } else {
+            v
+        };
 
+        let activation_dtype = q.dtype();
+        let (q, k, v) = if self.fp32_compute {
+            (
+                q.to_dtype(DType::F32)?,
+                k.to_dtype(DType::F32)?,
+                v.to_dtype(DType::F32)?,
+            )
+        } else {
+            (q, k, v)
+        };
         let scale = 1.0 / (self.head_dim as f64).sqrt();
         let scores = q.matmul(&k.transpose(2, 3)?)?.affine(scale, 0.0)?; // [B, num_heads, seq, seq]
         let scores = scores.broadcast_add(&mask.to_dtype(scores.dtype())?)?;
         let probs = candle_nn::ops::softmax(&scores, 3)?;
-        let attn = probs.matmul(&v)?; // [B, num_heads, seq, head_dim]
+        let attn = probs.matmul(&v)?.to_dtype(activation_dtype)?; // [B, num_heads, seq, head_dim]
         let attn = attn.transpose(1, 2)?; // [B, seq, num_heads, head_dim]
-        // `attn_output_gate`: the gate is the same shape as each head (the
-        // q_proj output is split in two: query + gate), so multiply elementwise.
-        // Compute the gate in fp32 for stability, then cast back to the
-        // activation dtype so the broadcast_mul matches `attn`.
+                                          // `attn_output_gate`: the gate is the same shape as each head (the
+                                          // q_proj output is split in two: query + gate), so multiply elementwise.
+                                          // Compute the gate in fp32 for stability, then cast back to the
+                                          // activation dtype so the broadcast_mul matches `attn`.
         let gate = candle_nn::ops::sigmoid(&gate.to_dtype(DType::F32)?)?.to_dtype(attn.dtype())?;
-        let attn = attn.broadcast_mul(&gate)?.reshape((b, seq, self.num_heads * self.head_dim))?;
-        self.o_proj.forward(&attn)
+        let attn = attn
+            .broadcast_mul(&gate)?
+            .reshape((b, seq, self.num_heads * self.head_dim))?;
+        let output = self.o_proj.forward(&attn)?;
+        if let (Some(cache), Some((key, value))) = (cache, retained) {
+            cache.key = Some(key);
+            cache.value = Some(value);
+        }
+        Ok(output)
     }
 }
 
@@ -369,11 +503,11 @@ impl Attention {
 // ---------------------------------------------------------------------------
 
 struct LinearAttn {
-    in_proj_qkv: Linear,
-    in_proj_z: Linear,
-    in_proj_b: Linear,
-    in_proj_a: Linear,
-    out_proj: Linear,
+    in_proj_qkv: BackboneLinear,
+    in_proj_z: BackboneLinear,
+    in_proj_b: BackboneLinear,
+    in_proj_a: BackboneLinear,
+    out_proj: BackboneLinear,
     conv1d_w: Tensor, // [conv_dim, 1, K]
     norm_w: Tensor,
     num_k_heads: usize,
@@ -406,18 +540,20 @@ impl LinearAttn {
         let in_proj_b = linear_b(hidden, num_v_heads, cfg.attention_bias, vb.pp("in_proj_b"))?;
         let in_proj_a = linear_b(hidden, num_v_heads, cfg.attention_bias, vb.pp("in_proj_a"))?;
         let out_proj = linear_b(value_dim, hidden, cfg.attention_bias, vb.pp("out_proj"))?;
-        let conv1d_w = vb.get((conv_dim, 1, conv_kernel), "conv1d.weight")?.to_dtype(DType::F32)?;
-        let norm_w = vb.get(head_v_dim, "norm.weight")?;
+        let conv1d_w = vb
+            .get((conv_dim, 1, conv_kernel), "conv1d.weight")?
+            .to_dtype(DType::F32)?;
+        let norm_w = vb.get(head_v_dim, "norm.weight")?.to_dtype(DType::F32)?;
         let a_log = vb.get(num_v_heads, "A_log")?.to_dtype(DType::F32)?;
         let dt_bias = vb.get(num_v_heads, "dt_bias")?.to_dtype(DType::F32)?;
         let base_g = a_log.exp()?.neg()?; // -exp(A_log)
 
         Ok(Self {
-            in_proj_qkv,
-            in_proj_z,
-            in_proj_b,
-            in_proj_a,
-            out_proj,
+            in_proj_qkv: in_proj_qkv.into(),
+            in_proj_z: in_proj_z.into(),
+            in_proj_b: in_proj_b.into(),
+            in_proj_a: in_proj_a.into(),
+            out_proj: out_proj.into(),
             conv1d_w,
             norm_w,
             num_k_heads,
@@ -439,6 +575,7 @@ impl LinearAttn {
     fn causal_conv(&self, x: &Tensor) -> Result<Tensor> {
         let (b, conv_dim, seq) = x.dims3()?;
         let k = self.conv_kernel;
+        let x_f = x.to_dtype(DType::F32)?;
         let mut out = Tensor::zeros((b, conv_dim, seq), DType::F32, x.device())?;
         for kk in 0..k {
             let shift = (k - 1) - kk;
@@ -446,7 +583,7 @@ impl LinearAttn {
                 continue;
             }
             let w = self.conv1d_w.narrow(2, kk, 1)?.squeeze(1)?.unsqueeze(0)?; // [1, conv_dim, 1]
-            let contrib = w.broadcast_mul(&x.to_dtype(DType::F32)?)?; // [B, conv_dim, seq]
+            let contrib = w.broadcast_mul(&x_f)?; // [B, conv_dim, seq]
             if shift == 0 {
                 out = out.broadcast_add(&contrib)?;
             } else {
@@ -459,19 +596,48 @@ impl LinearAttn {
         out.to_dtype(x.dtype())
     }
 
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+    fn forward(&self, x: &Tensor, cache: Option<&mut LayerCache>) -> Result<Tensor> {
         let b = x.dims()[0];
         let seq = x.dims()[1];
 
         let mixed = self.in_proj_qkv.forward(x)?.transpose(1, 2)?; // [B, conv_dim, seq]
-        let mixed = self.causal_conv(&mixed)?; // [B, conv_dim, seq]
+        let history = cache.as_ref().and_then(|cache| cache.convolution.as_ref());
+        let history_len = history.map_or(0, |history| history.dims()[2]);
+        let mixed = match history {
+            Some(history) => Tensor::cat(&[history, &mixed], 2)?,
+            None => mixed,
+        };
+        let keep = self.conv_kernel.saturating_sub(1).min(mixed.dims()[2]);
+        let convolution = if cache.is_some() && keep > 0 {
+            // Copy the small tail so it does not retain the entire prefix's
+            // projection storage through a tensor view.
+            Some(mixed.narrow(2, mixed.dims()[2] - keep, keep)?.copy()?)
+        } else {
+            None
+        };
+        let mixed = self.causal_conv(&mixed)?.narrow(2, history_len, seq)?; // [B, conv_dim, seq]
         let mixed = mixed.transpose(1, 2)?; // [B, seq, conv_dim]
 
-        let q = mixed.narrow(2, 0, self.key_dim)?.reshape((b, seq, self.num_k_heads, self.head_k_dim))?;
-        let k = mixed.narrow(2, self.key_dim, self.key_dim)?.reshape((b, seq, self.num_k_heads, self.head_k_dim))?;
-        let v = mixed.narrow(2, 2 * self.key_dim, self.value_dim)?.reshape((b, seq, self.num_v_heads, self.head_v_dim))?;
+        let q = mixed.narrow(2, 0, self.key_dim)?.reshape((
+            b,
+            seq,
+            self.num_k_heads,
+            self.head_k_dim,
+        ))?;
+        let k = mixed.narrow(2, self.key_dim, self.key_dim)?.reshape((
+            b,
+            seq,
+            self.num_k_heads,
+            self.head_k_dim,
+        ))?;
+        let v = mixed
+            .narrow(2, 2 * self.key_dim, self.value_dim)?
+            .reshape((b, seq, self.num_v_heads, self.head_v_dim))?;
 
-        let z = self.in_proj_z.forward(x)?.reshape((b, seq, self.num_v_heads, self.head_v_dim))?;
+        let z = self
+            .in_proj_z
+            .forward(x)?
+            .reshape((b, seq, self.num_v_heads, self.head_v_dim))?;
         let beta = candle_nn::ops::sigmoid(&self.in_proj_b.forward(x)?)?; // [B, seq, num_v_heads]
         let a = self.in_proj_a.forward(x)?.to_dtype(DType::F32)?; // [B, seq, num_v_heads]
         let g = self
@@ -485,8 +651,16 @@ impl LinearAttn {
         } else {
             1
         };
-        let q = if n_rep > 1 { repeat_interleave_head(&q, n_rep, 2)? } else { q };
-        let k = if n_rep > 1 { repeat_interleave_head(&k, n_rep, 2)? } else { k };
+        let q = if n_rep > 1 {
+            repeat_interleave_head(&q, n_rep, 2)?
+        } else {
+            q
+        };
+        let k = if n_rep > 1 {
+            repeat_interleave_head(&k, n_rep, 2)?
+        } else {
+            k
+        };
 
         let q = q.transpose(1, 2)?; // [B, num_v_heads, seq, head_k]
         let k = k.transpose(1, 2)?;
@@ -500,13 +674,19 @@ impl LinearAttn {
 
         // The recurrence accumulates in fp32; cast the result back to the model
         // dtype so the following gated norm and out projection stay consistent.
-        let out = recurrent_gated_delta(&q, &k, &v, &g, &beta)?; // [B, num_v_heads, seq, head_v]
+        let initial_state = cache.as_ref().and_then(|cache| cache.recurrent.as_ref());
+        let (out, recurrent) = recurrent_gated_delta(&q, &k, &v, &g, &beta, initial_state)?;
         let out = out.to_dtype(self.dtype)?.transpose(1, 2)?; // [B, seq, num_v_heads, head_v]
-        // Apply the per-head gated RMSNorm over the last (head_v) dim, then
-        // flatten the value heads for the output projection.
+                                                              // Apply the per-head gated RMSNorm over the last (head_v) dim, then
+                                                              // flatten the value heads for the output projection.
         let out = rms_norm_gated(&out, &z, &self.norm_w, self.eps)?; // [B, seq, num_v_heads, head_v]
         let out = out.reshape((b, seq, self.value_dim))?;
-        self.out_proj.forward(&out)
+        let output = self.out_proj.forward(&out)?;
+        if let Some(cache) = cache {
+            cache.recurrent = Some(recurrent);
+            cache.convolution = convolution;
+        }
+        Ok(output)
     }
 }
 
@@ -517,16 +697,20 @@ fn recurrent_gated_delta(
     value: &Tensor,
     g: &Tensor,
     beta: &Tensor,
-) -> Result<Tensor> {
+    initial_state: Option<&Tensor>,
+) -> Result<(Tensor, Tensor)> {
     let (b, n_v, seq, head_k) = query.dims4()?;
     let head_v = value.dims().last().copied().unwrap_or(0);
-    let mut state = Tensor::zeros((b, n_v, head_k, head_v), DType::F32, query.device())?;
+    let mut state = match initial_state {
+        Some(state) => state.clone(),
+        None => Tensor::zeros((b, n_v, head_k, head_v), DType::F32, query.device())?,
+    };
     let mut outs = Vec::with_capacity(seq);
     for i in 0..seq {
         let q_i = query.narrow(2, i, 1)?.squeeze(2)?; // [B, n_v, head_k]
         let k_i = key.narrow(2, i, 1)?.squeeze(2)?; // [B, n_v, head_k]
-        // `value`/`beta` arrive in the model dtype (e.g. fp16) while `state` is
-        // fp32; promote them so every op in the recurrent loop is fp32.
+                                                    // `value`/`beta` arrive in the model dtype (e.g. fp16) while `state` is
+                                                    // fp32; promote them so every op in the recurrent loop is fp32.
         let v_i = value.narrow(2, i, 1)?.squeeze(2)?.to_dtype(DType::F32)?; // [B, n_v, head_v]
         let g_i = g.narrow(2, i, 1)?.squeeze(2)?.to_dtype(DType::F32)?; // [B, n_v]
         let b_i = beta.narrow(2, i, 1)?.squeeze(2)?.to_dtype(DType::F32)?; // [B, n_v]
@@ -535,13 +719,15 @@ fn recurrent_gated_delta(
         state = state.broadcast_mul(&decay.unsqueeze(2)?.unsqueeze(2)?)?;
 
         let kv_mem = state.broadcast_mul(&k_i.unsqueeze(3)?)?.sum(2)?; // [B, n_v, head_v]
-        let delta = v_i.broadcast_sub(&kv_mem)?.broadcast_mul(&b_i.unsqueeze(2)?)?; // [B, n_v, head_v]
+        let delta = v_i
+            .broadcast_sub(&kv_mem)?
+            .broadcast_mul(&b_i.unsqueeze(2)?)?; // [B, n_v, head_v]
         state = state.broadcast_add(&k_i.unsqueeze(3)?.broadcast_mul(&delta.unsqueeze(2)?)?)?;
 
         let out_i = state.broadcast_mul(&q_i.unsqueeze(3)?)?.sum(2)?; // [B, n_v, head_v]
         outs.push(out_i);
     }
-    Tensor::stack(&outs, 2)
+    Ok((Tensor::stack(&outs, 2)?, state))
 }
 
 // ---------------------------------------------------------------------------
@@ -549,9 +735,9 @@ fn recurrent_gated_delta(
 // ---------------------------------------------------------------------------
 
 struct Mlp {
-    gate_proj: Linear,
-    up_proj: Linear,
-    down_proj: Linear,
+    gate_proj: BackboneLinear,
+    up_proj: BackboneLinear,
+    down_proj: BackboneLinear,
     act: Activation,
 }
 
@@ -562,7 +748,12 @@ impl Mlp {
         let gate_proj = linear_b(hidden, intermediate, cfg.attention_bias, vb.pp("gate_proj"))?;
         let up_proj = linear_b(hidden, intermediate, cfg.attention_bias, vb.pp("up_proj"))?;
         let down_proj = linear_b(intermediate, hidden, cfg.attention_bias, vb.pp("down_proj"))?;
-        Ok(Self { gate_proj, up_proj, down_proj, act: Activation::Silu })
+        Ok(Self {
+            gate_proj: gate_proj.into(),
+            up_proj: up_proj.into(),
+            down_proj: down_proj.into(),
+            act: Activation::Silu,
+        })
     }
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
@@ -582,12 +773,23 @@ struct DecoderLayer {
 }
 
 impl DecoderLayer {
-    fn new(cfg: &Config, layer_type: LayerType, vb: VarBuilder, device: &Device, dtype: DType) -> Result<Self> {
-        let input_layernorm = vb.get(cfg.hidden_size, "input_layernorm.weight")?;
-        let post_attention_layernorm = vb.get(cfg.hidden_size, "post_attention_layernorm.weight")?;
+    fn new(
+        cfg: &Config,
+        layer_type: LayerType,
+        vb: VarBuilder,
+        device: &Device,
+        dtype: DType,
+    ) -> Result<Self> {
+        let input_layernorm =
+            effective_norm_weight(vb.get(cfg.hidden_size, "input_layernorm.weight")?)?;
+        let post_attention_layernorm =
+            effective_norm_weight(vb.get(cfg.hidden_size, "post_attention_layernorm.weight")?)?;
         let mlp = Mlp::new(cfg, vb.pp("mlp"))?;
         let (linear_attn, self_attn) = match layer_type {
-            LayerType::Linear => (Some(LinearAttn::new(cfg, vb.pp("linear_attn"), device, dtype)?), None),
+            LayerType::Linear => (
+                Some(LinearAttn::new(cfg, vb.pp("linear_attn"), device, dtype)?),
+                None,
+            ),
             LayerType::Full => (None, Some(Attention::new(cfg, vb.pp("self_attn"))?)),
         };
         Ok(Self {
@@ -600,18 +802,25 @@ impl DecoderLayer {
         })
     }
 
-    fn forward(&self, x: &Tensor, cos: &Tensor, sin: &Tensor, mask: &Tensor) -> Result<Tensor> {
+    fn forward(
+        &self,
+        x: &Tensor,
+        cos: &Tensor,
+        sin: &Tensor,
+        mask: &Tensor,
+        cache: Option<&mut LayerCache>,
+    ) -> Result<Tensor> {
         let residual = x.clone();
-        let h = rms_norm_zero(x, &self.input_layernorm, self.eps)?;
+        let h = rms_norm_effective(x, &self.input_layernorm, self.eps)?;
         let h = if let Some(attn) = &self.linear_attn {
-            attn.forward(&h)?
+            attn.forward(&h, cache)?
         } else if let Some(attn) = &self.self_attn {
-            attn.forward(&h, cos, sin, mask)?
+            attn.forward(&h, cos, sin, mask, cache)?
         } else {
             candle::bail!("decoder layer has neither linear nor full attention")
         };
         let h = h.broadcast_add(&residual)?;
-        let normalized = rms_norm_zero(&h, &self.post_attention_layernorm, self.eps)?;
+        let normalized = rms_norm_effective(&h, &self.post_attention_layernorm, self.eps)?;
         let x = self.mlp.forward(&normalized)?.broadcast_add(&h)?;
         Ok(x)
     }
@@ -621,6 +830,66 @@ impl DecoderLayer {
 // Model
 // ---------------------------------------------------------------------------
 
+#[derive(Clone, Default)]
+struct LayerCache {
+    key: Option<Tensor>,
+    value: Option<Tensor>,
+    recurrent: Option<Tensor>,
+    convolution: Option<Tensor>,
+}
+
+#[derive(Clone)]
+struct ModelCache {
+    tokens: usize,
+    layers: Vec<LayerCache>,
+}
+
+#[derive(Clone)]
+struct AttentionInputs {
+    cos: Tensor,
+    sin: Tensor,
+    mask: Tensor,
+}
+
+#[derive(Default)]
+struct AttentionInputCache {
+    values: BTreeMap<(usize, usize), AttentionInputs>,
+    fifo: VecDeque<(usize, usize)>,
+    bytes: usize,
+}
+
+impl AttentionInputCache {
+    const MAX_BYTES: usize = 4 * 1024 * 1024;
+    const MAX_ENTRIES: usize = 32;
+    fn insert(&mut self, key: (usize, usize), inputs: AttentionInputs) {
+        let size = inputs.bytes();
+        if size > Self::MAX_BYTES || self.values.contains_key(&key) {
+            return;
+        }
+        while self.bytes + size > Self::MAX_BYTES || self.values.len() >= Self::MAX_ENTRIES {
+            if let Some(key) = self.fifo.pop_front() {
+                if let Some(previous) = self.values.remove(&key) {
+                    self.bytes -= previous.bytes();
+                }
+            } else {
+                break;
+            }
+        }
+        self.values.insert(key, inputs);
+        self.fifo.push_back(key);
+        self.bytes += size;
+    }
+}
+
+impl AttentionInputs {
+    fn bytes(&self) -> usize {
+        [&self.cos, &self.sin, &self.mask]
+            .iter()
+            .map(|tensor| tensor.elem_count() * tensor.dtype().size_in_bytes())
+            .sum()
+    }
+}
+
 pub struct Model {
     embed_tokens: Embedding,
     layers: Vec<DecoderLayer>,
@@ -628,21 +897,34 @@ pub struct Model {
     rotary: RotaryEmbedding,
     eps: f32,
     device: Device,
+    attention_inputs: Mutex<AttentionInputCache>,
+    projection_chunk_rows: usize,
+    fp32_attention: bool,
 }
 
 impl Model {
     /// Build the text model from a `VarBuilder` rooted at the full weight
     /// prefix (`model.language_model.<module>` and `lm_head`).
     pub fn new(cfg: &Config, vb: VarBuilder, device: &Device, dtype: DType) -> Result<Self> {
-        let embed_tokens =
-            embedding(cfg.vocab_size, cfg.hidden_size, vb.pp("model.language_model.embed_tokens"))?;
+        let embed_tokens = embedding(
+            cfg.vocab_size,
+            cfg.hidden_size,
+            vb.pp("model.language_model.embed_tokens"),
+        )?;
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         for i in 0..cfg.num_hidden_layers {
             let lt = cfg.layer_types.get(i).copied().unwrap_or(LayerType::Linear);
-            let layer = DecoderLayer::new(cfg, lt, vb.pp(format!("model.language_model.layers.{i}")), device, dtype)?;
+            let layer = DecoderLayer::new(
+                cfg,
+                lt,
+                vb.pp(format!("model.language_model.layers.{i}")),
+                device,
+                dtype,
+            )?;
             layers.push(layer);
         }
-        let norm = vb.get(cfg.hidden_size, "model.language_model.norm.weight")?;
+        let norm =
+            effective_norm_weight(vb.get(cfg.hidden_size, "model.language_model.norm.weight")?)?;
         Ok(Self {
             embed_tokens,
             layers,
@@ -650,32 +932,118 @@ impl Model {
             rotary: RotaryEmbedding::new(cfg, device, dtype)?,
             eps: cfg.rms_norm_eps,
             device: device.clone(),
+            attention_inputs: Mutex::new(AttentionInputCache::default()),
+            projection_chunk_rows: 0,
+            fp32_attention: false,
         })
     }
 
-    pub fn forward(&self, ids: &Tensor) -> Result<Tensor> {
-        let seq = ids.dims().last().copied().unwrap_or(0);
-        let (cos, sin) = self.rotary.cos_sin(seq, &self.device)?;
-        let mask = causal_mask(seq)?.to_device(&self.device)?;
-        let mut hidden = self.embed_tokens.forward(ids)?; // [B, seq, hidden]
-        for layer in &self.layers {
-            hidden = layer.forward(&hidden, &cos, &sin, &mask)?;
-        }
-        rms_norm_zero(&hidden, &self.norm, self.eps)
-    }
-}
-
-/// A strictly-upper-triangular additive mask `[seq, seq]` (`-inf` for `i < j`).
-fn causal_mask(seq: usize) -> Result<Tensor> {
-    let mut data = vec![0.0f32; seq * seq];
-    for i in 0..seq {
-        for j in 0..seq {
-            if i < j {
-                data[i * seq + j] = f32::NEG_INFINITY;
+    fn set_projection_chunks(&mut self, rows: usize) {
+        self.projection_chunk_rows = rows;
+        for layer in &mut self.layers {
+            for projection in [
+                &mut layer.mlp.gate_proj,
+                &mut layer.mlp.up_proj,
+                &mut layer.mlp.down_proj,
+            ] {
+                projection.chunk_rows = rows;
+            }
+            if let Some(attention) = &mut layer.linear_attn {
+                for projection in [
+                    &mut attention.in_proj_qkv,
+                    &mut attention.in_proj_z,
+                    &mut attention.in_proj_b,
+                    &mut attention.in_proj_a,
+                    &mut attention.out_proj,
+                ] {
+                    projection.chunk_rows = rows;
+                }
+            }
+            if let Some(attention) = &mut layer.self_attn {
+                for projection in [
+                    &mut attention.q_proj,
+                    &mut attention.k_proj,
+                    &mut attention.v_proj,
+                    &mut attention.o_proj,
+                ] {
+                    projection.chunk_rows = rows;
+                }
             }
         }
     }
-    Tensor::from_vec(data, (seq, seq), &Device::Cpu)
+
+    fn set_fp32_attention(&mut self, enabled: bool) {
+        self.fp32_attention = enabled;
+        for layer in &mut self.layers {
+            if let Some(attention) = &mut layer.self_attn {
+                attention.fp32_compute = enabled;
+            }
+        }
+    }
+
+    pub fn forward(&self, ids: &Tensor) -> Result<Tensor> {
+        self.forward_inner(ids, None)
+    }
+
+    fn empty_cache(&self) -> ModelCache {
+        ModelCache {
+            tokens: 0,
+            layers: vec![LayerCache::default(); self.layers.len()],
+        }
+    }
+
+    fn forward_cached(&self, ids: &Tensor, cache: &mut ModelCache) -> Result<Tensor> {
+        self.forward_inner(ids, Some(cache))
+    }
+
+    fn forward_inner(&self, ids: &Tensor, mut cache: Option<&mut ModelCache>) -> Result<Tensor> {
+        let seq = ids.dims().last().copied().unwrap_or(0);
+        let offset = cache.as_ref().map_or(0, |cache| cache.tokens);
+        let inputs = self.attention_inputs(seq, offset)?;
+        let mut hidden = self.embed_tokens.forward(ids)?; // [B, seq, hidden]
+        for (index, layer) in self.layers.iter().enumerate() {
+            let layer_cache = cache.as_deref_mut().map(|cache| &mut cache.layers[index]);
+            hidden = layer.forward(&hidden, &inputs.cos, &inputs.sin, &inputs.mask, layer_cache)?;
+        }
+        let hidden = rms_norm_effective(&hidden, &self.norm, self.eps)?;
+        if let Some(cache) = cache {
+            cache.tokens += seq;
+        }
+        Ok(hidden)
+    }
+
+    fn attention_inputs(&self, seq: usize, offset: usize) -> Result<AttentionInputs> {
+        let key = (seq, offset);
+        if let Ok(cache) = self.attention_inputs.lock() {
+            if let Some(inputs) = cache.values.get(&key) {
+                return Ok(inputs.clone());
+            }
+        }
+        // Keys include the absolute offset, and this cache belongs to one
+        // immutable model/device/dtype. No prompt, hidden or branch state is
+        // retained. Build outside the lock; duplicate misses are harmless.
+        let (cos, sin) = self.rotary.cos_sin(seq, offset, &self.device)?;
+        let mask = causal_mask_at(seq, offset)?.to_device(&self.device)?;
+        let inputs = AttentionInputs { cos, sin, mask };
+        if let Ok(mut cache) = self.attention_inputs.lock() {
+            cache.insert(key, inputs.clone());
+        }
+        Ok(inputs)
+    }
+}
+
+/// Causal suffix-to-prefix mask `[seq, offset + seq]` at absolute positions.
+fn causal_mask_at(seq: usize, offset: usize) -> Result<Tensor> {
+    let total = seq + offset;
+    let mut data = vec![0.0f32; seq * total];
+    for i in 0..seq {
+        for j in 0..total {
+            if offset + i < j {
+                data[i * total + j] = f32::NEG_INFINITY;
+            }
+        }
+    }
+    Tensor::from_vec(data, (seq, total), &Device::Cpu)
 }
 
 // ---------------------------------------------------------------------------
@@ -710,13 +1078,18 @@ fn merge_lora_into_map(
         let base_key = canonical_weight_name(&format!("{target}.weight"))
             .ok_or_else(|| candle::Error::Msg(format!("unsupported LoRA target `{target}`")))?;
         let base = map.get_mut(&base_key).ok_or_else(|| {
-            candle::Error::Msg(format!("missing base weight `{base_key}` required for LoRA merge"))
+            candle::Error::Msg(format!(
+                "missing base weight `{base_key}` required for LoRA merge"
+            ))
         })?;
         // Compute the LoRA delta in fp32 (candle's CPU matmul does not support
         // bf16) and only cast the merged result back to the target dtype.
         let delta = b.to_dtype(DType::F32)?.matmul(&a.to_dtype(DType::F32)?)?; // [out, in]
         let delta = delta.affine(lora_scale as f64, 0.0)?;
-        let updated = base.to_dtype(DType::F32)?.broadcast_add(&delta)?.to_dtype(dtype)?;
+        let updated = base
+            .to_dtype(DType::F32)?
+            .broadcast_add(&delta)?
+            .to_dtype(dtype)?;
         *base = updated;
     }
     Ok(())
@@ -741,9 +1114,11 @@ pub struct Qwen3_5Backend {
     model: Model,
     head: Readout,
     vocab_size: usize,
+    input_vocab_size: usize,
     max_context: usize,
     dtype: String,
     device: Device,
+    caches: BTreeMap<u64, ModelCache>,
 }
 
 enum Readout {
@@ -752,6 +1127,36 @@ enum Readout {
 }
 
 impl Qwen3_5Backend {
+    /// Experimental attention compute profile. Weights and retained KV keep
+    /// their original dtype; only dense attention matmuls/softmax use FP32.
+    /// Changing arithmetic requires qualification for this execution identity.
+    pub fn with_fp32_attention(mut self, enabled: bool) -> CoreResult<Self> {
+        if enabled != self.model.fp32_attention && !self.caches.is_empty() {
+            return Err(Error::Unsupported(
+                "release retained Qwen caches before changing attention kernels".into(),
+            ));
+        }
+        self.model.set_fp32_attention(enabled);
+        Ok(self)
+    }
+
+    /// Experimental kernel profile; changing projection shapes requires
+    /// qualification for the actual model/device/dtype before serving.
+    pub fn with_projection_chunk_rows(mut self, rows: usize) -> CoreResult<Self> {
+        if rows > 4096 {
+            return Err(Error::Request(
+                "projection chunk rows must be at most 4096 (zero disables)".into(),
+            ));
+        }
+        if rows != self.model.projection_chunk_rows && !self.caches.is_empty() {
+            return Err(Error::Unsupported(
+                "release retained Qwen caches before changing projection kernels".into(),
+            ));
+        }
+        self.model.set_projection_chunks(rows);
+        Ok(self)
+    }
+
     /// Load a Qwen3.5 + optional LoRA model from a base-weights directory plus
     /// an optional adapter directory.
     ///
@@ -765,8 +1170,25 @@ impl Qwen3_5Backend {
         max_context: usize,
         dtype: impl Into<String>,
     ) -> CoreResult<Qwen3_5Backend> {
+        Self::load_on_device(base_dir, adapter_dir, max_context, dtype, Device::Cpu)
+    }
+
+    /// Explicit device loader for F3. Stage conversion/LoRA merge on CPU and
+    /// move both backbone and vocabulary head to the selected device.
+    pub fn load_on_device(
+        base_dir: &Path,
+        adapter_dir: Option<&Path>,
+        max_context: usize,
+        dtype: impl Into<String>,
+        device: Device,
+    ) -> CoreResult<Self> {
         Self::load_with_head(
-            base_dir, adapter_dir, None, max_context, dtype.into(), Device::Cpu,
+            base_dir,
+            adapter_dir,
+            None,
+            max_context,
+            dtype.into(),
+            device,
         )
     }
 
@@ -780,7 +1202,12 @@ impl Qwen3_5Backend {
         dtype: impl Into<String>,
     ) -> CoreResult<Self> {
         Self::load_kev_on_device(
-            base_dir, adapter_dir, head_path, max_context, dtype, Device::Cpu,
+            base_dir,
+            adapter_dir,
+            head_path,
+            max_context,
+            dtype,
+            Device::Cpu,
         )
     }
 
@@ -830,20 +1257,24 @@ impl Qwen3_5Backend {
         };
         log::info!(
             "loading Qwen3.5 on {} with {} weights",
-            crate::device_label(&device), dtype_str,
+            crate::device_label(&device),
+            dtype_str,
         );
 
         let config_path = base_dir.join("config.json");
         let config = parse_config(&config_path)?;
 
-        // Stage Kev weights and merge LoRA on CPU. Turing cannot cast BF16
+        // Stage weights and merge LoRA on CPU. Turing cannot cast BF16
         // source tensors on CUDA, and staging avoids GPU merge temporaries.
-        let weight_device = if pointer_path.is_some() {
-            Device::Cpu
-        } else {
-            device.clone()
-        };
-        let mut tensors = load_base_tensors(base_dir, &weight_device, dtype)?;
+        let weight_device = Device::Cpu;
+        #[cfg(feature = "clef")]
+        if device.is_cuda() && dtype == DType::BF16 && !crate::device::supports_bf16(&device)? {
+            return Err(Error::Unsupported(
+                "Qwen BF16 execution requires a GPU with BF16 support; choose fp16 or fp32".into(),
+            ));
+        }
+        let mut tensors =
+            load_base_tensors_filtered(base_dir, &weight_device, dtype, pointer_path.is_none())?;
         if tensors.is_empty() {
             return Err(Error::Backend(format!(
                 "no base-weight `*.safetensors` found in `{}`; the Qwen3.5 backend needs the \
@@ -856,7 +1287,9 @@ impl Qwen3_5Backend {
         if let Some(adapter_dir) = adapter_dir {
             let adapter_path = adapter_dir.join("adapter_model.safetensors");
             let lora = candle::safetensors::load(&adapter_path, &weight_device).map_err(|e| {
-                Error::Backend(QwenError::Load(adapter_path.display().to_string(), e.to_string()).to_string())
+                Error::Backend(
+                    QwenError::Load(adapter_path.display().to_string(), e.to_string()).to_string(),
+                )
             })?;
             let (r, alpha) = read_lora_hyperparams(&adapter_dir.join("adapter_config.json"))?;
             let scale = if r > 0 { alpha / r as f32 } else { 1.0 };
@@ -880,7 +1313,17 @@ impl Qwen3_5Backend {
                 let lm_head_w = tensors.remove("lm_head.weight").ok_or_else(|| {
                     Error::Backend("base weights are missing `lm_head.weight`".into())
                 })?;
-                Readout::LanguageModel(Linear::new(lm_head_w, tensors.remove("lm_head.bias")))
+                let weight = lm_head_w.to_device(&device).map_err(|e| {
+                    Error::Backend(format!("moving vocabulary weights to device: {e}"))
+                })?;
+                let bias = tensors
+                    .remove("lm_head.bias")
+                    .map(|bias| bias.to_device(&device))
+                    .transpose()
+                    .map_err(|e| {
+                        Error::Backend(format!("moving vocabulary bias to device: {e}"))
+                    })?;
+                Readout::LanguageModel(Linear::new(weight, bias))
             }
         };
         let vocab_size = if pointer_path.is_some() {
@@ -889,21 +1332,25 @@ impl Qwen3_5Backend {
             config.vocab_size
         };
 
-        let tensors = tensors.into_iter()
+        let tensors = tensors
+            .into_iter()
             .map(|(name, tensor)| tensor.to_device(&device).map(|tensor| (name, tensor)))
             .collect::<candle::Result<HashMap<_, _>>>()
             .map_err(|e| Error::Backend(format!("moving Qwen3.5 weights to device: {e}")))?;
         let vb = VarBuilder::from_tensors(tensors, dtype, &device);
-        let model = Model::new(&config, vb, &device, dtype)
-            .map_err(|e| Error::Backend(QwenError::Load("model".into(), e.to_string()).to_string()))?;
+        let model = Model::new(&config, vb, &device, dtype).map_err(|e| {
+            Error::Backend(QwenError::Load("model".into(), e.to_string()).to_string())
+        })?;
 
         Ok(Qwen3_5Backend {
             model,
             head,
             vocab_size,
+            input_vocab_size: config.vocab_size,
             max_context,
             dtype: dtype_str,
             device,
+            caches: BTreeMap::new(),
         })
     }
 }
@@ -914,20 +1361,25 @@ fn base_repo_hint(_cfg: &Config) -> &'static str {
 }
 
 fn parse_config(path: &Path) -> CoreResult<Config> {
-    let text = std::fs::read_to_string(path)
-        .map_err(|e| Error::Backend(QwenError::Config(path.display().to_string(), e.to_string()).to_string()))?;
-    let v: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|e| Error::Backend(QwenError::Config(path.display().to_string(), e.to_string()).to_string()))?;
-    Config::from_value(&v)
-        .map_err(|e| Error::Backend(QwenError::Config(path.display().to_string(), e.to_string()).to_string()))
+    let text = std::fs::read_to_string(path).map_err(|e| {
+        Error::Backend(QwenError::Config(path.display().to_string(), e.to_string()).to_string())
+    })?;
+    let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+        Error::Backend(QwenError::Config(path.display().to_string(), e.to_string()).to_string())
+    })?;
+    Config::from_value(&v).map_err(|e| {
+        Error::Backend(QwenError::Config(path.display().to_string(), e.to_string()).to_string())
+    })
 }
 
 /// Read `lora_alpha`/`r` from an `adapter_config.json`.
 fn read_lora_hyperparams(path: &Path) -> CoreResult<(usize, f32)> {
-    let text = std::fs::read_to_string(path)
-        .map_err(|e| Error::Backend(QwenError::Config(path.display().to_string(), e.to_string()).to_string()))?;
-    let v: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|e| Error::Backend(QwenError::Config(path.display().to_string(), e.to_string()).to_string()))?;
+    let text = std::fs::read_to_string(path).map_err(|e| {
+        Error::Backend(QwenError::Config(path.display().to_string(), e.to_string()).to_string())
+    })?;
+    let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+        Error::Backend(QwenError::Config(path.display().to_string(), e.to_string()).to_string())
+    })?;
     let r = v.get("r").and_then(|x| x.as_u64()).unwrap_or(16) as usize;
     let alpha = v.get("lora_alpha").and_then(|x| x.as_f64()).unwrap_or(32.0) as f32;
     Ok((r, alpha))
@@ -935,24 +1387,43 @@ fn read_lora_hyperparams(path: &Path) -> CoreResult<(usize, f32)> {
 
 /// Load all `*.safetensors` files in a directory into a single tensor map,
 /// converting to the requested dtype.
-pub(crate) fn load_base_tensors(dir: &Path, device: &Device, dtype: DType) -> CoreResult<HashMap<String, Tensor>> {
+#[cfg(any(feature = "clef", test))]
+pub(crate) fn load_base_tensors(
+    dir: &Path,
+    device: &Device,
+    dtype: DType,
+) -> CoreResult<HashMap<String, Tensor>> {
+    load_base_tensors_filtered(dir, device, dtype, true)
+}
+
+fn load_base_tensors_filtered(
+    dir: &Path,
+    device: &Device,
+    dtype: DType,
+    include_lm_head: bool,
+) -> CoreResult<HashMap<String, Tensor>> {
     let mut map = HashMap::new();
     let entries: Vec<_> = std::fs::read_dir(dir)
-        .map_err(|e| Error::Backend(QwenError::Load(dir.display().to_string(), e.to_string()).to_string()))?
+        .map_err(|e| {
+            Error::Backend(QwenError::Load(dir.display().to_string(), e.to_string()).to_string())
+        })?
         .filter_map(|e| e.ok())
         .map(|e| e.path())
         .filter(|p| p.extension().map(|x| x == "safetensors").unwrap_or(false))
         .filter(|p| {
             // The adapter sits next to the base weights in the package dir; do
             // not treat `adapter_model.safetensors` as a base shard.
-            p.file_name().map(|n| n != "adapter_model.safetensors" && n != "joint_head.safetensors").unwrap_or(true)
+            p.file_name()
+                .map(|n| n != "adapter_model.safetensors" && n != "joint_head.safetensors")
+                .unwrap_or(true)
         })
         .collect();
     for p in entries {
         // Model files must remain unchanged while loading. Map the shard so
         // excluded vision/MTP weights are never materialized on the device.
-        let raw = unsafe { candle::safetensors::MmapedSafetensors::new(&p) }
-            .map_err(|e| Error::Backend(QwenError::Load(p.display().to_string(), e.to_string()).to_string()))?;
+        let raw = unsafe { candle::safetensors::MmapedSafetensors::new(&p) }.map_err(|e| {
+            Error::Backend(QwenError::Load(p.display().to_string(), e.to_string()).to_string())
+        })?;
         for (name, _) in raw.tensors() {
             // The Qwen3.5 base is a multimodal conditional-generation model; the
             // F3 adapter and this text backend only need the text backbone and
@@ -961,9 +1432,18 @@ pub(crate) fn load_base_tensors(dir: &Path, device: &Device, dtype: DType) -> Co
             let Some(k) = canonical_weight_name(&name) else {
                 continue;
             };
-            let v = raw.load(&name, device).and_then(|v| v.to_dtype(dtype)).map_err(|e| {
-                Error::Backend(QwenError::Load(k.clone(), e.to_string()).to_string())
-            })?;
+            // Pointer inference never uses the vocabulary projection. Filter
+            // before mmap materialization/casting, rather than loading a large
+            // head only to remove it afterward.
+            if !include_lm_head && k.starts_with("lm_head.") {
+                continue;
+            }
+            let v = raw
+                .load(&name, device)
+                .and_then(|v| v.to_dtype(dtype))
+                .map_err(|e| {
+                    Error::Backend(QwenError::Load(k.clone(), e.to_string()).to_string())
+                })?;
             map.insert(k, v);
         }
     }
@@ -996,21 +1476,58 @@ impl Backend for Qwen3_5Backend {
     }
 
     fn capabilities(&self) -> Capabilities {
+        let mut extra = BTreeMap::from([("device".into(), crate::device_label(&self.device))]);
+        if self.model.projection_chunk_rows > 0 {
+            extra.insert(
+                "projection_chunk_rows".into(),
+                self.model.projection_chunk_rows.to_string(),
+            );
+        }
+        if self.model.fp32_attention {
+            extra.insert("attention_compute_dtype".into(), "fp32".into());
+        }
+        if self.device.is_cuda() && matches!(self.head, Readout::LanguageModel(_)) {
+            extra.insert("device_path".into(), "qwen-f3-cuda".into());
+        }
         Capabilities {
             id: BackendId::Candle,
             dtype: self.dtype.clone(),
             max_context: self.max_context,
-            supports_fork: false,
+            supports_fork: matches!(self.head, Readout::Pointer(_)),
             supports_lora: true,
             families: vec![match self.head {
                 Readout::Pointer(_) => Family::F2,
                 _ => Family::F3,
             }],
-            extra: BTreeMap::from([("device".into(), crate::device_label(&self.device))]),
+            extra,
         }
     }
 
     fn forward(&mut self, input: ForwardInput) -> CoreResult<ForwardOutput> {
+        if input.retain_cache {
+            return Err(Error::Unsupported(
+                "use prefill to obtain an explicit cache handle".into(),
+            ));
+        }
+        if input
+            .tokens
+            .iter()
+            .any(|&token| token as usize >= self.input_vocab_size)
+        {
+            return Err(Error::Backend(
+                "Qwen3.5 token ID is outside the vocabulary".into(),
+            ));
+        }
+        let mut cache = input
+            .fork_from
+            .map(|handle| {
+                self.caches
+                    .get(&handle.id)
+                    .cloned()
+                    .ok_or_else(|| Error::Backend("unknown Qwen3.5 cache handle".into()))
+            })
+            .transpose()?;
+        let prefix_len = cache.as_ref().map_or(0, |cache| cache.tokens);
         if input
             .positions
             .iter()
@@ -1020,29 +1537,178 @@ impl Backend for Qwen3_5Backend {
                 "Qwen3.5 readout position is outside the token sequence".into(),
             ));
         }
-        if input.tokens.len() > self.max_context {
+        let sequence_len = prefix_len
+            .checked_add(input.tokens.len())
+            .ok_or_else(|| Error::Backend("sequence length overflow".into()))?;
+        if sequence_len > self.max_context {
             return Err(Error::Backend(format!(
                 "sequence length {} exceeds candle max_context {}",
-                input.tokens.len(),
-                self.max_context
+                sequence_len, self.max_context
             )));
         }
+        if matches!(self.head, Readout::LanguageModel(_)) {
+            if let Some(codes) = &input.logit_codes {
+                if codes.is_empty() || codes.iter().any(|&code| code as usize >= self.vocab_size) {
+                    return Err(Error::Backend(
+                        "requested vocabulary codes are empty or out of range".into(),
+                    ));
+                }
+            }
+        }
+        if input.positions.is_empty() && cache.is_none() {
+            return Ok(ForwardOutput::Logits {
+                positions: Vec::new(),
+                values: CoreTensor::zeros(vec![0, self.vocab_size]),
+            });
+        }
+        if input.tokens.is_empty() {
+            return Err(Error::Backend(
+                "cached continuation requires nonempty suffix tokens".into(),
+            ));
+        }
+        let candle =
+            |e: candle::Error| Error::Backend(QwenError::Inference(e.to_string()).to_string());
+        let ids = Tensor::new(input.tokens.as_slice(), &self.device)
+            .map_err(&candle)?
+            .unsqueeze(0)
+            .map_err(&candle)?;
+        let hidden = match &mut cache {
+            Some(cache) => self.model.forward_cached(&ids, cache),
+            None => self.model.forward(&ids),
+        }
+        .map_err(&candle)?;
+        if input.positions.is_empty() {
+            self.caches
+                .insert(input.fork_from.unwrap().id, cache.unwrap());
+            return Ok(ForwardOutput::Logits {
+                positions: Vec::new(),
+                values: CoreTensor::zeros(vec![0, self.vocab_size]),
+            });
+        }
+
+        let output = self.readout(&hidden, &input)?;
+        // Commit only after the complete forward/readout succeeds. A failed
+        // branch remains at its previous offset and state.
+        if let (Some(handle), Some(cache)) = (input.fork_from, cache) {
+            self.caches.insert(handle.id, cache);
+        }
+        Ok(output)
+    }
+
+    fn supports_batch(&self) -> bool {
+        true
+    }
+
+    fn forward_batch(&mut self, inputs: Vec<ForwardInput>) -> CoreResult<Vec<ForwardOutput>> {
+        if inputs.is_empty() || inputs.len() > 64 {
+            return Err(Error::Backend(
+                "Qwen3.5 batch must contain 1..=64 independent rows".into(),
+            ));
+        }
+        let seq = inputs[0].tokens.len();
+        if seq == 0
+            || seq > self.max_context
+            || inputs.iter().any(|input| {
+                input.tokens.len() != seq
+                    || input.fork_from.is_some()
+                    || input.retain_cache
+                    || input.positions.iter().any(|&p| p >= seq)
+                    || input
+                        .tokens
+                        .iter()
+                        .any(|&token| token as usize >= self.input_vocab_size)
+                    || (matches!(self.head, Readout::LanguageModel(_))
+                        && input.logit_codes.as_ref().is_some_and(|codes| {
+                            codes.is_empty() || codes.iter().any(|&c| c as usize >= self.vocab_size)
+                        }))
+            })
+        {
+            return Err(Error::Backend(
+                "Qwen3.5 batches require valid independent equal-length rows without cache handles"
+                    .into(),
+            ));
+        }
+        let tokens: Vec<_> = inputs
+            .iter()
+            .flat_map(|input| input.tokens.iter().copied())
+            .collect();
+        let ids = Tensor::from_vec(tokens, (inputs.len(), seq), &self.device)
+            .map_err(|e| Error::Backend(e.to_string()))?;
+        let hidden = self
+            .model
+            .forward(&ids)
+            .map_err(|e| Error::Backend(e.to_string()))?;
+        inputs
+            .iter()
+            .enumerate()
+            .map(|(row, input)| {
+                let hidden = hidden
+                    .narrow(0, row, 1)
+                    .map_err(|e| Error::Backend(e.to_string()))?;
+                self.readout(&hidden, input)
+            })
+            .collect()
+    }
+
+    fn fork(&mut self, handle: CacheHandle) -> CoreResult<CacheHandle> {
+        self.check_cache_capacity()?;
+        let cache = self
+            .caches
+            .get(&handle.id)
+            .cloned()
+            .ok_or_else(|| Error::Backend("unknown Qwen3.5 cache handle".into()))?;
+        let fork = crate::next_cache_handle()?;
+        self.caches.insert(fork.id, cache);
+        Ok(fork)
+    }
+
+    fn prefill(&mut self, tokens: &[u32]) -> CoreResult<CacheHandle> {
+        if !matches!(self.head, Readout::Pointer(_)) {
+            return Err(Error::Unsupported(
+                "prefix caching is currently qualified only for the pointer readout".into(),
+            ));
+        }
+        self.check_cache_capacity()?;
+        if tokens.is_empty()
+            || tokens.len() > self.max_context
+            || tokens
+                .iter()
+                .any(|&token| token as usize >= self.input_vocab_size)
+        {
+            return Err(Error::Backend(
+                "prefill must be nonempty and fit max_context".into(),
+            ));
+        }
+        let mut cache = self.model.empty_cache();
+        let ids = Tensor::new(tokens, &self.device)
+            .and_then(|ids| ids.unsqueeze(0))
+            .map_err(|e| Error::Backend(e.to_string()))?;
+        self.model
+            .forward_cached(&ids, &mut cache)
+            .map_err(|e| Error::Backend(e.to_string()))?;
+        let handle = crate::next_cache_handle()?;
+        self.caches.insert(handle.id, cache);
+        Ok(handle)
+    }
+
+    fn release_cache(&mut self, handle: CacheHandle) -> CoreResult<()> {
+        self.caches
+            .remove(&handle.id)
+            .map(|_| ())
+            .ok_or_else(|| Error::Backend("unknown Qwen3.5 cache handle".into()))
+    }
+}
+
+impl Qwen3_5Backend {
+    fn readout(&self, hidden: &Tensor, input: &ForwardInput) -> CoreResult<ForwardOutput> {
         if input.positions.is_empty() {
             return Ok(ForwardOutput::Logits {
                 positions: Vec::new(),
                 values: CoreTensor::zeros(vec![0, self.vocab_size]),
             });
         }
-        let candle = |e: candle::Error| Error::Backend(QwenError::Inference(e.to_string()).to_string());
-        let ids = Tensor::new(input.tokens.as_slice(), &self.device)
-            .map_err(&candle)?
-            .unsqueeze(0)
-            .map_err(&candle)?;
-        let hidden = self
-            .model
-            .forward(&ids)
-            .map_err(&candle)?;
-
+        let candle =
+            |e: candle::Error| Error::Backend(QwenError::Inference(e.to_string()).to_string());
         let pos: Vec<u32> = input.positions.iter().map(|&p| p as u32).collect();
         let pos_t = Tensor::new(pos.as_slice(), &self.device).map_err(&candle)?;
         // Keep the hidden states at the model dtype so the `lm_head` (also at
@@ -1053,40 +1719,66 @@ impl Backend for Qwen3_5Backend {
             .map_err(&candle)?
             .squeeze(0)
             .map_err(&candle)?; // [n_positions, hidden]
-        let logits = match &self.head {
-            Readout::LanguageModel(head) => head.forward(&selected).map_err(&candle)?,
-            Readout::Pointer(head) => {
+        let (logits, codes) = match (&self.head, input.logit_codes.clone()) {
+            (Readout::LanguageModel(head), Some(codes)) => {
+                // The decision distribution only needs these vocabulary rows.
+                // Preserve the trained projection/bias and native matmul dtype;
+                // temperature and candidate softmax remain in core.
+                let indices = Tensor::new(codes.as_slice(), &self.device).map_err(&candle)?;
+                let weight = head.weight().index_select(&indices, 0).map_err(&candle)?;
+                let bias = head
+                    .bias()
+                    .map(|bias| bias.index_select(&indices, 0))
+                    .transpose()
+                    .map_err(&candle)?;
+                let logits = Linear::new(weight, bias)
+                    .forward(&selected)
+                    .map_err(&candle)?;
+                (logits, Some(codes))
+            }
+            (Readout::LanguageModel(head), None) => {
+                (head.forward(&selected).map_err(&candle)?, None)
+            }
+            (Readout::Pointer(head), _) => {
                 let decide = hidden
                     .narrow(1, input.tokens.len() - 1, 1)
                     .and_then(|t| t.squeeze(0))
                     .map_err(&candle)?;
-                head.forward(&decide, &selected).map_err(&candle)?
+                (head.forward(&decide, &selected).map_err(&candle)?, None)
             }
         };
         let values = core_from_tensor(&logits.to_dtype(DType::F32).map_err(&candle)?)?;
-        Ok(ForwardOutput::Logits {
-            positions: input.positions,
-            values,
+        Ok(match codes {
+            Some(codes) => ForwardOutput::SelectedLogits {
+                positions: input.positions.clone(),
+                codes,
+                values,
+            },
+            None => ForwardOutput::Logits {
+                positions: input.positions.clone(),
+                values,
+            },
         })
     }
 
-    fn fork(&mut self, _handle: CacheHandle) -> CoreResult<CacheHandle> {
-        Err(Error::Unsupported(
-            "qwen3.5 candle backend v1 does not support KV forking".into(),
-        ))
+    fn check_cache_capacity(&self) -> CoreResult<()> {
+        if self.caches.len() >= 64 {
+            Err(Error::Backend(
+                "Qwen3.5 retained cache limit reached; release unused handles".into(),
+            ))
+        } else {
+            Ok(())
+        }
     }
 }
 
 /// Convert a 2-D candle tensor into a core tensor.
 fn core_from_tensor(t: &Tensor) -> CoreResult<CoreTensor> {
     let dims = t.dims();
-    let rows = t
-        .to_vec2::<f32>()
+    let data = t
+        .flatten_all()
+        .and_then(|flat| flat.to_vec1::<f32>())
         .map_err(|e| Error::Backend(QwenError::Inference(e.to_string()).to_string()))?;
-    let mut data = Vec::with_capacity(rows.len().saturating_mul(dims.last().copied().unwrap_or(0)));
-    for row in rows {
-        data.extend(row);
-    }
     CoreTensor::new(dims.to_vec(), data)
 }
 
@@ -1125,7 +1817,10 @@ mod tests {
     fn tiny_weights(cfg: &Config, device: &Device) -> HashMap<String, Tensor> {
         let mut m = HashMap::new();
         let h = cfg.hidden_size;
-        m.insert("model.language_model.embed_tokens.weight".into(), rand((cfg.vocab_size, h), device));
+        m.insert(
+            "model.language_model.embed_tokens.weight".into(),
+            rand((cfg.vocab_size, h), device),
+        );
         m.insert("lm_head.weight".into(), rand((cfg.vocab_size, h), device));
         m.insert("model.language_model.norm.weight".into(), rand(h, device));
 
@@ -1141,27 +1836,75 @@ mod tests {
         for i in 0..2 {
             let p = format!("model.language_model.layers.{i}");
             m.insert(format!("{p}.input_layernorm.weight"), rand(h, device));
-            m.insert(format!("{p}.post_attention_layernorm.weight"), rand(h, device));
-            m.insert(format!("{p}.mlp.gate_proj.weight"), rand((inter, h), device));
+            m.insert(
+                format!("{p}.post_attention_layernorm.weight"),
+                rand(h, device),
+            );
+            m.insert(
+                format!("{p}.mlp.gate_proj.weight"),
+                rand((inter, h), device),
+            );
             m.insert(format!("{p}.mlp.up_proj.weight"), rand((inter, h), device));
-            m.insert(format!("{p}.mlp.down_proj.weight"), rand((h, inter), device));
+            m.insert(
+                format!("{p}.mlp.down_proj.weight"),
+                rand((h, inter), device),
+            );
             if i == 0 {
-                m.insert(format!("{p}.linear_attn.in_proj_qkv.weight"), rand((conv_dim, h), device));
-                m.insert(format!("{p}.linear_attn.in_proj_z.weight"), rand((value_dim, h), device));
-                m.insert(format!("{p}.linear_attn.in_proj_b.weight"), rand((n_v, h), device));
-                m.insert(format!("{p}.linear_attn.in_proj_a.weight"), rand((n_v, h), device));
-                m.insert(format!("{p}.linear_attn.out_proj.weight"), rand((h, value_dim), device));
-                m.insert(format!("{p}.linear_attn.conv1d.weight"), rand((conv_dim, 1, cfg.linear_conv_kernel_dim), device));
-                m.insert(format!("{p}.linear_attn.norm.weight"), rand(cfg.linear_value_head_dim, device));
+                m.insert(
+                    format!("{p}.linear_attn.in_proj_qkv.weight"),
+                    rand((conv_dim, h), device),
+                );
+                m.insert(
+                    format!("{p}.linear_attn.in_proj_z.weight"),
+                    rand((value_dim, h), device),
+                );
+                m.insert(
+                    format!("{p}.linear_attn.in_proj_b.weight"),
+                    rand((n_v, h), device),
+                );
+                m.insert(
+                    format!("{p}.linear_attn.in_proj_a.weight"),
+                    rand((n_v, h), device),
+                );
+                m.insert(
+                    format!("{p}.linear_attn.out_proj.weight"),
+                    rand((h, value_dim), device),
+                );
+                m.insert(
+                    format!("{p}.linear_attn.conv1d.weight"),
+                    rand((conv_dim, 1, cfg.linear_conv_kernel_dim), device),
+                );
+                m.insert(
+                    format!("{p}.linear_attn.norm.weight"),
+                    rand(cfg.linear_value_head_dim, device),
+                );
                 m.insert(format!("{p}.linear_attn.A_log"), rand(n_v, device));
                 m.insert(format!("{p}.linear_attn.dt_bias"), rand(n_v, device));
             } else {
-                m.insert(format!("{p}.self_attn.q_proj.weight"), rand((2 * heads * head_dim, h), device));
-                m.insert(format!("{p}.self_attn.k_proj.weight"), rand((kv_heads * head_dim, h), device));
-                m.insert(format!("{p}.self_attn.v_proj.weight"), rand((kv_heads * head_dim, h), device));
-                m.insert(format!("{p}.self_attn.o_proj.weight"), rand((h, heads * head_dim), device));
-                m.insert(format!("{p}.self_attn.q_norm.weight"), rand(head_dim, device));
-                m.insert(format!("{p}.self_attn.k_norm.weight"), rand(head_dim, device));
+                m.insert(
+                    format!("{p}.self_attn.q_proj.weight"),
+                    rand((2 * heads * head_dim, h), device),
+                );
+                m.insert(
+                    format!("{p}.self_attn.k_proj.weight"),
+                    rand((kv_heads * head_dim, h), device),
+                );
+                m.insert(
+                    format!("{p}.self_attn.v_proj.weight"),
+                    rand((kv_heads * head_dim, h), device),
+                );
+                m.insert(
+                    format!("{p}.self_attn.o_proj.weight"),
+                    rand((h, heads * head_dim), device),
+                );
+                m.insert(
+                    format!("{p}.self_attn.q_norm.weight"),
+                    rand(head_dim, device),
+                );
+                m.insert(
+                    format!("{p}.self_attn.k_norm.weight"),
+                    rand(head_dim, device),
+                );
             }
         }
         m
@@ -1178,11 +1921,50 @@ mod tests {
         let cfg = tiny_cfg();
         let device = Device::Cpu;
         let model = build_model(&cfg, &device);
-        let ids = Tensor::new(&[1u32, 2, 3, 4][..], &device).unwrap().unsqueeze(0).unwrap();
+        let ids = Tensor::new(&[1u32, 2, 3, 4][..], &device)
+            .unwrap()
+            .unsqueeze(0)
+            .unwrap();
         let hidden = model.forward(&ids).unwrap();
         assert_eq!(hidden.dims(), &[1, 4, 16]);
         let v3 = hidden.to_vec3::<f32>().unwrap();
         assert!(v3.iter().flatten().flatten().all(|x| x.is_finite()));
+    }
+
+    #[test]
+    fn attention_input_reuse_is_offset_aware_and_bounded() {
+        let cfg = tiny_cfg();
+        let model = build_model(&cfg, &Device::Cpu);
+        let initial = model.attention_inputs(3, 0).unwrap();
+        let repeated = model.attention_inputs(3, 0).unwrap();
+        assert_eq!(initial.mask.id(), repeated.mask.id());
+        assert_eq!(initial.cos.id(), repeated.cos.id());
+        let offset = model.attention_inputs(3, 2).unwrap();
+        assert_eq!(offset.mask.dims(), &[3, 5]);
+        assert_ne!(
+            initial.cos.to_vec2::<f32>().unwrap()[0],
+            offset.cos.to_vec2::<f32>().unwrap()[0]
+        );
+        let mask = offset.mask.to_vec2::<f32>().unwrap();
+        assert_eq!(mask[0][2], 0.);
+        assert_eq!(mask[0][3], f32::NEG_INFINITY);
+        for seq in 1..=40 {
+            model.attention_inputs(seq, 0).unwrap();
+        }
+        {
+            let cache = model.attention_inputs.lock().unwrap();
+            assert_eq!(cache.values.len(), AttentionInputCache::MAX_ENTRIES);
+            assert!(cache.bytes <= AttentionInputCache::MAX_BYTES);
+            assert!(!cache.values.contains_key(&(1, 0)));
+        }
+        let large = model.attention_inputs(1100, 0).unwrap();
+        assert!(large.bytes() > AttentionInputCache::MAX_BYTES);
+        assert!(!model
+            .attention_inputs
+            .lock()
+            .unwrap()
+            .values
+            .contains_key(&(1100, 0)));
     }
 
     #[test]
@@ -1192,12 +1974,33 @@ mod tests {
         let cfg = tiny_cfg();
         let device = Device::Cpu;
         let model = build_model(&cfg, &device);
-        let ids_a = Tensor::new(&[5u32, 6, 7][..], &device).unwrap().unsqueeze(0).unwrap();
-        let ids_b = Tensor::new(&[5u32, 10, 11][..], &device).unwrap().unsqueeze(0).unwrap();
-        let ha = model.forward(&ids_a).unwrap().index_select(&Tensor::new(&[0u32], &device).unwrap(), 1).unwrap().to_vec3::<f32>().unwrap();
-        let hb = model.forward(&ids_b).unwrap().index_select(&Tensor::new(&[0u32], &device).unwrap(), 1).unwrap().to_vec3::<f32>().unwrap();
+        let ids_a = Tensor::new(&[5u32, 6, 7][..], &device)
+            .unwrap()
+            .unsqueeze(0)
+            .unwrap();
+        let ids_b = Tensor::new(&[5u32, 10, 11][..], &device)
+            .unwrap()
+            .unsqueeze(0)
+            .unwrap();
+        let ha = model
+            .forward(&ids_a)
+            .unwrap()
+            .index_select(&Tensor::new(&[0u32], &device).unwrap(), 1)
+            .unwrap()
+            .to_vec3::<f32>()
+            .unwrap();
+        let hb = model
+            .forward(&ids_b)
+            .unwrap()
+            .index_select(&Tensor::new(&[0u32], &device).unwrap(), 1)
+            .unwrap()
+            .to_vec3::<f32>()
+            .unwrap();
         for (x, y) in ha[0][0].iter().zip(hb[0][0].iter()) {
-            assert!((x - y).abs() < 1e-4, "position-0 hidden changed: {x} vs {y}");
+            assert!(
+                (x - y).abs() < 1e-4,
+                "position-0 hidden changed: {x} vs {y}"
+            );
         }
     }
 
@@ -1208,17 +2011,27 @@ mod tests {
         let weights = tiny_weights(&cfg, &device);
         let vb = VarBuilder::from_tensors(weights.clone(), DType::F32, &device);
         let model = Model::new(&cfg, vb, &device, DType::F32).unwrap();
-        let lm_head = linear_b(cfg.hidden_size, cfg.vocab_size, false, VarBuilder::from_tensors(weights, DType::F32, &device).pp("lm_head")).unwrap();
+        let lm_head = linear_b(
+            cfg.hidden_size,
+            cfg.vocab_size,
+            false,
+            VarBuilder::from_tensors(weights, DType::F32, &device).pp("lm_head"),
+        )
+        .unwrap();
 
         let mut backend = Qwen3_5Backend {
             model,
             head: Readout::LanguageModel(lm_head),
             vocab_size: cfg.vocab_size,
+            input_vocab_size: cfg.vocab_size,
             max_context: 32,
             dtype: "fp32".into(),
             device,
+            caches: BTreeMap::new(),
         };
-        let out = backend.forward(ForwardInput::new(vec![1, 2, 3, 4], vec![3])).unwrap();
+        let out = backend
+            .forward(ForwardInput::new(vec![1, 2, 3, 4], vec![3]))
+            .unwrap();
         assert_eq!(out.values().shape(), &[1, 32]);
         assert!(out.values().data().iter().all(|x| x.is_finite()));
     }
@@ -1227,7 +2040,10 @@ mod tests {
     fn lo_merge_changes_weights() {
         let device = Device::Cpu;
         let mut map = HashMap::new();
-        map.insert("model.language_model.layers.0.mlp.gate_proj.weight".into(), Tensor::zeros((8, 4), DType::F32, &device).unwrap());
+        map.insert(
+            "model.language_model.layers.0.mlp.gate_proj.weight".into(),
+            Tensor::zeros((8, 4), DType::F32, &device).unwrap(),
+        );
         let mut lora = HashMap::new();
         lora.insert(
             "base_model.model.model.language_model.layers.0.mlp.gate_proj.lora_A.weight".into(),
@@ -1240,7 +2056,351 @@ mod tests {
         // B@A = ones(8,4) (each entry = sum of 2 products = 2); scaled by
         // alpha/r = 2 => each entry becomes 4.
         merge_lora_into_map(&mut map, &lora, 2.0, DType::F32).unwrap();
-        let merged = map["model.language_model.layers.0.mlp.gate_proj.weight"].to_vec2::<f32>().unwrap();
-        assert!(merged.iter().flatten().all(|x| (*x - 4.0).abs() < 1e-4), "expected merged=4, got {merged:?}");
+        let merged = map["model.language_model.layers.0.mlp.gate_proj.weight"]
+            .to_vec2::<f32>()
+            .unwrap();
+        assert!(
+            merged.iter().flatten().all(|x| (*x - 4.0).abs() < 1e-4),
+            "expected merged=4, got {merged:?}"
+        );
+    }
+
+    #[test]
+    fn pointer_loading_filters_unused_vocabulary_weights_before_materialization() {
+        let dir = tempfile::tempdir().unwrap();
+        let weights: HashMap<String, Tensor> = HashMap::from([
+            (
+                "lm_head.weight".into(),
+                Tensor::zeros((32, 16), DType::F32, &Device::Cpu).unwrap(),
+            ),
+            (
+                "lm_head.bias".into(),
+                Tensor::zeros(32, DType::F32, &Device::Cpu).unwrap(),
+            ),
+            (
+                "model.language_model.norm.weight".into(),
+                Tensor::zeros(16, DType::F32, &Device::Cpu).unwrap(),
+            ),
+            (
+                "model.visual.norm.weight".into(),
+                Tensor::zeros(16, DType::F32, &Device::Cpu).unwrap(),
+            ),
+        ]);
+        candle::safetensors::save(&weights, dir.path().join("model.safetensors")).unwrap();
+        let pointer =
+            load_base_tensors_filtered(dir.path(), &Device::Cpu, DType::F32, false).unwrap();
+        assert_eq!(pointer.len(), 1);
+        assert!(pointer.contains_key("model.language_model.norm.weight"));
+        let lm = load_base_tensors(dir.path(), &Device::Cpu, DType::F32).unwrap();
+        assert_eq!(lm.len(), 3);
+        assert!(lm.contains_key("lm_head.weight"));
+    }
+
+    #[test]
+    fn projection_chunks_preserve_order_bias_dtype_and_partial_rows() {
+        for dtype in [DType::F32, DType::F16] {
+            let device = Device::Cpu;
+            let weight = Tensor::new(
+                &[[0.5f32, 0.25, -0.5, 1.0], [-0.25, 0.5, 1.0, 0.25]],
+                &device,
+            )
+            .unwrap()
+            .to_dtype(dtype)
+            .unwrap();
+            let bias = Tensor::new(&[0.5f32, -0.25], &device)
+                .unwrap()
+                .to_dtype(dtype)
+                .unwrap();
+            let linear = Linear::new(weight, Some(bias));
+            let input = Tensor::from_vec(
+                (0..48).map(|v| v as f32 / 4.0).collect(),
+                (3, 4, 4),
+                &device,
+            )
+            .unwrap()
+            .to_dtype(dtype)
+            .unwrap();
+            let expected = linear
+                .forward(&input)
+                .unwrap()
+                .to_dtype(DType::F32)
+                .unwrap()
+                .flatten_all()
+                .unwrap()
+                .to_vec1::<f32>()
+                .unwrap();
+            let mut projection = BackboneLinear::from(linear);
+            for rows in [0, 1, 5, 12, 64] {
+                projection.chunk_rows = rows;
+                let output = projection.forward(&input).unwrap();
+                assert_eq!(output.dims(), &[3, 4, 2]);
+                assert_eq!(output.dtype(), dtype);
+                assert_eq!(
+                    output
+                        .to_dtype(DType::F32)
+                        .unwrap()
+                        .flatten_all()
+                        .unwrap()
+                        .to_vec1::<f32>()
+                        .unwrap(),
+                    expected
+                );
+            }
+        }
+    }
+
+    /// Diagnostic only: retain evidence for a failed full-model precision gate,
+    /// without exposing tracing in serving or treating finite outputs as a pass.
+    #[cfg(feature = "clef")]
+    #[test]
+    #[ignore = "requires explicit pinned model/suite paths and qualification hardware"]
+    fn trace_kev_prefix_precision() {
+        use huncho_core::calibration::calibrate;
+        use huncho_core::conformance::load_suite;
+        use huncho_core::manifest::ModelManifest;
+        use huncho_core::prompt::formatter_for;
+        use huncho_core::tokenizer::HfTokenizer;
+
+        fn difference(left: &Tensor, right: &Tensor) -> serde_json::Value {
+            assert_eq!(left.dims(), right.dims());
+            let host = |tensor: &Tensor| {
+                tensor
+                    .to_dtype(DType::F32)
+                    .unwrap()
+                    .flatten_all()
+                    .unwrap()
+                    .to_vec1::<f32>()
+                    .unwrap()
+            };
+            let (left, right) = (host(left), host(right));
+            let mut peak = 0.0f64;
+            let mut square_sum = 0.0f64;
+            let mut changed = 0usize;
+            for (&left, &right) in left.iter().zip(&right) {
+                assert!(left.is_finite() && right.is_finite());
+                let delta = (left as f64 - right as f64).abs();
+                peak = peak.max(delta);
+                square_sum += delta * delta;
+                changed += usize::from(left != right);
+            }
+            serde_json::json!({"max_abs": peak, "rms": (square_sum / left.len() as f64).sqrt(),
+                "changed_elements": changed, "elements": left.len()})
+        }
+
+        let required = |name: &str| std::env::var(name).unwrap_or_else(|_| panic!("set {name}"));
+        let base = required("HUNCHO_TRACE_BASE");
+        let package = required("HUNCHO_TRACE_PACKAGE");
+        let suite_path = required("HUNCHO_TRACE_GOLDEN");
+        let output = required("HUNCHO_TRACE_OUTPUT");
+        let dtype = std::env::var("HUNCHO_TRACE_DTYPE").unwrap_or_else(|_| "fp16".into());
+        let case_id = std::env::var("HUNCHO_TRACE_CASE").unwrap_or_else(|_| "short".into());
+        let chunk_rows = std::env::var("HUNCHO_TRACE_PROJECTION_CHUNK_ROWS")
+            .unwrap_or_else(|_| "0".into())
+            .parse::<usize>()
+            .unwrap();
+        let fp32_attention = std::env::var("HUNCHO_TRACE_ATTENTION_FP32")
+            .unwrap_or_else(|_| "false".into())
+            .parse::<bool>()
+            .unwrap();
+        let package = Path::new(&package);
+        let manifest = ModelManifest::load(package.join("huncho-model.json")).unwrap();
+        assert_eq!(manifest.family, Family::F2);
+        assert_eq!(manifest.prompt_contract.template, "kev-v1");
+        let tokenizer = HfTokenizer::from_file(
+            package.join(
+                manifest
+                    .backbone
+                    .tokenizer
+                    .as_ref()
+                    .expect("pinned tokenizer"),
+            ),
+        )
+        .unwrap();
+        let formatter = formatter_for(&manifest);
+        let suite = load_suite(&suite_path).unwrap();
+        let case = suite
+            .cases
+            .iter()
+            .find(|case| case.id == case_id)
+            .expect("case ID");
+        let device = crate::device::device_from_env().unwrap();
+        let mut backend = Qwen3_5Backend::load_kev_on_device(
+            Path::new(&base),
+            package,
+            &package.join(&manifest.head.weights),
+            manifest.backbone.max_context,
+            &dtype,
+            device.clone(),
+        )
+        .unwrap();
+        backend = backend
+            .with_projection_chunk_rows(chunk_rows)
+            .unwrap()
+            .with_fp32_attention(fp32_attention)
+            .unwrap();
+        let temperature = manifest.calibration.resolve("candle", &dtype).temperature;
+        let mut rows = Vec::new();
+        for (qid, question) in &case.request.questions {
+            let prompt = formatter
+                .build(&case.request.state, question, &tokenizer)
+                .unwrap();
+            let prefix_len = prompt.prefix_len;
+            let suffix_len = prompt.tokens.len() - prefix_len;
+            assert!(prefix_len > 0 && suffix_len > 0);
+            assert!(prompt
+                .candidates
+                .iter()
+                .all(|candidate| candidate.position >= prefix_len));
+            let ids = |tokens: &[u32]| Tensor::new(tokens, &device).unwrap().unsqueeze(0).unwrap();
+            let model = &backend.model;
+            let full_inputs = model.attention_inputs(prompt.tokens.len(), 0).unwrap();
+            let prefix_inputs = model.attention_inputs(prefix_len, 0).unwrap();
+            let suffix_inputs = model.attention_inputs(suffix_len, prefix_len).unwrap();
+            let mut full = model.embed_tokens.forward(&ids(&prompt.tokens)).unwrap();
+            let mut prefix = model
+                .embed_tokens
+                .forward(&ids(&prompt.tokens[..prefix_len]))
+                .unwrap();
+            let mut suffix = model
+                .embed_tokens
+                .forward(&ids(&prompt.tokens[prefix_len..]))
+                .unwrap();
+            let mut layers = Vec::new();
+            for (index, layer) in model.layers.iter().enumerate() {
+                let normalized =
+                    rms_norm_effective(&full, &layer.input_layernorm, layer.eps).unwrap();
+                let projection = match (&layer.linear_attn, &layer.self_attn) {
+                    (Some(attention), _) => &attention.in_proj_qkv,
+                    (_, Some(attention)) => &attention.q_proj,
+                    _ => panic!("missing attention"),
+                };
+                // Hold input values fixed: this isolates projection differences
+                // caused by split GEMM shape/layout from accumulated layer drift.
+                let projected = projection.forward(&normalized).unwrap();
+                let split_projection = Tensor::cat(
+                    &[
+                        projection
+                            .forward(
+                                &normalized
+                                    .narrow(1, 0, prefix_len)
+                                    .unwrap()
+                                    .contiguous()
+                                    .unwrap(),
+                            )
+                            .unwrap(),
+                        projection
+                            .forward(
+                                &normalized
+                                    .narrow(1, prefix_len, suffix_len)
+                                    .unwrap()
+                                    .contiguous()
+                                    .unwrap(),
+                            )
+                            .unwrap(),
+                    ],
+                    1,
+                )
+                .unwrap();
+                let projection_delta = difference(&projected, &split_projection);
+                let mut cache = LayerCache::default();
+                full = layer
+                    .forward(
+                        &full,
+                        &full_inputs.cos,
+                        &full_inputs.sin,
+                        &full_inputs.mask,
+                        None,
+                    )
+                    .unwrap();
+                prefix = layer
+                    .forward(
+                        &prefix,
+                        &prefix_inputs.cos,
+                        &prefix_inputs.sin,
+                        &prefix_inputs.mask,
+                        Some(&mut cache),
+                    )
+                    .unwrap();
+                suffix = layer
+                    .forward(
+                        &suffix,
+                        &suffix_inputs.cos,
+                        &suffix_inputs.sin,
+                        &suffix_inputs.mask,
+                        Some(&mut cache),
+                    )
+                    .unwrap();
+                layers.push(serde_json::json!({"layer": index,
+                    "kind": if layer.linear_attn.is_some() {"linear"} else {"full"},
+                    "fixed_input_projection": projection_delta,
+                    "prefix_hidden": difference(&full.narrow(1, 0, prefix_len).unwrap(), &prefix),
+                    "suffix_hidden": difference(&full.narrow(1, prefix_len, suffix_len).unwrap(), &suffix)}));
+            }
+            full = rms_norm_effective(&full, &model.norm, model.eps).unwrap();
+            suffix = rms_norm_effective(&suffix, &model.norm, model.eps).unwrap();
+            let input = ForwardInput::new(
+                prompt.tokens.clone(),
+                prompt.candidates.iter().map(|c| c.position).collect(),
+            );
+            let mut continuation = ForwardInput::new(
+                prompt.tokens[prefix_len..].to_vec(),
+                prompt
+                    .candidates
+                    .iter()
+                    .map(|c| c.position - prefix_len)
+                    .collect(),
+            );
+            let full_probs = calibrate(
+                backend.readout(&full, &input).unwrap().values().data(),
+                temperature,
+            )
+            .unwrap();
+            let suffix_probs = calibrate(
+                backend
+                    .readout(&suffix, &continuation)
+                    .unwrap()
+                    .values()
+                    .data(),
+                temperature,
+            )
+            .unwrap();
+            let actual_full =
+                calibrate(backend.forward(input).unwrap().values().data(), temperature).unwrap();
+            let parent = backend.prefill(&prompt.tokens[..prefix_len]).unwrap();
+            let branch = backend.fork(parent).unwrap();
+            continuation.fork_from = Some(branch);
+            let actual_suffix = calibrate(
+                backend.forward(continuation).unwrap().values().data(),
+                temperature,
+            )
+            .unwrap();
+            backend.release_cache(branch).unwrap();
+            backend.release_cache(parent).unwrap();
+            for (manual, actual) in [(&full_probs, &actual_full), (&suffix_probs, &actual_suffix)] {
+                assert_eq!(manual.len(), actual.len());
+                assert!(
+                    manual
+                        .iter()
+                        .zip(actual)
+                        .all(|(a, b)| (a - b).abs() <= 1e-6),
+                    "trace must reproduce the actual native path"
+                );
+            }
+            let delta = actual_full
+                .iter()
+                .zip(&actual_suffix)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0f32, f32::max);
+            rows.push(serde_json::json!({"question_id": qid, "prefix_tokens": prefix_len, "suffix_tokens": suffix_len,
+                "labels": prompt.candidates.iter().map(|c| &c.label).collect::<Vec<_>>(), "layers": layers,
+                "independent_probabilities": actual_full, "prefix_probabilities": actual_suffix,
+                "max_probability_delta": delta, "within_probability_delta_gate": delta <= 1e-4}));
+        }
+        let report = serde_json::json!({"diagnostic_only": true, "model": manifest.name,
+            "adapter": manifest.adapter, "backbone_source": manifest.backbone.source,
+            "device": crate::device_label(&device), "dtype": dtype, "temperature": temperature,
+            "execution_metadata": backend.capabilities().extra,
+            "case_id": case_id, "rows": rows, "scope": "layer drift and fixed-input split-projection comparison; no release qualification"});
+        std::fs::write(output, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
     }
 }

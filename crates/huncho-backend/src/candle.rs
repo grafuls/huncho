@@ -22,7 +22,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
-use candle::{Device, DType, Tensor};
+use candle::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::modernbert::{Config, ModernBert};
 
@@ -49,6 +49,7 @@ pub struct CandleBackend {
     model: ModernBert,
     head: Option<LayaHead>,
     hidden_size: usize,
+    vocab_size: usize,
     max_context: usize,
     dtype: String,
     id: BackendId,
@@ -64,24 +65,47 @@ impl CandleBackend {
         max_context: usize,
         dtype: impl Into<String>,
     ) -> Result<CandleBackend> {
-        let device = Device::Cpu;
+        Self::load_on_device(config_path, weights_path, max_context, dtype, Device::Cpu)
+    }
+
+    /// Explicit device path; FP32 remains the actual computation/storage dtype.
+    /// CPU staging converts BF16 checkpoints before transfer on older GPUs.
+    pub fn load_on_device(
+        config_path: impl AsRef<Path>,
+        weights_path: impl AsRef<Path>,
+        max_context: usize,
+        dtype: impl Into<String>,
+        device: Device,
+    ) -> Result<CandleBackend> {
+        let dtype = dtype.into();
+        if dtype != "fp32" {
+            return Err(Error::Unsupported(format!(
+                "ModernBERT currently executes in fp32; cannot label it `{dtype}` for calibration"
+            )));
+        }
         let config = parse_config(config_path.as_ref())?;
         let hidden_size = config.hidden_size;
 
-        let tensors = load_encoder_tensors(weights_path.as_ref(), &device)
-            .map_err(|e| Error::Backend(CandleError::Load(weights_path.as_ref().display().to_string(), e.to_string()).to_string()))?;
+        let tensors = load_encoder_tensors(weights_path.as_ref(), &device).map_err(|e| {
+            Error::Backend(
+                CandleError::Load(weights_path.as_ref().display().to_string(), e.to_string())
+                    .to_string(),
+            )
+        })?;
 
         let head = LayaHead::from_tensors(&tensors, hidden_size)?;
         let vb = VarBuilder::from_tensors(tensors, DType::F32, &device);
-        let model = ModernBert::load(vb, &config)
-            .map_err(|e| Error::Backend(CandleError::Load("weights".into(), e.to_string()).to_string()))?;
+        let model = ModernBert::load(vb, &config).map_err(|e| {
+            Error::Backend(CandleError::Load("weights".into(), e.to_string()).to_string())
+        })?;
 
         Ok(CandleBackend {
             model,
             head,
             hidden_size,
+            vocab_size: config.vocab_size,
             max_context,
-            dtype: dtype.into(),
+            dtype,
             id: BackendId::Candle,
             families: vec![Family::F1],
             device,
@@ -99,10 +123,12 @@ impl CandleBackend {
 /// Handles both the flat rope-theta layout and the transformers-5.0
 /// `rope_parameters` object, and tolerates a null `pad_token_id`.
 fn parse_config(path: &Path) -> Result<Config> {
-    let text = std::fs::read_to_string(path)
-        .map_err(|e| Error::Backend(CandleError::Config(path.display().to_string(), e.to_string()).to_string()))?;
-    let v: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|e| Error::Backend(CandleError::Config(path.display().to_string(), e.to_string()).to_string()))?;
+    let text = std::fs::read_to_string(path).map_err(|e| {
+        Error::Backend(CandleError::Config(path.display().to_string(), e.to_string()).to_string())
+    })?;
+    let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+        Error::Backend(CandleError::Config(path.display().to_string(), e.to_string()).to_string())
+    })?;
     config_from_value(&v, path)
 }
 
@@ -111,19 +137,28 @@ fn config_from_value(v: &serde_json::Value, path: &Path) -> Result<Config> {
         v.get(key).and_then(|x| x.as_f64()).unwrap_or(default)
     }
     fn uint(v: &serde_json::Value, key: &str, default: usize) -> usize {
-        v.get(key).and_then(|x| x.as_u64()).map(|x| x as usize).unwrap_or(default)
+        v.get(key)
+            .and_then(|x| x.as_u64())
+            .map(|x| x as usize)
+            .unwrap_or(default)
     }
 
     let default_theta = 10_000.0;
     let global_rope_theta = v
         .get("global_rope_theta")
         .and_then(|x| x.as_f64())
-        .or_else(|| v.pointer("/rope_parameters/full_attention/rope_theta").and_then(|x| x.as_f64()))
+        .or_else(|| {
+            v.pointer("/rope_parameters/full_attention/rope_theta")
+                .and_then(|x| x.as_f64())
+        })
         .unwrap_or(default_theta);
     let local_rope_theta = v
         .get("local_rope_theta")
         .and_then(|x| x.as_f64())
-        .or_else(|| v.pointer("/rope_parameters/sliding_attention/rope_theta").and_then(|x| x.as_f64()))
+        .or_else(|| {
+            v.pointer("/rope_parameters/sliding_attention/rope_theta")
+                .and_then(|x| x.as_f64())
+        })
         .unwrap_or(default_theta);
 
     let pad_token_id = v.get("pad_token_id").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
@@ -143,8 +178,9 @@ fn config_from_value(v: &serde_json::Value, path: &Path) -> Result<Config> {
         "local_rope_theta": local_rope_theta,
     });
 
-    serde_json::from_value(normalized)
-        .map_err(|e| Error::Backend(CandleError::Config(path.display().to_string(), e.to_string()).to_string()))
+    serde_json::from_value(normalized).map_err(|e| {
+        Error::Backend(CandleError::Config(path.display().to_string(), e.to_string()).to_string())
+    })
 }
 
 /// Map a safetensors key to the name candle's ModernBERT expects.
@@ -172,13 +208,15 @@ fn remap_key(name: &str) -> Option<String> {
 
 /// Load the model tensors from a safetensors file, remapping the `encoder.`
 /// prefix to `model.` and retaining the Laya decision-head tensors. Tensors are
-/// converted to `f32` for CPU inference.
+/// converted to `f32` on CPU before transfer to the execution device.
 fn load_encoder_tensors(path: &Path, device: &Device) -> candle::Result<HashMap<String, Tensor>> {
-    let raw = candle::safetensors::load(path, device)?;
+    let raw = candle::safetensors::load(path, &Device::Cpu)?;
     let mut out = HashMap::new();
     for (name, t) in raw {
-        let Some(mapped) = remap_key(&name) else { continue };
-        let t = t.to_dtype(DType::F32)?;
+        let Some(mapped) = remap_key(&name) else {
+            continue;
+        };
+        let t = t.to_dtype(DType::F32)?.to_device(device)?;
         out.insert(mapped, t);
     }
     Ok(out)
@@ -190,6 +228,10 @@ impl Backend for CandleBackend {
     }
 
     fn capabilities(&self) -> Capabilities {
+        let mut extra = BTreeMap::from([("device".into(), crate::device_label(&self.device))]);
+        if self.device.is_cuda() {
+            extra.insert("device_path".into(), "modernbert-cuda".into());
+        }
         Capabilities {
             id: self.id,
             dtype: self.dtype.clone(),
@@ -197,11 +239,89 @@ impl Backend for CandleBackend {
             supports_fork: false,
             supports_lora: false,
             families: self.families.clone(),
-            extra: BTreeMap::from([("device".into(), crate::device_label(&self.device))]),
+            extra,
         }
     }
 
     fn forward(&mut self, input: ForwardInput) -> Result<ForwardOutput> {
+        self.validate_input(&input)?;
+        if input.positions.is_empty() {
+            return Ok(ForwardOutput::Features {
+                positions: Vec::new(),
+                values: CoreTensor::zeros(vec![0, self.hidden_size]),
+            });
+        }
+        Ok(self.forward_batch(vec![input])?.remove(0))
+    }
+
+    fn supports_batch(&self) -> bool {
+        true
+    }
+
+    fn forward_batch(&mut self, inputs: Vec<ForwardInput>) -> Result<Vec<ForwardOutput>> {
+        if inputs.is_empty() || inputs.len() > 64 {
+            return Err(Error::Backend(
+                "Candle batch must contain 1..=64 independent rows".into(),
+            ));
+        }
+        let seq = inputs[0].tokens.len();
+        if seq == 0 || inputs.iter().any(|input| input.tokens.len() != seq) {
+            return Err(Error::Backend(
+                "Candle batches require equal nonempty sequence lengths".into(),
+            ));
+        }
+        for input in &inputs {
+            self.validate_input(input)?;
+        }
+        let tokens: Vec<u32> = inputs
+            .iter()
+            .flat_map(|input| input.tokens.iter().copied())
+            .collect();
+        let ids = Tensor::from_vec(tokens, (inputs.len(), seq), &self.device)
+            .map_err(|e| Error::Backend(CandleError::Inference(e.to_string()).to_string()))?;
+        let mask = Tensor::ones((inputs.len(), seq), DType::U32, &self.device)
+            .map_err(|e| Error::Backend(CandleError::Inference(e.to_string()).to_string()))?;
+        let hidden = self
+            .model
+            .forward(&ids, &mask)
+            .map_err(|e| Error::Backend(CandleError::Inference(e.to_string()).to_string()))?;
+        inputs
+            .into_iter()
+            .enumerate()
+            .map(|(row, input)| {
+                let hidden = hidden
+                    .narrow(0, row, 1)
+                    .map_err(|e| Error::Backend(e.to_string()))?;
+                self.readout(&hidden, input)
+            })
+            .collect()
+    }
+
+    fn fork(&mut self, _handle: CacheHandle) -> Result<CacheHandle> {
+        Err(Error::Unsupported(
+            "candle ModernBERT does not support KV forking".into(),
+        ))
+    }
+}
+
+impl CandleBackend {
+    fn validate_input(&self, input: &ForwardInput) -> Result<()> {
+        if input.fork_from.is_some() || input.retain_cache {
+            return Err(Error::Unsupported(
+                "ModernBERT does not support causal prefix reuse".into(),
+            ));
+        }
+        if input.positions.iter().any(|&p| p >= input.tokens.len())
+            || input
+                .tokens
+                .iter()
+                .any(|&token| token as usize >= self.vocab_size)
+            || (self.head.is_some() && input.qtype > 2)
+        {
+            return Err(Error::Backend(
+                "invalid ModernBERT token/readout/question type".into(),
+            ));
+        }
         if input.tokens.len() > self.max_context {
             return Err(Error::Backend(format!(
                 "sequence length {} exceeds candle max_context {}",
@@ -209,7 +329,10 @@ impl Backend for CandleBackend {
                 self.max_context
             )));
         }
-        let seq = input.tokens.len();
+        Ok(())
+    }
+
+    fn readout(&self, hidden_tensor: &Tensor, input: ForwardInput) -> Result<ForwardOutput> {
         let hidden = self.hidden_size;
 
         if input.positions.is_empty() {
@@ -219,26 +342,11 @@ impl Backend for CandleBackend {
             });
         }
 
-        // Token ids -> [1, seq] u32; attention mask -> [1, seq] of ones.
-        let ids = Tensor::new(input.tokens.as_slice(), &self.device)
-            .map_err(|e| Error::Backend(CandleError::Inference(e.to_string()).to_string()))?
-            .unsqueeze(0)
-            .map_err(|e| Error::Backend(CandleError::Inference(e.to_string()).to_string()))?;
-        let mask = Tensor::ones(seq, DType::U32, &self.device)
-            .map_err(|e| Error::Backend(CandleError::Inference(e.to_string()).to_string()))?
-            .unsqueeze(0)
-            .map_err(|e| Error::Backend(CandleError::Inference(e.to_string()).to_string()))?;
-
-        let hidden_tensor = self
-            .model
-            .forward(&ids, &mask)
-            .map_err(|e| Error::Backend(CandleError::Inference(e.to_string()).to_string()))?;
-
         // Laya decision-head path: run the typed option-marker head over the full
         // sequence and read per-option logits at the mask positions.
         if let Some(head) = &self.head {
             let logits = head
-                .forward(&hidden_tensor, input.qtype, &input.positions)
+                .forward(hidden_tensor, input.qtype, &input.positions)
                 .map_err(|e| Error::Backend(CandleError::Inference(e.to_string()).to_string()))?;
             let values = core_from_tensor(&logits)?;
             return Ok(ForwardOutput::Logits {
@@ -247,7 +355,6 @@ impl Backend for CandleBackend {
             });
         }
 
-        let hidden = hidden_tensor.shape().dims()[2];
         let positions: Vec<u32> = input.positions.iter().map(|&p| p as u32).collect();
         // candle `index_select` requires a 1-D index tensor.
         let pos_tensor = Tensor::new(positions.as_slice(), &self.device)
@@ -257,25 +364,11 @@ impl Backend for CandleBackend {
             .map_err(|e| Error::Backend(CandleError::Inference(e.to_string()).to_string()))?
             .squeeze(0)
             .map_err(|e| Error::Backend(CandleError::Inference(e.to_string()).to_string()))?;
-        let rows = selected
-            .to_vec2::<f32>()
-            .map_err(|e| Error::Backend(CandleError::Inference(e.to_string()).to_string()))?;
-
-        let mut data = vec![0.0f32; input.positions.len() * hidden];
-        for (row, feat) in rows.iter().enumerate() {
-            data[row * hidden..(row + 1) * hidden].copy_from_slice(feat);
-        }
-        let values = CoreTensor::new(vec![input.positions.len(), hidden], data)?;
+        let values = core_from_tensor(&selected)?;
         Ok(ForwardOutput::Features {
             positions: input.positions,
             values,
         })
-    }
-
-    fn fork(&mut self, _handle: CacheHandle) -> Result<CacheHandle> {
-        Err(Error::Unsupported(
-            "candle backend v1 does not support KV forking".into(),
-        ))
     }
 }
 
@@ -318,18 +411,22 @@ impl LayaLayer {
         let k = qkv.narrow(2, d_model, d_model)?;
         let v = qkv.narrow(2, 2 * d_model, d_model)?;
 
-        let q = q.reshape((batch, seq, self.nhead, self.head_dim))?.transpose(1, 2)?;
-        let k = k.reshape((batch, seq, self.nhead, self.head_dim))?.transpose(1, 2)?;
-        let v = v.reshape((batch, seq, self.nhead, self.head_dim))?.transpose(1, 2)?;
+        let q = q
+            .reshape((batch, seq, self.nhead, self.head_dim))?
+            .transpose(1, 2)?;
+        let k = k
+            .reshape((batch, seq, self.nhead, self.head_dim))?
+            .transpose(1, 2)?;
+        let v = v
+            .reshape((batch, seq, self.nhead, self.head_dim))?
+            .transpose(1, 2)?;
 
         let scale = 1.0 / (self.head_dim as f64).sqrt();
         let attn = q.matmul(&k.transpose(2, 3)?)?;
         let attn = attn.affine(scale, 0.0)?;
         let attn = candle_nn::ops::softmax(&attn, 3)?;
         let out = attn.matmul(&v)?;
-        let out = out
-            .transpose(1, 2)?
-            .reshape((batch, seq, d_model))?;
+        let out = out.transpose(1, 2)?.reshape((batch, seq, d_model))?;
         let out = out
             .broadcast_matmul(&self.out_w.t()?)?
             .broadcast_add(&self.out_b)?;
@@ -378,7 +475,9 @@ impl LayaHead {
         loop {
             let p = format!("head.layers.{i}.");
             let qkv_key = format!("{p}self_attn.in_proj_weight");
-            let Some(qkv_w) = tensors.get(&qkv_key) else { break };
+            let Some(qkv_w) = tensors.get(&qkv_key) else {
+                break;
+            };
             let qkv_b = tensors
                 .get(&format!("{p}self_attn.in_proj_bias"))
                 .cloned()
@@ -420,10 +519,7 @@ impl LayaHead {
     }
 
     fn forward(&self, h: &Tensor, qtype: u32, positions: &[usize]) -> candle::Result<Tensor> {
-        let qrow = self
-            .type_emb
-            .narrow(0, qtype as usize, 1)?
-            .unsqueeze(0)?; // [1, 1, d]
+        let qrow = self.type_emb.narrow(0, qtype as usize, 1)?.unsqueeze(0)?; // [1, 1, d]
         let mut z = h.broadcast_add(&qrow)?;
         for layer in &self.layers {
             z = layer.forward(&z)?;
@@ -434,9 +530,13 @@ impl LayaHead {
         let m = z.index_select(&pos_t, 1)?.squeeze(0)?; // [n, d]
 
         let y = candle_nn::ops::layer_norm(&m, &self.scorer_ln_w, &self.scorer_ln_b, 1e-5f32)?;
-        let y = y.matmul(&self.scorer_lin1_w.t()?)?.broadcast_add(&self.scorer_lin1_b)?;
+        let y = y
+            .matmul(&self.scorer_lin1_w.t()?)?
+            .broadcast_add(&self.scorer_lin1_b)?;
         let y = y.gelu_erf()?;
-        let y = y.matmul(&self.scorer_lin2_w.t()?)?.broadcast_add(&self.scorer_lin2_b)?;
+        let y = y
+            .matmul(&self.scorer_lin2_w.t()?)?
+            .broadcast_add(&self.scorer_lin2_b)?;
         Ok(y)
     }
 }
@@ -452,13 +552,10 @@ fn get(tensors: &HashMap<String, Tensor>, key: &str) -> Result<Tensor> {
 /// Convert a 2-D candle tensor into a core tensor (used for the per-option logits).
 fn core_from_tensor(t: &Tensor) -> Result<CoreTensor> {
     let dims = t.dims();
-    let rows = t
-        .to_vec2::<f32>()
+    let data = t
+        .flatten_all()
+        .and_then(|flat| flat.to_vec1::<f32>())
         .map_err(|e| Error::Backend(CandleError::Inference(e.to_string()).to_string()))?;
-    let mut data = Vec::with_capacity(rows.len().saturating_mul(dims.last().copied().unwrap_or(0)));
-    for row in rows {
-        data.extend(row);
-    }
     CoreTensor::new(dims.to_vec(), data)
 }
 
@@ -493,13 +590,26 @@ mod tests {
         )
         .unwrap();
         let out = backend
-            .forward(huncho_core::backend::ForwardInput::new(tokens.clone(), positions.clone()))
+            .forward(huncho_core::backend::ForwardInput::new(
+                tokens.clone(),
+                positions.clone(),
+            ))
             .unwrap();
 
         // Manual path: full [1, seq, hidden] then slice rows at positions.
-        let ids = Tensor::new(tokens.as_slice(), &device).unwrap().unsqueeze(0).unwrap();
-        let mask = Tensor::ones(tokens.len(), DType::U32, &device).unwrap().unsqueeze(0).unwrap();
-        let full = model.forward(&ids, &mask).unwrap().to_dtype(DType::F32).unwrap();
+        let ids = Tensor::new(tokens.as_slice(), &device)
+            .unwrap()
+            .unsqueeze(0)
+            .unwrap();
+        let mask = Tensor::ones(tokens.len(), DType::U32, &device)
+            .unwrap()
+            .unsqueeze(0)
+            .unwrap();
+        let full = model
+            .forward(&ids, &mask)
+            .unwrap()
+            .to_dtype(DType::F32)
+            .unwrap();
         let v3 = full.to_vec3::<f32>().unwrap();
         let hidden = v3[0][0].len();
         let mut expected = vec![0.0f32; positions.len() * hidden];

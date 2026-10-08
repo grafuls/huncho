@@ -16,6 +16,21 @@ pub fn device_from_env() -> Result<Device> {
     select_device(&name, cuda_device)
 }
 
+/// Newly ported model paths remain on CPU until CUDA is explicitly requested.
+/// Unlike Kev/Clef, `auto` does not change their established default device.
+pub fn opt_in_device_from_env() -> Result<Device> {
+    let name = match std::env::var("HUNCHO_DEVICE") {
+        Ok(name) => name,
+        Err(std::env::VarError::NotPresent) => "cpu".into(),
+        Err(_) => return Err(Error::Package("HUNCHO_DEVICE must be valid UTF-8".into())),
+    };
+    select_opt_in_device(&name, cuda_device)
+}
+
+fn select_opt_in_device(name: &str, cuda: impl FnOnce(usize) -> Result<Device>) -> Result<Device> {
+    select_device(if name == "auto" { "cpu" } else { name }, cuda)
+}
+
 fn select_device(name: &str, cuda: impl FnOnce(usize) -> Result<Device>) -> Result<Device> {
     match name {
         "cpu" => Ok(Device::Cpu),
@@ -73,6 +88,22 @@ pub(crate) fn supports_bf16(device: &Device) -> Result<bool> {
 #[cfg(test)]
 mod device_tests {
     use super::*;
+
+    #[test]
+    fn newly_ported_paths_require_explicit_cuda_and_never_hide_failure() {
+        for name in ["auto", "cpu"] {
+            assert!(
+                select_opt_in_device(name, |_| panic!("CUDA must be explicitly selected"))
+                    .unwrap()
+                    .is_cpu()
+            );
+        }
+        assert!(select_opt_in_device("cuda:2", |ordinal| {
+            assert_eq!(ordinal, 2);
+            Err(Error::Backend("no compatible GPU".into()))
+        })
+        .is_err());
+    }
 
     #[test]
     fn cpu_never_initializes_cuda() {
