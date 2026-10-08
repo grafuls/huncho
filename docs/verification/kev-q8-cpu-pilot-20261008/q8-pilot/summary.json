@@ -1,0 +1,257 @@
+{
+  "qualified": false,
+  "samples": [
+    {
+      "mode": "cpu_v3",
+      "exit_code": 0,
+      "elapsed_seconds": 264.720544582,
+      "questions": 8,
+      "work": {
+        "forward_calls": 1,
+        "prefill_calls": 0,
+        "chunked_prefills": 0,
+        "processed_tokens": 22,
+        "reused_prefix_tokens": 0,
+        "cache_forks": 0,
+        "batch_calls": 0,
+        "cross_request_batches": 0,
+        "persistent_prefix_hits": 0,
+        "result_cache_hits": 0,
+        "prompt_cache_hits": 0,
+        "prepared_questions": 0
+      },
+      "identity_sha256": "f13d78b6d18ea6ca7323c5f9602a7aa866246cd4ed1e4ea7eba6218900128b69"
+    },
+    {
+      "mode": "portable",
+      "exit_code": 0,
+      "elapsed_seconds": 401.14070757999434,
+      "questions": 8,
+      "work": {
+        "forward_calls": 1,
+        "prefill_calls": 0,
+        "processed_tokens": 22,
+        "reused_prefix_tokens": 0,
+        "cache_forks": 0,
+        "batch_calls": 0,
+        "cross_request_batches": 0,
+        "persistent_prefix_hits": 0,
+        "result_cache_hits": 0,
+        "prompt_cache_hits": 0,
+        "prepared_questions": 0
+      },
+      "identity_sha256": "99e88b0689bf1594809a386691431465df3cb86f11dfcc632eb694cae7d3966b"
+    },
+    {
+      "mode": "portable",
+      "exit_code": 0,
+      "elapsed_seconds": 400.5283852499997,
+      "questions": 8,
+      "work": {
+        "forward_calls": 1,
+        "prefill_calls": 0,
+        "processed_tokens": 22,
+        "reused_prefix_tokens": 0,
+        "cache_forks": 0,
+        "batch_calls": 0,
+        "cross_request_batches": 0,
+        "persistent_prefix_hits": 0,
+        "result_cache_hits": 0,
+        "prompt_cache_hits": 0,
+        "prepared_questions": 0
+      },
+      "identity_sha256": "99e88b0689bf1594809a386691431465df3cb86f11dfcc632eb694cae7d3966b"
+    },
+    {
+      "mode": "cpu_v3",
+      "exit_code": 0,
+      "elapsed_seconds": 264.28317983400484,
+      "questions": 8,
+      "work": {
+        "forward_calls": 1,
+        "prefill_calls": 0,
+        "chunked_prefills": 0,
+        "processed_tokens": 22,
+        "reused_prefix_tokens": 0,
+        "cache_forks": 0,
+        "batch_calls": 0,
+        "cross_request_batches": 0,
+        "persistent_prefix_hits": 0,
+        "result_cache_hits": 0,
+        "prompt_cache_hits": 0,
+        "prepared_questions": 0
+      },
+      "identity_sha256": "f13d78b6d18ea6ca7323c5f9602a7aa866246cd4ed1e4ea7eba6218900128b69"
+    }
+  ],
+  "binary_sha256": {
+    "portable": "b870ad79ed89987e9970de2c444681d4e71b64cbc7e12a9b70740f856e61657a",
+    "cpu_v3": "81f216e7e5a492a881fbee74813d18949b0aa5fe3c7aeeedb13d5b614f34da16"
+  },
+  "fitting_source_sha256": "96b5d0425699a06f8c8c057abd874c13f53e96824840ec70e1adad5147f4b3ff",
+  "pilot_inputs_sha256": "68de9758a90b313560b024a417fc3885404aa0c0a8f1f74f1b9e3121146802dc",
+  "manifest_sha256": "6d7afc4c161c93b1322d66d3d50da79874c6fd079eb32f6fe4db1dc5523efcec",
+  "cpu_affinity": [
+    0,
+    2,
+    4,
+    6,
+    8,
+    10,
+    12,
+    14,
+    16,
+    18,
+    20,
+    22,
+    24,
+    26,
+    28,
+    30
+  ],
+  "limits": [
+    "Eight fitting inputs only, no held-out labels or temperature refit.",
+    "Alternating end-to-end collection includes hashing, load and audit, not steady-state inference.",
+    "Other qualification/fitting jobs contend for the same CPUs and bandwidth; no isolated speed claim.",
+    "Same durable Q8 artifact; CPU build instructions change packed dot-product reductions.",
+    "Both packages and goldens stay unchanged."
+  ],
+  "logits": {
+    "0": [
+      [
+        3.0037875175476074,
+        -8.463611602783203
+      ],
+      [
+        -6.9535322189331055,
+        0.913954496383667
+      ],
+      [
+        -5.102301597595215,
+        -6.952367782592773
+      ],
+      [
+        -9.850117683410645,
+        1.9184982776641846
+      ],
+      [
+        2.6402688026428223,
+        -9.56328010559082
+      ],
+      [
+        4.375959396362305,
+        -12.128066062927246
+      ],
+      [
+        3.994091510772705,
+        -11.284055709838867
+      ],
+      [
+        3.152984619140625,
+        -8.406103134155273
+      ]
+    ],
+    "1": [
+      [
+        2.9364829063415527,
+        -8.409459114074707
+      ],
+      [
+        -6.9861979484558105,
+        0.9186766743659973
+      ],
+      [
+        -5.070979595184326,
+        -7.06031608581543
+      ],
+      [
+        -9.900014877319336,
+        1.875980019569397
+      ],
+      [
+        2.6941192150115967,
+        -9.615171432495117
+      ],
+      [
+        4.349456787109375,
+        -12.02018928527832
+      ],
+      [
+        4.025120735168457,
+        -11.284350395202637
+      ],
+      [
+        3.041200876235962,
+        -8.38923454284668
+      ]
+    ],
+    "2": [
+      [
+        2.9364829063415527,
+        -8.409459114074707
+      ],
+      [
+        -6.9861979484558105,
+        0.9186766743659973
+      ],
+      [
+        -5.070979595184326,
+        -7.06031608581543
+      ],
+      [
+        -9.900014877319336,
+        1.875980019569397
+      ],
+      [
+        2.6941192150115967,
+        -9.615171432495117
+      ],
+      [
+        4.349456787109375,
+        -12.02018928527832
+      ],
+      [
+        4.025120735168457,
+        -11.284350395202637
+      ],
+      [
+        3.041200876235962,
+        -8.38923454284668
+      ]
+    ],
+    "3": [
+      [
+        3.0037875175476074,
+        -8.463611602783203
+      ],
+      [
+        -6.9535322189331055,
+        0.913954496383667
+      ],
+      [
+        -5.102301597595215,
+        -6.952367782592773
+      ],
+      [
+        -9.850117683410645,
+        1.9184982776641846
+      ],
+      [
+        2.6402688026428223,
+        -9.56328010559082
+      ],
+      [
+        4.375959396362305,
+        -12.128066062927246
+      ],
+      [
+        3.994091510772705,
+        -11.284055709838867
+      ],
+      [
+        3.152984619140625,
+        -8.406103134155273
+      ]
+    ]
+  }
+}

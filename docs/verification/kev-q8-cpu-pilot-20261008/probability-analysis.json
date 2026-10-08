@@ -1,0 +1,22 @@
+{
+  "qualified": false,
+  "comparison": "Same Q8_0 artifact, portable CPU vs x86-64-v3 on eight fitting rows only",
+  "temperature": 2.40605,
+  "questions": 8,
+  "max_raw_logit_delta": 0.11178374290466309,
+  "max_probability_delta": 0.012391363429088587,
+  "argmax_agreement": 1.0,
+  "within_mode_raw_logits_equal": {
+    "cpu_v3": true,
+    "portable": true
+  },
+  "limits": [
+    "Eight fitting inputs only, no held-out labels or temperature refit.",
+    "Alternating end-to-end collection includes hashing, load and audit, not steady-state inference.",
+    "Other qualification/fitting jobs contend for the same CPUs and bandwidth; no isolated speed claim.",
+    "Same durable Q8 artifact; CPU build instructions change packed dot-product reductions.",
+    "Both packages and goldens stay unchanged.",
+    "Collection predates 75a48c6; work counters describe the last fitting record only.",
+    "The displayed temperature is the source FP32 temperature for drift diagnosis, not a fitted/accepted quantized entry. No held-out gate or latency qualification."
+  ]
+}

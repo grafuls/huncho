@@ -777,3 +777,25 @@ concurrent miss deduplication, eviction, bypass and pending CLI rejection.
 The default build adds no active runtime dependency. Full released adapter-mix
 RSS/startup qualification, lazy registry residency, on-the-fly multi-LoRA
 scheduling and GPU residency remain open; actual GPU checks remain deferred.
+
+## Packed Q8 CPU instruction-profile drift (2026-10-08)
+
+A CPU-only diagnostic collects the first eight fitting rows using the same
+unchanged pending Q8_0 artifact in alternating x86-64-v3/portable/portable/v3
+order. Raw logits repeat exactly within each mode, but differ across the two
+compiled packed-kernel profiles. At the original FP32 temperature 2.40605, an
+offline FP64 softmax comparison gives maximum probability difference 0.0123914
+and complete argmax agreement on these eight rows. This is diagnostic fitting
+data, not unchanged held-out conformance, a quantized refit or acceptance.
+
+[The retained audit](verification/kev-q8-cpu-pilot-20261008/q8-pilot/summary.json)
+pins binaries, artifact/manifest/input hashes, CPU affinity and all raw rows;
+[the reproducible analysis](verification/kev-q8-cpu-pilot-20261008/analyze.py)
+keeps `qualified=false`. End-to-end collections take roughly 264–265 seconds
+on v3 and 400–401 on portable, including hashing/load/audit while other jobs
+contend for the same CPUs and bandwidth. Older collectors report only the
+last record's work; `75a48c6` fixes later collectors. These runs establish no
+isolated inference speedup or aggregate-work rate. No corpus text, GPU checks,
+manifest changes or optimized golden replacements are retained. A portable
+Q8 fit cannot silently qualify AVX2; each kernel profile needs its own full
+fitting and unchanged labeled acceptance gates.

@@ -1,0 +1,2 @@
+[2m2026-10-08T11:49:29.120857Z[0m [32m INFO[0m selected model runtime [3mmodel[0m[2m=[0mkev-4b [3mbackend[0m[2m=[0mcandle [3mdtype[0m[2m=[0mq8_0-fp32
+[2m2026-10-08T11:50:06.016177Z[0m [32m INFO[0m loading tokenizer from /var/tmp/huncho-quant-cpu-20261008/q8_0-fp32/tokenizer.json
