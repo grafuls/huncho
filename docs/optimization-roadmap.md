@@ -471,3 +471,23 @@ the new implementations testable on the pinned Kev checkpoint without using a
 GPU. Ten runner tests cover profile substitution, vacuous cache/collation work,
 early rejection and unchanged subprocess evidence; the broader standard-library
 Python suite also passes.
+
+## Full Kev CPU numerical qualification (2026-10-08)
+
+The isolated `3e79e41` source build uses `clef,qualification`, excludes GPU
+features and explicitly selects CPU. On the supplied lab host with sixteen
+threads and fixed sixteen-core node-1 affinity, buffered recurrence passes the
+unchanged six-case/19-question FP32 reference: independent maximum probability
+delta 9.778887e-9, complete argmax agreement and zero ECE drift. A 256 MiB
+persistent-prefix budget exercises five actual retained hits; paired and
+external delta are 3.5762787e-7. Native per-request batches exercise three actual
+batch calls and have zero paired delta. No response or prepared-prompt cache
+hits occur during qualification. The upstream temperature stays 2.40605.
+
+The [execution identity](verification/kev-cpu-20261008/numerical-cpu-buffered/identity.json)
+and [CPU-only job](verification/kev-cpu-20261008/huncho-cpu-roadmap-20261008.sh)
+retain binary/source/golden/package hashes, affinity, complete reports and work
+counts. These runs lack observed labels and explicitly record `qualified=false`;
+they do not establish held-out calibration, cross-request scheduling acceptance,
+latency improvement or a GPU result. Elapsed times include model loading and
+paired/warm-up work, so they cannot compare optimization speed directly.
