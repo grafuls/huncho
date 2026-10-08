@@ -23,7 +23,7 @@ also show drift. Packed CPU fitting/held-out evaluation is still running.
 | O09 fused compute | CPU SiLU/multiply available | FlashAttention and further fused native/device kernels |
 | O10 precision/calibration gates | Every real serving runtime requires fresh labeled conformance | Released CPU acceptance remains rejected/pending; no GPU checks |
 | O11 native Kev prefix forks | Available | Released CPU paired/labeled acceptance |
-| O12 dynamic batching | Equal-length question/request collation available | Mixed lengths, masks and cached-branch batching |
+| O12 dynamic batching | Equal-length collation and bounded CPU Qwen right-padding available | F1/F5 masked padding, device qualification and cached-branch batching |
 | O13 family head work | CPU Clef vectorized heads/grouped spans and optional Laya final marker queries available | Released Clef/Laya labeled qualification |
 | O14 concurrent execution contexts | CPU shared-weight replicas, including optional ONNX initializers, available | Released concurrent workloads, memory and affinity measurements |
 | O15 device buffers/graph replay | Open | CUDA implementation and later device qualification |
@@ -41,6 +41,41 @@ also show drift. Packed CPU fitting/held-out evaluation is still running.
 | O27 browser WASM/WebGPU | Open | Separate actual browser runtime, packaging and gates |
 
 ## Implemented increments
+
+### Bounded CPU mixed-length batches
+
+`--max-batch-padding-percent 1..100` opts CPU Qwen F2/F3 into right-padded
+question/request batches; zero retains exact-length buckets. It requires a
+positive `--max-batch-tokens`, remains incompatible with prefix reuse, and
+rejects other families/devices. The planner groups increasing lengths, bounds
+native rectangles by the physical token budget and 64 rows, and limits padding
+as a percentage of all submitted positions. Oversized singletons run intact
+independently. Every candidate uses its original relative position, and the
+pointer decision uses the original last valid token. Existing causal attention,
+convolution and recurrence ensure padding cannot affect earlier valid rows;
+this does not implement bidirectional/joint masks or paged/cached branches.
+
+Wire usage keeps original prompt tokens. Work and Prometheus counters include
+physical padding, with separate mixed-batch/padded-position counts even for
+failed calls. Cache keys, opaque prepared options, API scheduling and retained
+qualification records bind the padding policy. Conformance additionally requires
+actual nonzero padding and a mixed native call, plus unchanged external/paired
+and complete observed-label serving gates. A singleton/exact-only suite cannot
+qualify this mode. No temperature, source golden or default execution is changed.
+
+CPU fixture checks exercise FP32/FP16 pointer and selected F3 logits, repeated
+readouts, replicas, invalid/cache-bound rows, physical-budget planning and frozen
+engine conformance. A nonzero counterexample detects using the padded final row
+as the pointer decision. Cross-request checks use the unchanged fixture vectors
+with an explicit larger padding allowance; this does not establish released
+Kev/Nimble calibration, performance or any GPU qualification.
+
+The default workspace and `clef,qualification` workspace tests pass. HTTP
+scheduler fixtures verify distinct mixed-length responses, original wire usage,
+authentication and physical padding metrics; actual model arithmetic is checked
+separately by native CPU Qwen fixtures. The Python runner binds the exact padding
+policy and rejects substituted policies or missing mixed-work evidence. No
+released profile is promoted by these checks.
 
 ### llama.cpp full hybrid prefix snapshots
 

@@ -98,6 +98,10 @@ pub struct BenchArgs {
     #[arg(long, conflicts_with = "prefix_cache")]
     pub max_batch_tokens: Option<usize>,
 
+    /// Allow CPU Qwen mixed lengths with at most this percent padding (0..100).
+    #[arg(long, default_value_t = 0, requires = "max_batch_tokens")]
+    pub max_batch_padding_percent: usize,
+
     /// Use a long state (~1500 chars) instead of a short one.
     #[arg(long, default_value_t = false)]
     pub long_state: bool,
@@ -162,6 +166,7 @@ pub fn run(args: BenchArgs) -> anyhow::Result<()> {
         prefix_cache: args.prefix_cache,
         persistent_prefix_bytes: args.persistent_prefix_bytes / replica_count,
         max_batch_tokens: args.max_batch_tokens,
+        max_batch_padding_percent: args.max_batch_padding_percent,
         ..Default::default()
     };
     for context in &engines {
@@ -255,7 +260,7 @@ pub fn run(args: BenchArgs) -> anyhow::Result<()> {
             "repeat_inputs": args.repeat_inputs, "long_state": args.long_state,
             "result_cache_bytes": args.result_cache_bytes,
             "reference_readout": args.reference_readout,
-            "prefix_cache": args.prefix_cache, "persistent_prefix_bytes": args.persistent_prefix_bytes, "max_batch_tokens": args.max_batch_tokens, "work": work,
+            "prefix_cache": args.prefix_cache, "persistent_prefix_bytes": args.persistent_prefix_bytes, "max_batch_tokens": args.max_batch_tokens, "max_batch_padding_percent": args.max_batch_padding_percent, "work": work,
                 "mean_ms": mean, "p50_ms": p50, "p95_ms": p95, "p99_ms": p99,
                 "requests_per_second": qps, "questions_per_second": qps * args.questions as f64,
                 "measurement": "warm closed-loop in-process engine evaluation"
@@ -435,6 +440,7 @@ mod tests {
             prefix_cache: false,
             persistent_prefix_bytes: 0,
             max_batch_tokens: None,
+            max_batch_padding_percent: 0,
             long_state: false,
             mock_model: "mock".into(),
         };

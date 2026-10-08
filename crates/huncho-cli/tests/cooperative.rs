@@ -35,8 +35,7 @@ fn run(args: &[&str], chunk: &str) -> Output {
     child.wait_with_output().unwrap()
 }
 
-#[test]
-fn cooperative_conformance_requires_real_interleaving_on_unchanged_native_goldens() {
+fn package() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
     let root = Path::new(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../huncho-backend/tests/fixtures/tiny_kev"
@@ -117,6 +116,12 @@ fn cooperative_conformance_requires_real_interleaving_on_unchanged_native_golden
         serde_json::to_vec(&json!({"schema_version":"1.0","family":"F2","cases":cases})).unwrap(),
     )
     .unwrap();
+    (tmp, manifest_path, golden_path)
+}
+
+#[test]
+fn cooperative_conformance_requires_real_interleaving_on_unchanged_native_goldens() {
+    let (tmp, manifest_path, golden_path) = package();
     let manifest = manifest_path.to_str().unwrap();
     let golden = golden_path.to_str().unwrap();
     let output = run(
@@ -193,4 +198,159 @@ fn cooperative_conformance_requires_real_interleaving_on_unchanged_native_golden
     let output = run(&args, "0");
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("configured"));
+}
+
+#[cfg(feature = "qualification")]
+#[test]
+fn padded_native_cli_reports_actual_work_and_refuses_unlabeled_or_vacuous_startup() {
+    let (tmp, manifest_path, golden_path) = package();
+    let manifest = manifest_path.to_str().unwrap();
+    let golden = golden_path.to_str().unwrap();
+    let receipt = tmp.path().join("padded-receipt.json");
+    let args = [
+        "conform",
+        "--manifest",
+        manifest,
+        "--backend",
+        "candle",
+        "--dtype",
+        "fp32",
+        "--golden",
+        golden,
+        "--max-batch-tokens",
+        "1024",
+        "--max-batch-padding-percent",
+        "25",
+        "--write-qualification",
+        receipt.to_str().unwrap(),
+        "--json",
+    ];
+    let output = run(&args, "0");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["passed"], true);
+    assert_eq!(report["max_batch_padding_percent"], 25);
+    assert!(report["work"]["padded_batch_calls"].as_u64().unwrap() > 0);
+    assert!(report["work"]["padded_tokens"].as_u64().unwrap() > 0);
+    assert!(
+        report["optimization_parity"]["max_prob_delta"]
+            .as_f64()
+            .unwrap()
+            <= 1e-4
+    );
+    let record: Value = serde_json::from_slice(&std::fs::read(&receipt).unwrap()).unwrap();
+    assert_eq!(record["outcome_gates_passed"], false);
+    assert_eq!(record["report"]["max_batch_padding_percent"], 25);
+    let output = run(
+        &[
+            "bench",
+            "--manifest",
+            manifest,
+            "--backend",
+            "candle",
+            "--dtype",
+            "fp32",
+            "--max-batch-tokens",
+            "1024",
+            "--max-batch-padding-percent",
+            "25",
+            "--iterations",
+            "2",
+            "--questions",
+            "6",
+            "--workload",
+            "mixed",
+            "--json",
+        ],
+        "0",
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["max_batch_padding_percent"], 25);
+    assert!(report["work"]["padded_batch_calls"].as_u64().unwrap() > 0);
+    let binding = format!("tiny-kev={golden}");
+    let output = run(
+        &[
+            "serve",
+            "--manifest",
+            manifest,
+            "--backend",
+            "candle",
+            "--dtype",
+            "fp32",
+            "--max-batch-tokens",
+            "1024",
+            "--max-batch-padding-percent",
+            "25",
+            "--qualification-golden",
+            &binding,
+            "--bind",
+            "127.0.0.1:0",
+        ],
+        "0",
+    );
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("observed target labels"));
+    let mut one: Value = serde_json::from_slice(&std::fs::read(&golden_path).unwrap()).unwrap();
+    one["cases"].as_array_mut().unwrap().truncate(1);
+    let first = one["cases"][0]["request"]["questions"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .next()
+        .unwrap()
+        .clone();
+    one["cases"][0]["request"]["questions"]
+        .as_object_mut()
+        .unwrap()
+        .retain(|id, _| id == &first);
+    one["cases"][0]["expected"]
+        .as_object_mut()
+        .unwrap()
+        .retain(|id, _| id == &first);
+    let target = one["cases"][0]["expected"][&first]
+        .as_object()
+        .unwrap()
+        .keys()
+        .next()
+        .unwrap()
+        .clone();
+    one["cases"][0]["targets"] = json!({first:target});
+    let singleton = tmp.path().join("singleton-labeled-test.json");
+    std::fs::write(&singleton, serde_json::to_vec(&one).unwrap()).unwrap();
+    let binding = format!("tiny-kev={}", singleton.display());
+    let output = run(
+        &[
+            "serve",
+            "--manifest",
+            manifest,
+            "--backend",
+            "candle",
+            "--dtype",
+            "fp32",
+            "--max-batch-tokens",
+            "1024",
+            "--max-batch-padding-percent",
+            "25",
+            "--qualification-golden",
+            &binding,
+            "--bind",
+            "127.0.0.1:0",
+        ],
+        "0",
+    );
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("actually batches"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

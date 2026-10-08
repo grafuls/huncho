@@ -1,5 +1,24 @@
 # Operations
 
+CPU Qwen batching can optionally merge different prompt lengths:
+
+```sh
+huncho conform --model /path/to/kev-package --golden /path/to/pinned-heldout.json \
+  --max-batch-tokens 2048 --max-batch-padding-percent 25 --json
+huncho serve --model /path/to/kev-package --max-batch-tokens 2048 \
+  --max-batch-padding-percent 25 \
+  --qualification-golden 'REGISTERED_NAME=/path/to/pinned-labeled-heldout.json'
+```
+
+Zero padding percent keeps exact lengths. The limit counts padded positions
+within the complete physical tensor; logical wire usage excludes padding.
+Every served model must support CPU Qwen F2/F3 padding. Prefix reuse cannot
+combine with these batches. Cross-request collation uses the same policy and
+existing request/wait bounds. Qualification needs actual mixed lengths as well
+as unchanged numerical/paired and complete observed-label gates.
+`huncho_padded_batch_count` and `huncho_padded_tokens` expose extra physical
+work; native/device-resident ragged attention remains future work.
+
 CPU Kev can opt into fair scheduling between prefix chunks with
 `HUNCHO_PREFILL_CHUNK_TOKENS=64 huncho serve ... --prefix-cache --cooperative-prefill`.
 Supply the same complete labeled `--qualification-golden MODEL=PATH` binding

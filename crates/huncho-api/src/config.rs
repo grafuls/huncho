@@ -32,6 +32,8 @@ pub struct ServerConfig {
     pub persistent_prefix_bytes: usize,
     /// Opt-in native equal-length question batching token budget.
     pub max_batch_tokens: Option<usize>,
+    /// Zero keeps exact lengths; otherwise CPU Qwen padding percent (1..100).
+    pub max_batch_padding_percent: usize,
     /// Optional cross-request collation (2–64 requests). Requires native batch
     /// support and max_batch_tokens; F5 remains whole-request inference.
     pub batch_max_requests: Option<u16>,
@@ -56,6 +58,7 @@ impl Default for ServerConfig {
             cooperative_prefill: false,
             persistent_prefix_bytes: 0,
             max_batch_tokens: None,
+            max_batch_padding_percent: 0,
             batch_max_requests: None,
             batch_wait_ms: 2,
             candidate_readout: false,

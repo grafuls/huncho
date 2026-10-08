@@ -210,6 +210,17 @@ pass BF16 source staging, candidate weights on device and batch row checks
 Fixture coverage does not qualify released Laya/Nimble checkpoints; those
 full-model GPU checks remain pending. See [qualification controls](operations.md).
 
+CPU Qwen F2/F3 exposes `forward_padded_batch` for at most 64 independent mixed
+lengths. `bench`, `conform` and `serve` opt in with a positive
+`--max-batch-tokens` and `--max-batch-padding-percent 1..100` (default zero).
+The latter bounds padding as a percentage of physical positions, not logical
+API usage. Right padding retains causal valid readouts and uses each real final
+decision row. No prefix handles/retention enter these native batches. GPU,
+ModernBERT/Laya and F5 padding are rejected pending their masks/qualification.
+Mixed-length serving requires fresh complete labeled external/paired conformance
+and actual mixed-batch/padding coverage. Token, padded-token and mixed-batch
+counters describe submitted work; they do not demonstrate a speedup.
+
 `huncho convert --backend candle` writes a manifest whose artifact is
 `model.safetensors`. The weights/config are fetched separately (e.g. `hf
 download convaiinnovations/laya model.safetensors` and copy

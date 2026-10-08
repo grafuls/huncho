@@ -196,6 +196,21 @@ pub trait Backend: Send + Sync {
         ))
     }
 
+    /// Whether independent mixed-length rows can be right-padded without
+    /// changing valid readouts. Bidirectional/joint heads need separate masks.
+    fn supports_padded_batch(&self) -> bool {
+        false
+    }
+
+    /// At most 64 independent nonempty rows, with original relative readouts.
+    /// The backend pads to the maximum length; all padding must be causally
+    /// invisible to valid outputs and each final decision uses its real length.
+    fn forward_padded_batch(&mut self, _inputs: Vec<ForwardInput>) -> Result<Vec<ForwardOutput>> {
+        Err(crate::error::Error::Unsupported(
+            "backend does not expose mixed-length padded batching".into(),
+        ))
+    }
+
     /// Encode and score all questions jointly (F5). Calibration stays in core.
     fn forward_request(
         &mut self,

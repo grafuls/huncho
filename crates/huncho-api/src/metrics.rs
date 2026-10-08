@@ -49,6 +49,8 @@ pub struct Metrics {
     pub fork_count: IntCounter,
     pub reused_prefix_tokens: IntCounter,
     pub batch_count: IntCounter,
+    pub padded_batch_count: IntCounter,
+    pub padded_tokens: IntCounter,
     pub cross_request_batch_count: IntCounter,
     pub persistent_prefix_hits: IntCounter,
     pub result_cache_hits: IntCounter,
@@ -65,6 +67,20 @@ impl Metrics {
     /// Build the metric set.
     pub fn new() -> Metrics {
         let registry = Registry::new();
+        let padded_batch_count = IntCounter::new(
+            "huncho_padded_batch_count",
+            "Native mixed-length batches submitted.",
+        )
+        .unwrap();
+        let padded_tokens = IntCounter::new(
+            "huncho_padded_tokens",
+            "Physical right-padding positions submitted, including failed native calls.",
+        )
+        .unwrap();
+        registry
+            .register(Box::new(padded_batch_count.clone()))
+            .unwrap();
+        registry.register(Box::new(padded_tokens.clone())).unwrap();
         let request_latency = HistogramVec::new(
             prometheus::HistogramOpts::new(
                 "huncho_request_latency_seconds",
@@ -298,6 +314,8 @@ impl Metrics {
             fork_count,
             reused_prefix_tokens,
             batch_count,
+            padded_batch_count,
+            padded_tokens,
             cross_request_batch_count,
             persistent_prefix_hits,
             result_cache_hits,

@@ -18,7 +18,9 @@ use crate::response_cache::ResponseCache;
 use crate::tensor::Tensor;
 use crate::tokenizer::Tokenizer;
 
+mod batching;
 mod resumable;
+use batching::padded_groups;
 pub use resumable::ResumableEvaluation;
 
 /// Options controlling a single evaluation.
@@ -40,6 +42,9 @@ pub struct EvalOptions {
     /// Opt-in equal-length per-question batches, bounded by total input tokens.
     /// Mutually exclusive with prefix reuse; F5 still owns the whole request.
     pub max_batch_tokens: Option<usize>,
+    /// Maximum padded positions as a percentage of physical batch positions.
+    /// Zero keeps exact lengths. 1..=100 requires native padded support.
+    pub max_batch_padding_percent: usize,
     /// Prepare all F1–F4 prompts before submitting model work. This changes
     /// scheduling only; serving can prepare while another request executes.
     pub prepare_all: bool,
@@ -60,6 +65,8 @@ pub struct EvalStats {
     pub reused_prefix_tokens: u64,
     pub cache_forks: u64,
     pub batch_calls: u64,
+    pub padded_batch_calls: u64,
+    pub padded_tokens: u64,
     /// Native batches containing sequences from more than one request.
     pub cross_request_batches: u64,
     pub persistent_prefix_hits: u64,
@@ -84,6 +91,8 @@ impl EvalStats {
         self.reused_prefix_tokens += work.reused_prefix_tokens;
         self.cache_forks += work.cache_forks;
         self.batch_calls += work.batch_calls;
+        self.padded_batch_calls += work.padded_batch_calls;
+        self.padded_tokens += work.padded_tokens;
         self.cross_request_batches += work.cross_request_batches;
         self.persistent_prefix_hits += work.persistent_prefix_hits;
         self.result_cache_hits += work.result_cache_hits;
@@ -145,6 +154,7 @@ pub struct Engine {
     calibration: CalibrationEntry,
     supports_fork: bool,
     supports_batch: bool,
+    supports_padded_batch: bool,
     supports_resumable_prefill: bool,
     response_cache: Option<Arc<Mutex<ResponseCache>>>,
     prompt_cache: Option<Arc<Mutex<PromptCache>>>,
@@ -168,6 +178,7 @@ impl Engine {
         let mut capabilities = backend.capabilities();
         let supports_fork = capabilities.supports_fork;
         let supports_batch = backend.supports_batch();
+        let supports_padded_batch = backend.supports_padded_batch();
         let supports_resumable_prefill = backend.supports_resumable_prefill();
         let device = capabilities
             .extra
@@ -186,6 +197,7 @@ impl Engine {
             calibration,
             supports_fork,
             supports_batch,
+            supports_padded_batch,
             supports_resumable_prefill,
             response_cache: None,
             prompt_cache: None,
@@ -214,6 +226,7 @@ impl Engine {
             || actual.supports_fork != expected.supports_fork
             || actual.supports_lora != expected.supports_lora
             || backend.supports_batch() != original.supports_batch()
+            || backend.supports_padded_batch() != original.supports_padded_batch()
             || backend.supports_resumable_prefill() != original.supports_resumable_prefill()
         {
             return Err(Error::Backend(
@@ -233,6 +246,7 @@ impl Engine {
             calibration: self.calibration.clone(),
             supports_fork: self.supports_fork,
             supports_batch: self.supports_batch,
+            supports_padded_batch: self.supports_padded_batch,
             supports_resumable_prefill: self.supports_resumable_prefill,
             response_cache: self.response_cache.clone(),
             prompt_cache: self.prompt_cache.clone(),
@@ -317,6 +331,10 @@ impl Engine {
         self.family() != Family::F5 && self.supports_batch
     }
 
+    pub fn supports_padded_batch(&self) -> bool {
+        self.family() != Family::F5 && self.supports_padded_batch
+    }
+
     pub fn supports_resumable_prefill(&self) -> bool {
         self.supports_prefix_cache() && self.supports_resumable_prefill && self.device == "CPU"
     }
@@ -366,7 +384,7 @@ impl Engine {
     ) -> Result<PreparedEvaluation> {
         *stats = EvalStats::default();
         request.validate()?;
-        Self::validate_options(&options)?;
+        self.validate_options(&options)?;
         let key = self
             .response_cache
             .as_ref()
@@ -649,7 +667,7 @@ impl Engine {
         }
         let prompts = if opts.prepare_all && self.family() != Family::F5 {
             req.validate()?;
-            Self::validate_options(opts)?;
+            self.validate_options(opts)?;
             Some(self.prepare_prompts(req, opts, stats, reuse_prompts)?)
         } else {
             None
@@ -657,15 +675,22 @@ impl Engine {
         self.eval_inputs_with_stats(req, opts, stats, reuse_prompts, prompts)
     }
 
-    fn validate_options(opts: &EvalOptions) -> Result<()> {
+    fn validate_options(&self, opts: &EvalOptions) -> Result<()> {
         if (opts.persistent_prefix_bytes > 0 && !opts.prefix_cache)
             || opts.max_batch_tokens == Some(0)
             || (opts.prefix_cache && opts.max_batch_tokens.is_some())
             || (opts.cooperative_prefill && !opts.prefix_cache)
+            || opts.max_batch_padding_percent > 100
+            || (opts.max_batch_padding_percent > 0 && opts.max_batch_tokens.is_none())
         {
             return Err(Error::Request(
-                "batch token budget must be positive, batching cannot combine with prefix reuse, and persistent prefixes require prefix reuse"
+                "batch token budget must be positive, batching cannot combine with prefix reuse, persistent prefixes require prefix reuse, and padding percent 0..100 requires batching"
                     .into(),
+            ));
+        }
+        if opts.max_batch_padding_percent > 0 && !self.supports_padded_batch() {
+            return Err(Error::Unsupported(
+                "padded batching currently requires a CPU Qwen F2/F3 backend".into(),
             ));
         }
         Ok(())
@@ -706,7 +731,7 @@ impl Engine {
         prepared: Option<Vec<BuiltPrompt>>,
     ) -> Result<SystemOneResponse> {
         req.validate()?;
-        Self::validate_options(opts)?;
+        self.validate_options(opts)?;
 
         if self.family() == Family::F5 {
             return self.eval_joint(req, opts, stats);
@@ -869,6 +894,11 @@ impl Engine {
             Some((prompts, origins)) => (Some(prompts), origins),
             None => (None, None),
         };
+        if opts.max_batch_padding_percent > 0 && !self.supports_padded_batch() {
+            return Err(Error::Unsupported(
+                "padded batching currently requires a CPU Qwen F2/F3 backend".into(),
+            ));
+        }
         let max_context = opts
             .max_context
             .unwrap_or(self.manifest.backbone.max_context);
@@ -904,44 +934,76 @@ impl Engine {
             jobs.push((id, question, prompt));
         }
         let mut outputs: Vec<Option<crate::backend::ForwardOutput>> = vec![None; jobs.len()];
-        for (length, bucket) in buckets {
+        let groups = if opts.max_batch_padding_percent > 0 {
+            padded_groups(
+                buckets.into_values().flatten().collect(),
+                budget,
+                opts.max_batch_padding_percent,
+            )
+        } else {
+            buckets
+                .into_iter()
+                .flat_map(|(length, bucket)| {
+                    let rows = (budget / length.max(1)).clamp(1, 64);
+                    let mut pending = bucket.into_iter();
+                    let mut groups = Vec::new();
+                    loop {
+                        let group: Vec<_> = pending.by_ref().take(rows).collect();
+                        if group.is_empty() {
+                            break;
+                        }
+                        groups.push(group);
+                    }
+                    groups
+                })
+                .collect()
+        };
+        for group in groups {
             // An oversized singleton still runs independently, never silently
             // truncates. Exact-length bucketing needs no padding/mask changes.
-            let rows = (budget / length.max(1)).clamp(1, 64);
-            let mut pending = bucket.into_iter();
-            loop {
-                let group: Vec<_> = pending.by_ref().take(rows).collect();
-                if group.is_empty() {
-                    break;
-                }
-                let cross_request = origins.is_some_and(|origins| {
-                    group
-                        .iter()
-                        .any(|(index, _)| origins[*index] != origins[group[0].0])
-                });
-                let (indices, inputs): (Vec<_>, Vec<_>) = group.into_iter().unzip();
-                let count = inputs.len();
-                stats.forward_calls += 1;
-                stats.processed_tokens += (length * count) as u64;
-                let mut backend = self
-                    .backend
-                    .lock()
-                    .map_err(|_| Error::Backend("backend lock poisoned".into()))?;
-                let results = if count == 1 {
-                    vec![backend.forward(inputs.into_iter().next().unwrap())?]
+            let length = group
+                .iter()
+                .map(|(_, input)| input.tokens.len())
+                .max()
+                .unwrap();
+            let logical = group
+                .iter()
+                .map(|(_, input)| input.tokens.len())
+                .sum::<usize>();
+            let cross_request = origins.is_some_and(|origins| {
+                group
+                    .iter()
+                    .any(|(index, _)| origins[*index] != origins[group[0].0])
+            });
+            let (indices, inputs): (Vec<_>, Vec<_>) = group.into_iter().unzip();
+            let count = inputs.len();
+            stats.forward_calls += 1;
+            stats.processed_tokens += (length * count) as u64;
+            let padding = length * count - logical;
+            stats.padded_tokens += padding as u64;
+            let mut backend = self
+                .backend
+                .lock()
+                .map_err(|_| Error::Backend("backend lock poisoned".into()))?;
+            let results = if count == 1 {
+                vec![backend.forward(inputs.into_iter().next().unwrap())?]
+            } else {
+                stats.batch_calls += 1;
+                stats.cross_request_batches += u64::from(cross_request);
+                if padding > 0 {
+                    stats.padded_batch_calls += 1;
+                    backend.forward_padded_batch(inputs)?
                 } else {
-                    stats.batch_calls += 1;
-                    stats.cross_request_batches += u64::from(cross_request);
                     backend.forward_batch(inputs)?
-                };
-                if results.len() != count {
-                    return Err(Error::Backend(
-                        "batch backend returned the wrong number of sequences".into(),
-                    ));
                 }
-                for (index, result) in indices.into_iter().zip(results) {
-                    outputs[index] = Some(result);
-                }
+            };
+            if results.len() != count {
+                return Err(Error::Backend(
+                    "batch backend returned the wrong number of sequences".into(),
+                ));
+            }
+            for (index, result) in indices.into_iter().zip(results) {
+                outputs[index] = Some(result);
             }
         }
         let mut answers = BTreeMap::new();

@@ -115,6 +115,7 @@ async fn systemone(
             .config
             .max_batch_tokens
             .filter(|_| engine.supports_batch()),
+        max_batch_padding_percent: state.config.max_batch_padding_percent,
         reference_readout: !state.config.candidate_readout,
         prepare_all: engine.preparation.is_some(),
         cooperative_prefill: state.config.cooperative_prefill,
@@ -420,7 +421,7 @@ async fn evaluate_resumable(
     }
 }
 
-fn record_execution(metrics: &Metrics, model: &str, stats: &EvalStats) {
+pub(crate) fn record_execution(metrics: &Metrics, model: &str, stats: &EvalStats) {
     metrics.tokens_prefilled.inc_by(stats.processed_tokens);
     metrics.prefill_calls.inc_by(stats.prefill_calls);
     metrics.chunked_prefills.inc_by(stats.chunked_prefills);
@@ -437,6 +438,9 @@ fn record_execution(metrics: &Metrics, model: &str, stats: &EvalStats) {
         .persistent_prefix_hits
         .inc_by(stats.persistent_prefix_hits);
     metrics.batch_count.inc_by(stats.batch_calls);
+    metrics.cross_request_batch_count.inc_by(stats.cross_request_batches);
+    metrics.padded_batch_count.inc_by(stats.padded_batch_calls);
+    metrics.padded_tokens.inc_by(stats.padded_tokens);
     metrics
         .reused_prefix_tokens
         .inc_by(stats.reused_prefix_tokens);

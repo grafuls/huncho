@@ -99,6 +99,12 @@ def verify_report(report, args, suite, mode):
     if report.get("prefix_cache") != (mode == "prefix") or report.get("max_batch_tokens") != (
             args.batch_tokens if mode == "batch" else None):
         raise ValueError("report did not evaluate the requested optimization")
+    padding = args.max_batch_padding_percent if mode == "batch" else 0
+    if report.get("max_batch_padding_percent", 0) != padding:
+        raise ValueError("report did not evaluate the requested padding policy")
+    if padding and (report.get("work", {}).get("padded_batch_calls", 0) <= 0 or
+            report.get("work", {}).get("padded_tokens", 0) <= 0):
+        raise ValueError("suite did not exercise an actual mixed-length padded batch")
     cooperative = args.cooperative_prefill and mode == "prefix"
     if report.get("cooperative_prefill", False) != cooperative:
         raise ValueError("report did not evaluate the requested cooperative scheduling path")
@@ -160,6 +166,8 @@ def run(args):
         raise ValueError("persistent prefix byte budget must be nonnegative")
     if args.batch_max_requests is not None and not 2 <= args.batch_max_requests <= 64:
         raise ValueError("cross-request batch size must be 2..64")
+    if not 0 <= args.max_batch_padding_percent <= 100 or (args.max_batch_padding_percent and args.device != "cpu"):
+        raise ValueError("batch padding must be CPU-only and 0..100 percent")
     modes = args.modes.split(",")
     if not modes or len(set(modes)) != len(modes) or set(modes) - {"independent", "prefix", "batch"}:
         raise ValueError("modes must be distinct independent, prefix or batch entries")
@@ -171,6 +179,8 @@ def run(args):
         raise ValueError("cooperative scheduling requires the prefix mode")
     if args.batch_max_requests is not None and "batch" not in modes:
         raise ValueError("cross-request batch size requires the batch mode")
+    if args.max_batch_padding_percent and "batch" not in modes:
+        raise ValueError("batch padding requires the batch mode")
     suite = json.loads(args.golden.read_text())
     validate_suite(suite, args.numerical_only)
     manifest_path = args.package / "huncho-model.json"
@@ -228,6 +238,7 @@ def run(args):
         "cpu_kernel_build": args.cpu_kernel_build,
         "persistent_prefix_bytes": args.persistent_prefix_bytes,
         "batch_max_requests": args.batch_max_requests,
+        "max_batch_padding_percent": args.max_batch_padding_percent,
         "cpu_affinity": sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else None,
         "prepare_all": args.prepare_all,
         "numerical_only": args.numerical_only, "results": [], "qualified": False,
@@ -273,6 +284,8 @@ def run(args):
                     command.extend(["--persistent-prefix-bytes", str(args.persistent_prefix_bytes)])
             if mode == "batch":
                 command.extend(["--max-batch-tokens", str(args.batch_tokens)])
+                if args.max_batch_padding_percent:
+                    command.extend(["--max-batch-padding-percent", str(args.max_batch_padding_percent)])
                 if args.batch_max_requests is not None:
                     command.extend(["--batch-max-requests", str(args.batch_max_requests)])
             start = time.monotonic()
@@ -326,6 +339,7 @@ def main():
     parser.add_argument("--cpu-kernel-build", help="Exact compiled CPU kernel identity reported by this binary; does not enable kernels")
     parser.add_argument("--persistent-prefix-bytes", type=int, default=0)
     parser.add_argument("--batch-max-requests", type=int)
+    parser.add_argument("--max-batch-padding-percent", type=int, default=0)
     parser.add_argument("--prepare-all", action="store_true")
     parser.add_argument("--batch-tokens", type=int, default=4096)
     parser.add_argument("--modes", default="independent,prefix,batch")

@@ -499,6 +499,10 @@ impl QualificationRecord {
             || self.report.prefix_cache != options.prefix_cache
             || self.report.persistent_prefix_bytes != options.persistent_prefix_bytes
             || self.report.max_batch_tokens != options.max_batch_tokens
+            || self.report.max_batch_padding_percent != options.max_batch_padding_percent
+            || (options.max_batch_padding_percent > 0
+                && (self.report.work.padded_batch_calls == 0
+                    || self.report.work.padded_tokens == 0))
             || self.report.prepare_all != options.prepare_all
             || self.report.cooperative_prefill != options.cooperative_prefill
             || (engine.family() == Family::F3

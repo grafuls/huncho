@@ -99,6 +99,8 @@ pub struct ConformanceReport {
     #[serde(default)]
     pub max_batch_tokens: Option<usize>,
     #[serde(default)]
+    pub max_batch_padding_percent: usize,
+    #[serde(default)]
     pub prepare_all: bool,
     #[serde(default)]
     pub cooperative_prefill: bool,
@@ -326,6 +328,7 @@ fn run_suite_impl(
     independent_options.prefix_cache = false;
     independent_options.persistent_prefix_bytes = 0;
     independent_options.max_batch_tokens = None;
+    independent_options.max_batch_padding_percent = 0;
     independent_options.prepare_all = false;
     independent_options.cooperative_prefill = false;
     if candidate_readout {
@@ -514,7 +517,14 @@ fn run_suite_impl(
         return Err(Error::Conformance("persistent-prefix qualification requires fresh prefill and actual retained-snapshot hits".into()));
     }
     if options.max_batch_tokens.is_some() && work.batch_calls == 0 {
-        return Err(Error::Conformance("batch qualification requires a supported case that actually batches equal-length questions".into()));
+        return Err(Error::Conformance("batch qualification requires a supported case that actually batches multiple questions".into()));
+    }
+    if options.max_batch_padding_percent > 0
+        && (work.padded_batch_calls == 0 || work.padded_tokens == 0)
+    {
+        return Err(Error::Conformance(
+            "padded qualification requires an actual mixed-length native batch".into(),
+        ));
     }
     if options.prepare_all && work.prepared_questions == 0 {
         return Err(Error::Conformance(
@@ -555,6 +565,7 @@ fn run_suite_impl(
         prefix_cache: options.prefix_cache,
         persistent_prefix_bytes: options.persistent_prefix_bytes,
         max_batch_tokens: options.max_batch_tokens,
+        max_batch_padding_percent: options.max_batch_padding_percent,
         prepare_all: options.prepare_all,
         cooperative_prefill: options.cooperative_prefill,
         cross_request_max_requests: None,

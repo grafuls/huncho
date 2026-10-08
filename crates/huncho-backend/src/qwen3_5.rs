@@ -2319,54 +2319,23 @@ impl Backend for Qwen3_5Backend {
     }
 
     fn forward_batch(&mut self, inputs: Vec<ForwardInput>) -> CoreResult<Vec<ForwardOutput>> {
-        if inputs.is_empty() || inputs.len() > 64 {
-            return Err(Error::Backend(
-                "Qwen3.5 batch must contain 1..=64 independent rows".into(),
+        self.forward_independent_batch(inputs, false)
+    }
+
+    fn supports_padded_batch(&self) -> bool {
+        self.device.is_cpu()
+    }
+
+    fn forward_padded_batch(
+        &mut self,
+        inputs: Vec<ForwardInput>,
+    ) -> CoreResult<Vec<ForwardOutput>> {
+        if !self.device.is_cpu() {
+            return Err(Error::Unsupported(
+                "Qwen padded batches currently support CPU only".into(),
             ));
         }
-        let seq = inputs[0].tokens.len();
-        if seq == 0
-            || seq > self.max_context
-            || inputs.iter().any(|input| {
-                input.tokens.len() != seq
-                    || input.fork_from.is_some()
-                    || input.retain_cache
-                    || input.positions.iter().any(|&p| p >= seq)
-                    || input
-                        .tokens
-                        .iter()
-                        .any(|&token| token as usize >= self.input_vocab_size)
-                    || (matches!(self.head.as_ref(), Readout::LanguageModel(_))
-                        && input.logit_codes.as_ref().is_some_and(|codes| {
-                            codes.is_empty() || codes.iter().any(|&c| c as usize >= self.vocab_size)
-                        }))
-            })
-        {
-            return Err(Error::Backend(
-                "Qwen3.5 batches require valid independent equal-length rows without cache handles"
-                    .into(),
-            ));
-        }
-        let tokens: Vec<_> = inputs
-            .iter()
-            .flat_map(|input| input.tokens.iter().copied())
-            .collect();
-        let ids = Tensor::from_vec(tokens, (inputs.len(), seq), &self.device)
-            .map_err(|e| Error::Backend(e.to_string()))?;
-        let hidden = self
-            .model
-            .forward(&ids)
-            .map_err(|e| Error::Backend(e.to_string()))?;
-        inputs
-            .iter()
-            .enumerate()
-            .map(|(row, input)| {
-                let hidden = hidden
-                    .narrow(0, row, 1)
-                    .map_err(|e| Error::Backend(e.to_string()))?;
-                self.readout(&hidden, input)
-            })
-            .collect()
+        self.forward_independent_batch(inputs, true)
     }
 
     fn fork(&mut self, handle: CacheHandle) -> CoreResult<CacheHandle> {
@@ -2586,6 +2555,64 @@ impl Qwen3_5Backend {
 }
 
 impl Qwen3_5Backend {
+    fn forward_independent_batch(
+        &mut self,
+        inputs: Vec<ForwardInput>,
+        padded: bool,
+    ) -> CoreResult<Vec<ForwardOutput>> {
+        if inputs.is_empty() || inputs.len() > 64 {
+            return Err(Error::Backend(
+                "Qwen3.5 batch must contain 1..=64 independent rows".into(),
+            ));
+        }
+        let seq = inputs.iter().map(|input| input.tokens.len()).max().unwrap();
+        if seq == 0
+            || seq > self.max_context
+            || inputs.iter().any(|input| {
+                input.tokens.is_empty()
+                    || (!padded && input.tokens.len() != seq)
+                    || input.fork_from.is_some()
+                    || input.retain_cache
+                    || input.positions.iter().any(|&p| p >= input.tokens.len())
+                    || input
+                        .tokens
+                        .iter()
+                        .any(|&token| token as usize >= self.input_vocab_size)
+                    || (matches!(self.head.as_ref(), Readout::LanguageModel(_))
+                        && input.logit_codes.as_ref().is_some_and(|codes| {
+                            codes.is_empty() || codes.iter().any(|&c| c as usize >= self.vocab_size)
+                        }))
+            })
+        {
+            return Err(Error::Backend(
+                "Qwen3.5 batches require valid independent rows without cache handles; ordinary batches require equal lengths"
+                    .into(),
+            ));
+        }
+        let mut tokens = Vec::with_capacity(seq * inputs.len());
+        for input in &inputs {
+            let end = tokens.len() + seq;
+            tokens.extend_from_slice(&input.tokens);
+            tokens.resize(end, 0);
+        }
+        let ids = Tensor::from_vec(tokens, (inputs.len(), seq), &self.device)
+            .map_err(|e| Error::Backend(e.to_string()))?;
+        let hidden = self
+            .model
+            .forward(&ids)
+            .map_err(|e| Error::Backend(e.to_string()))?;
+        inputs
+            .iter()
+            .enumerate()
+            .map(|(row, input)| {
+                let hidden = hidden
+                    .narrow(0, row, 1)
+                    .map_err(|e| Error::Backend(e.to_string()))?;
+                self.readout(&hidden, input)
+            })
+            .collect()
+    }
+
     fn readout(&self, hidden: &Tensor, input: &ForwardInput) -> CoreResult<ForwardOutput> {
         if input.positions.is_empty() {
             return Ok(ForwardOutput::Logits {

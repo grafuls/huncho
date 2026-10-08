@@ -104,6 +104,10 @@ pub struct ServeArgs {
     #[arg(long, env = "HUNCHO_MAX_BATCH_TOKENS", conflicts_with = "prefix_cache")]
     pub max_batch_tokens: Option<usize>,
 
+    /// Allow CPU Qwen mixed lengths with at most this percent padding (0..100).
+    #[arg(long, default_value_t = 0, requires = "max_batch_tokens")]
+    pub max_batch_padding_percent: usize,
+
     /// Collate up to this many prepared requests (2–64); requires a token budget.
     #[arg(
         long,
@@ -288,6 +292,7 @@ fn evaluation_options(
             0
         },
         max_batch_tokens: args.max_batch_tokens.filter(|_| engine.supports_batch()),
+        max_batch_padding_percent: args.max_batch_padding_percent,
         reference_readout: !args.candidate_readout,
         prepare_all: (args.cooperative_prefill
             || args.max_prepared_per_model > 0
@@ -470,6 +475,8 @@ fn qualify_optimizations(registry: &ModelRegistry, args: &ServeArgs) -> anyhow::
         let replicas = engine.replica_engines();
         let replicated = replicas.len() > 1;
         let opts = evaluation_options(engine, args);
+        anyhow::ensure!(args.max_batch_padding_percent <= 100 && (args.max_batch_padding_percent == 0 || (opts.max_batch_tokens.is_some() && engine.supports_padded_batch())),
+            "padded serving requires CPU Qwen F2/F3, a batch token budget and padding percent in 1..100 for every model");
         anyhow::ensure!(!args.cooperative_prefill || engine.supports_resumable_prefill(),
             "cooperative prefill requires CPU Kev with HUNCHO_PREFILL_CHUNK_TOKENS configured for every model");
         anyhow::ensure!(!engine.execution_metadata().contains_key("prefill_chunk_tokens") || opts.prefix_cache,
@@ -557,6 +564,7 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
         cooperative_prefill: args.cooperative_prefill,
         persistent_prefix_bytes: args.persistent_prefix_bytes,
         max_batch_tokens: args.max_batch_tokens,
+        max_batch_padding_percent: args.max_batch_padding_percent,
         batch_max_requests: args.batch_max_requests,
         batch_wait_ms: args.batch_wait_ms,
         candidate_readout: args.candidate_readout,

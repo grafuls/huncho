@@ -23,7 +23,7 @@ def suite():
 def options(**overrides):
     args = SimpleNamespace(device="cpu", dtype="fp16", projection_chunk_rows=64,
         fp32_attention=True, batch_tokens=4096, numerical_only=False, prepare_all=False,
-        cpu_delta_rule=False, cpu_causal_conv=False, prefill_chunk_tokens=0, cpu_kernel_build=None, persistent_prefix_bytes=0, batch_max_requests=None)
+        cpu_delta_rule=False, cpu_causal_conv=False, prefill_chunk_tokens=0, cpu_kernel_build=None, persistent_prefix_bytes=0, batch_max_requests=None, max_batch_padding_percent=0)
     vars(args).update(cpu_fused_gate=False, cooperative_prefill=False, cpu_blas_library=None, cpu_blas_profile=None, cpu_blas_threads=1, cpu_blas_metadata=None)
     vars(args).update(overrides)
     return args
@@ -166,6 +166,25 @@ class RuntimeQualificationTests(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 qualifier.verify_report(dict(data, **change), args, suite(), "batch")
 
+    def test_padding_requires_exact_policy_and_real_mixed_work(self):
+        args = options(max_batch_padding_percent=25)
+        data = dict(report(), prefix_cache=False, max_batch_tokens=4096,
+            max_batch_padding_percent=25)
+        data["work"]["batch_calls"] = 1
+        with self.assertRaisesRegex(ValueError, "mixed-length"):
+            qualifier.verify_report(data, args, suite(), "batch")
+        data["work"].update(padded_batch_calls=1, padded_tokens=7)
+        self.assertTrue(qualifier.verify_report(data, args, suite(), "batch"))
+        for change in [{"max_batch_padding_percent": 0}, {"max_batch_padding_percent": 100}]:
+            with self.subTest(change=change), self.assertRaisesRegex(ValueError, "padding policy"):
+                qualifier.verify_report(dict(data, **change), args, suite(), "batch")
+        with self.assertRaisesRegex(ValueError, "padding policy"):
+            qualifier.verify_report(data, options(), suite(), "batch")
+        for field in ["padded_batch_calls", "padded_tokens"]:
+            changed = dict(data, work=dict(data["work"], **{field: 0}))
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, "mixed-length"):
+                qualifier.verify_report(changed, args, suite(), "batch")
+
     def test_invalid_cpu_profile_and_cache_modes_fail_before_any_file_or_device_access(self):
         for change in [
             {"device": "cuda", "cpu_delta_rule": True},
@@ -183,6 +202,9 @@ class RuntimeQualificationTests(unittest.TestCase):
             {"persistent_prefix_bytes": -1}, {"persistent_prefix_bytes": 1, "modes": "independent"},
             {"batch_max_requests": 1}, {"batch_max_requests": 65},
             {"batch_max_requests": 2, "modes": "prefix"},
+            {"max_batch_padding_percent": -1}, {"max_batch_padding_percent": 101},
+            {"max_batch_padding_percent": 25, "device": "cuda"},
+            {"max_batch_padding_percent": 25, "modes": "prefix"},
         ]:
             with self.subTest(change=change), self.assertRaises(ValueError):
                 qualifier.run(options(modes="independent,prefix,batch", **change) if "modes" not in change else options(**change))

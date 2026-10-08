@@ -79,6 +79,10 @@ pub struct ConformArgs {
     #[arg(long, conflicts_with = "prefix_cache")]
     pub max_batch_tokens: Option<usize>,
 
+    /// Allow CPU Qwen mixed lengths with at most this percent padding (0..100).
+    #[arg(long, default_value_t = 0, requires = "max_batch_tokens")]
+    pub max_batch_padding_percent: usize,
+
     /// Qualify batches across this many cases (2–64), requiring actual mixing.
     #[arg(long, requires = "max_batch_tokens", conflicts_with = "prefix_cache")]
     pub batch_max_requests: Option<usize>,
@@ -182,6 +186,7 @@ pub fn run(args: ConformArgs) -> anyhow::Result<()> {
         cooperative_prefill: args.cooperative_prefill,
         persistent_prefix_bytes: args.persistent_prefix_bytes,
         max_batch_tokens: args.max_batch_tokens,
+        max_batch_padding_percent: args.max_batch_padding_percent,
         prepare_all: args.prepare_all
             || args.cooperative_prefill
             || args.batch_max_requests.is_some(),

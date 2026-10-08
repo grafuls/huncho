@@ -116,6 +116,7 @@ fn state(auth_token: Option<&str>) -> Arc<AppState> {
         cooperative_prefill: false,
         persistent_prefix_bytes: 0,
         max_batch_tokens: None,
+        max_batch_padding_percent: 0,
         batch_max_requests: None,
         batch_wait_ms: 2,
         candidate_readout: false,
@@ -683,6 +684,17 @@ fn batch_state(
         fn supports_batch(&self) -> bool {
             true
         }
+        fn supports_padded_batch(&self) -> bool {
+            true
+        }
+        fn forward_padded_batch(
+            &mut self,
+            inputs: Vec<huncho_core::backend::ForwardInput>,
+        ) -> huncho_core::Result<Vec<huncho_core::backend::ForwardOutput>> {
+            // Transport/scheduler fixture only: native padded arithmetic is
+            // verified with actual Qwen tensors in backend/padded_batch.rs.
+            self.forward_batch(inputs)
+        }
         fn fork(
             &mut self,
             h: huncho_core::backend::CacheHandle,
@@ -828,6 +840,81 @@ async fn cross_request_batches_preserve_distinct_answers_extensions_and_auth() {
     );
     assert_eq!(batched.metrics.cross_request_batch_count.get(), 1);
     assert_eq!(*rows.lock().unwrap(), vec![4, 1]);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn mixed_length_http_collation_keeps_wire_usage_and_counts_padding() {
+    let (batched, _, _, rows) = batch_state(
+        ServerConfig {
+            auth_token: Some("secret".into()),
+            max_batch_tokens: Some(4096),
+            max_batch_padding_percent: 100,
+            batch_max_requests: Some(4),
+            batch_wait_ms: 100,
+            ..Default::default()
+        },
+        false,
+    );
+    let independent = state(Some("secret"));
+    let mut clients = Vec::new();
+    let mut expected = Vec::new();
+    for index in 0..4 {
+        let mut request = choice_request();
+        request["state"] = json!("distinct state ".repeat(1 + 7 * index));
+        expected.push(
+            send(
+                independent.clone(),
+                Method::POST,
+                "/v1/systemone",
+                Some(request.clone()),
+                Some("secret"),
+                index % 2 == 0,
+            )
+            .await,
+        );
+        let state = batched.clone();
+        clients.push(tokio::spawn(async move {
+            send(
+                state,
+                Method::POST,
+                "/v1/systemone",
+                Some(request),
+                Some("secret"),
+                index % 2 == 0,
+            )
+            .await
+        }));
+    }
+    for (client, expected) in clients.into_iter().zip(expected) {
+        assert_eq!(client.await.unwrap(), expected);
+    }
+    assert_eq!(*rows.lock().unwrap(), vec![4]);
+    assert_eq!(batched.metrics.padded_batch_count.get(), 1);
+    assert_eq!(batched.metrics.cross_request_batch_count.get(), 1);
+    assert!(batched.metrics.padded_tokens.get() > 0);
+    assert_eq!(
+        batched.metrics.tokens_prefilled.get(),
+        independent.metrics.tokens_prefilled.get() + batched.metrics.padded_tokens.get()
+    );
+    let (_, metrics) = send_raw(batched.clone(), Method::GET, "/metrics", Some("secret")).await;
+    assert!(metrics.contains("huncho_padded_batch_count 1"));
+    assert!(metrics.contains("huncho_padded_tokens"));
+    assert_eq!(
+        send(
+            batched.clone(),
+            Method::POST,
+            "/v1/systemone",
+            Some(choice_request()),
+            None,
+            false
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(batched.metrics.padded_batch_count.get(), 1);
+    assert_eq!(batched.metrics.queue_depth.get(), 0);
+    assert_eq!(batched.metrics.prepared_waiting.get(), 0);
 }
 
 #[tokio::test(flavor = "current_thread")]

@@ -148,21 +148,10 @@ async fn run(
             let start = Instant::now();
             let mut stats = EvalStats::default();
             let result = backend.eval_prepared_batch_with_stats(packets, tokens, &mut stats);
-            job_metrics.tokens_prefilled.inc_by(stats.processed_tokens);
-            job_metrics.prefill_calls.inc_by(stats.prefill_calls);
-            job_metrics.chunked_prefills.inc_by(stats.chunked_prefills);
-            job_metrics.fork_count.inc_by(stats.cache_forks);
-            job_metrics.batch_count.inc_by(stats.batch_calls);
-            job_metrics
-                .cross_request_batch_count
-                .inc_by(stats.cross_request_batches);
             // All names resolve to this same immutable engine. Physical work is
             // counted once, under its registry name; per-caller usage is logical.
             let name = backend.manifest().name.as_str();
-            job_metrics
-                .model_tokens
-                .with_label_values(&[name])
-                .inc_by(stats.processed_tokens);
+            crate::routes::record_execution(&job_metrics, name, &stats);
             job_metrics
                 .evaluation_latency
                 .with_label_values(&[name])
