@@ -87,6 +87,30 @@ cargo build --release -p huncho-cli --features candle
 # for real HF tokenizer + Hub download support, add hf,tokenizers
 ```
 
+### Optional CPU instruction builds
+
+Candle 0.11 selects packed Q8_0/Q4_0 AVX2 dot products at compile time;
+detecting AVX2 on a host does not enable them in a portable binary. On compatible
+x86-64-v3 CPUs, an isolated optional build can use:
+
+```sh
+RUSTFLAGS='-C target-cpu=x86-64-v3' CARGO_TARGET_DIR=target/cpu-v3 \
+  cargo build --release -p huncho-cli --features quantization,clef
+```
+
+The ordinary build and its hardware floor stay unchanged. This binary requires
+compatible CPU instructions and is not a portable replacement. Native Candle
+backends report `cpu_kernel_build=x86_64:avx,avx2,f16c,fma`; the value records
+compiled arithmetic features, not runtime host detection. Other selected vector
+features are recorded too. Fresh complete labeled startup qualification is
+mandatory for a recorded profile, including a source package whose calibration
+still says `fit`. Receipts bind the profile and binary. Packed activation
+quantization and vector reductions can change logits; faster kernels do not
+bypass temperature refits or unchanged probability gates. The runner accepts
+`--cpu-kernel-build 'x86_64:avx,avx2,f16c,fma'` to require this exact build.
+It does not select or enable those instructions. Full-model acceptance and
+performance measurements remain separate requirements.
+
 > ⚠️ **Real models need the `tokenizers` feature.** A manifest-declared
 > `backbone.tokenizer` is loaded with the official Hugging Face `tokenizers`
 > crate only when that feature is enabled. Without it `load_tokenizer` now

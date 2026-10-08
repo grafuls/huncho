@@ -579,3 +579,21 @@ profile guards. The engine check keeps unchanged upstream goldens, preserves
 logical usage, verifies lower physical token work and rejects a vacuous
 4,096-token chunk profile. Released-model chunk acceptance and actual peak RSS
 or latency measurements remain outstanding; no GPU checks are performed.
+
+## Explicit compiled CPU kernels (2026-10-08)
+
+O03 now records optional compiled vector arithmetic across native Candle
+backends. Candle 0.11's packed Q8_0/Q4_0 dot products use static AVX2/NEON/SIMD
+cfg branches; host capability detection cannot turn them on in a portable
+binary. A dependency-free build script records selected arithmetic features
+under `cpu_kernel_build`. An isolated x86-64-v3 build enables the existing
+AVX2 kernels without changing the ordinary build or adding a runtime dependency.
+
+The shared changed-arithmetic startup/receipt gate requires fresh complete
+labeled conformance for this profile even when a source manifest says `fit`.
+The runner requires an exact requested identity and rejects omission or
+substitution. Tests verify compilation identity and the existing unlabeled,
+partial-label and probability-drift rejections. Instructions are compiled,
+not dynamically dispatched: deploy only to compatible hosts. New CPU builds
+and full-model fitting/qualification are staged separately; no faster kernel
+is accepted based on instruction support alone. GPU checks remain deferred.

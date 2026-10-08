@@ -88,3 +88,11 @@ Both buffered CPU recurrence (`HUNCHO_CPU_DELTA_RULE`) and convolution
 (`HUNCHO_CPU_CAUSAL_CONV`) can be selected explicitly. They add recorded kernel
 profiles and require their own fresh labeled qualification; conversion itself
 does not enable them or fit temperatures for them.
+
+Candle's portable x86 build uses scalar packed dot products; optional AVX2
+builds use a different reduction implementation. See
+[CPU instruction builds](backends.md#optional-cpu-instruction-builds) for an
+isolated build and its exact `cpu_kernel_build` identity. Fit and evaluate with
+the intended binary/profile, retain that identity, and repeat startup
+qualification if it changes. A quantization layout and dtype alone do not
+identify the arithmetic kernels.

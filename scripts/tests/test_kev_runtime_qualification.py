@@ -23,7 +23,7 @@ def suite():
 def options(**overrides):
     args = SimpleNamespace(device="cpu", dtype="fp16", projection_chunk_rows=64,
         fp32_attention=True, batch_tokens=4096, numerical_only=False, prepare_all=False,
-        cpu_delta_rule=False, cpu_causal_conv=False, prefill_chunk_tokens=0, persistent_prefix_bytes=0, batch_max_requests=None)
+        cpu_delta_rule=False, cpu_causal_conv=False, prefill_chunk_tokens=0, cpu_kernel_build=None, persistent_prefix_bytes=0, batch_max_requests=None)
     vars(args).update(overrides)
     return args
 
@@ -38,6 +38,17 @@ def report():
 
 
 class RuntimeQualificationTests(unittest.TestCase):
+    def test_compiled_cpu_kernel_identity_must_match_and_cannot_be_ignored(self):
+        data = report()
+        profile = "x86_64:avx,avx2,f16c,fma"
+        with self.assertRaisesRegex(ValueError, "kernel profile"):
+            qualifier.verify_report(data, options(cpu_kernel_build=profile), suite(), "prefix")
+        data["execution_metadata"]["cpu_kernel_build"] = profile
+        self.assertTrue(qualifier.verify_report(data, options(cpu_kernel_build=profile), suite(), "prefix"))
+        for requested in [None, "x86_64:avx,avx2,fma"]:
+            with self.subTest(requested=requested), self.assertRaisesRegex(ValueError, "kernel profile"):
+                qualifier.verify_report(data, options(cpu_kernel_build=requested), suite(), "prefix")
+
     def test_cpu_profile_must_match_exact_reported_metadata(self):
         data = report()
         args = options(cpu_delta_rule=True)

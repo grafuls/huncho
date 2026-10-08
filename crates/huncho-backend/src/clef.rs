@@ -221,7 +221,9 @@ impl Backend for ClefBackend {
         BackendId::Clef
     }
     fn capabilities(&self) -> Capabilities {
-        self.capabilities.clone()
+        let mut capabilities = self.capabilities.clone();
+        crate::cpu_profile::record(&mut capabilities.extra);
+        capabilities
     }
     fn forward(&mut self, _input: ForwardInput) -> Result<ForwardOutput> {
         Err(Error::Unsupported(

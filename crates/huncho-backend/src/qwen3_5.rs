@@ -1712,6 +1712,7 @@ impl Backend for Qwen3_5Backend {
 
     fn capabilities(&self) -> Capabilities {
         let mut extra = BTreeMap::from([("device".into(), crate::device_label(&self.device))]);
+        crate::cpu_profile::record(&mut extra);
         if self.model.projection_chunk_rows > 0 {
             extra.insert(
                 "projection_chunk_rows".into(),

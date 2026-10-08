@@ -69,6 +69,8 @@ def verify_report(report, args, suite, mode):
         expected_metadata["causal_conv_execution"] = "cpu-buffered-v1"
     if args.prefill_chunk_tokens:
         expected_metadata["prefill_chunk_tokens"] = str(args.prefill_chunk_tokens)
+    if args.cpu_kernel_build:
+        expected_metadata["cpu_kernel_build"] = args.cpu_kernel_build
     if args.dtype in PACKED_PROFILES:
         expected_metadata.update(weight_quantization=PACKED_PROFILES[args.dtype],
             activation_dtype="fp32", recurrent_state_dtype="fp32", pointer_head_dtype="fp32",
@@ -185,6 +187,7 @@ def run(args):
         "cpu_delta_rule": args.cpu_delta_rule,
         "cpu_causal_conv": args.cpu_causal_conv,
         "prefill_chunk_tokens": args.prefill_chunk_tokens,
+        "cpu_kernel_build": args.cpu_kernel_build,
         "persistent_prefix_bytes": args.persistent_prefix_bytes,
         "batch_max_requests": args.batch_max_requests,
         "cpu_affinity": sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else None,
@@ -266,6 +269,7 @@ def main():
     parser.add_argument("--cpu-delta-rule", action="store_true")
     parser.add_argument("--cpu-causal-conv", action="store_true")
     parser.add_argument("--prefill-chunk-tokens", type=int, default=0)
+    parser.add_argument("--cpu-kernel-build", help="Exact compiled CPU kernel identity reported by this binary; does not enable kernels")
     parser.add_argument("--persistent-prefix-bytes", type=int, default=0)
     parser.add_argument("--batch-max-requests", type=int)
     parser.add_argument("--prepare-all", action="store_true")

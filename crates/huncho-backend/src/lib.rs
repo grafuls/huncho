@@ -22,6 +22,8 @@ pub mod clef;
 #[cfg(feature = "candle")]
 mod conv_cpu;
 #[cfg(feature = "candle")]
+mod cpu_profile;
+#[cfg(feature = "candle")]
 mod delta_cpu;
 #[cfg(feature = "candle")]
 pub mod device;

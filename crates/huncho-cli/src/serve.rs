@@ -379,6 +379,7 @@ fn changed_arithmetic_profile(engine: &huncho_core::engine::Engine) -> bool {
         "causal_conv_execution",
         "prefill_chunk_tokens",
         "weight_quantization",
+        "cpu_kernel_build",
     ]
     .iter()
     .any(|key| engine.execution_metadata().contains_key(*key))
@@ -789,6 +790,7 @@ mod qualification_tests {
             ("onnx_native_batch", "equal-length-v1"),
             ("delta_rule_execution", "cpu-buffered-v1"),
             ("causal_conv_execution", "cpu-buffered-v1"),
+            ("cpu_kernel_build", "x86_64:avx,avx2,f16c,fma"),
         ] {
             let registry = registry_with_execution_metadata(
                 0.0,
