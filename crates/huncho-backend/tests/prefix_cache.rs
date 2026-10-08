@@ -63,6 +63,72 @@ fn native_forks_chunks_and_short_prefixes_preserve_probabilities() {
     assert_forks_chunks_and_short_prefixes(Device::Cpu);
 }
 
+#[test]
+fn persistent_prefixes_are_exact_bounded_and_isolate_active_handles_on_cpu() {
+    let root = Path::new(FIXTURE);
+    let golden: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(root.join("golden.json")).unwrap()).unwrap();
+    let row = &golden["cases"][0]["rows"][0];
+    let tokens: Vec<u32> = serde_json::from_value(row["tokens"].clone()).unwrap();
+    let positions: Vec<usize> = serde_json::from_value(row["positions"].clone()).unwrap();
+    let prefix = row["prefix_len"].as_u64().unwrap() as usize;
+    let budget = 1024 * 1024;
+    for dtype in ["fp32", "fp16"] {
+        let mut backend = load(dtype, 512);
+        let baseline = backend
+            .forward(ForwardInput::new(tokens.clone(), positions.clone()))
+            .unwrap();
+        for iteration in 0..3 {
+            let cached = backend.prefill_cached(&tokens[..prefix], budget).unwrap();
+            assert_eq!(cached.hit, iteration != 0);
+            let fork = backend.fork(cached.handle).unwrap();
+            backend.release_cache(cached.handle).unwrap();
+            if iteration == 2 {
+                backend.clear_prefix_cache().unwrap();
+            }
+            let output = backend
+                .forward(continuation(
+                    &tokens[prefix..],
+                    positions.iter().map(|p| p - prefix).collect(),
+                    fork,
+                ))
+                .unwrap();
+            assert_probabilities(output.values().data(), baseline.values().data(), 2.40605);
+            backend.release_cache(fork).unwrap();
+        }
+        let after_clear = backend.prefill_cached(&tokens[..prefix], budget).unwrap();
+        assert!(!after_clear.hit);
+        backend.release_cache(after_clear.handle).unwrap();
+        // Reducing the charged budget evicts the previous snapshot; an
+        // oversized prefix remains valid but is never retained under that budget.
+        for _ in 0..2 {
+            let small = backend.prefill_cached(&tokens[..prefix], 1).unwrap();
+            assert!(!small.hit);
+            backend.release_cache(small.handle).unwrap();
+        }
+        let invalid = vec![u32::MAX];
+        assert!(backend.prefill_cached(&invalid, budget).is_err());
+        // The count bound is independent of available bytes and handle release.
+        for token in 2..=18 {
+            let cached = backend.prefill_cached(&[1, token], budget).unwrap();
+            assert!(!cached.hit);
+            backend.release_cache(cached.handle).unwrap();
+        }
+        let evicted = backend.prefill_cached(&[1, 2], budget).unwrap();
+        assert!(!evicted.hit);
+        backend.release_cache(evicted.handle).unwrap();
+        let retained = backend.prefill_cached(&[1, 18], budget).unwrap();
+        assert!(retained.hit);
+        backend.release_cache(retained.handle).unwrap();
+        assert!(backend.with_projection_chunk_rows(64).is_err());
+        let mut backend = load(dtype, 512);
+        let cached = backend.prefill_cached(&[1, 2], budget).unwrap();
+        backend.release_cache(cached.handle).unwrap();
+        backend.clear_prefix_cache().unwrap();
+        assert!(backend.with_projection_chunk_rows(64).is_ok());
+    }
+}
+
 #[cfg(feature = "cuda")]
 #[test]
 #[ignore = "requires a compatible CUDA GPU"]
@@ -315,6 +381,55 @@ fn engine_fanout_preserves_wire_usage_and_releases_on_later_errors() {
             assert!(report.passed, "{dtype}: {report:?}");
             assert!(report.work.cache_forks > 0);
             assert!(report.optimization_parity.unwrap().max_prob_delta <= 1e-4);
+            let persistent = EvalOptions {
+                persistent_prefix_bytes: 1024 * 1024,
+                ..options.clone()
+            };
+            engine.clear_prefix_cache().unwrap();
+            let mut first_work = EvalStats::default();
+            let first = engine
+                .eval_uncached_with_stats(&req, &persistent, &mut first_work)
+                .unwrap();
+            assert_eq!(first_work.prefill_calls, 1);
+            assert_eq!(first_work.persistent_prefix_hits, 0);
+            let mut hit_work = EvalStats::default();
+            let hit = engine
+                .eval_uncached_with_stats(&req, &persistent, &mut hit_work)
+                .unwrap();
+            assert_eq!(hit_work.prefill_calls, 0);
+            assert_eq!(hit_work.persistent_prefix_hits, 1);
+            assert_eq!(
+                first_work.processed_tokens - hit_work.processed_tokens,
+                prefix
+            );
+            assert_wire_equal(
+                &serde_json::to_value(&first).unwrap(),
+                &serde_json::to_value(&hit).unwrap(),
+            );
+            let report = huncho_core::conformance::run_suite_with_options(
+                &engine,
+                &suite,
+                &Default::default(),
+                &persistent,
+            )
+            .unwrap();
+            assert!(report.passed, "{dtype}: {report:?}");
+            assert_eq!(report.work.prefill_calls, 1);
+            assert_eq!(report.work.persistent_prefix_hits, 1);
+            assert_eq!(report.work.forward_calls, 2 * req.questions.len() as u64);
+            assert_eq!(report.work.result_cache_hits, 0);
+            assert_eq!(report.work.prompt_cache_hits, 0);
+            let small = EvalOptions {
+                persistent_prefix_bytes: 1,
+                ..persistent
+            };
+            assert!(huncho_core::conformance::run_suite_with_options(
+                &engine,
+                &suite,
+                &Default::default(),
+                &small
+            )
+            .is_err());
         }
         // The first question fits and executes; a later one exceeds context.
         // Repeating past the native retained-handle bound detects leaked parents.

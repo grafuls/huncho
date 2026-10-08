@@ -113,6 +113,7 @@ fn state(auth_token: Option<&str>) -> Arc<AppState> {
         max_prepared_per_model: 0,
         coalesce_bytes: 0,
         prefix_cache: false,
+        persistent_prefix_bytes: 0,
         max_batch_tokens: None,
         batch_max_requests: None,
         batch_wait_ms: 2,

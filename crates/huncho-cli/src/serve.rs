@@ -81,6 +81,10 @@ pub struct ServeArgs {
     #[arg(long, default_value_t = false, env = "HUNCHO_PREFIX_CACHE")]
     pub prefix_cache: bool,
 
+    /// Charged budget for exact retained native prefixes (0 disables).
+    #[arg(long, default_value = "0", env = "HUNCHO_PERSISTENT_PREFIX_BYTES")]
+    pub persistent_prefix_bytes: usize,
+
     /// Enable native equal-length question batching for qualified models/devices.
     #[arg(long, env = "HUNCHO_MAX_BATCH_TOKENS", conflicts_with = "prefix_cache")]
     pub max_batch_tokens: Option<usize>,
@@ -133,6 +137,10 @@ fn load_models(args: &ServeArgs) -> anyhow::Result<ModelRegistry> {
     anyhow::ensure!(
         !(args.prefix_cache && args.max_batch_tokens.is_some()),
         "prefix reuse and batching cannot be combined yet"
+    );
+    anyhow::ensure!(
+        args.persistent_prefix_bytes == 0 || args.prefix_cache,
+        "persistent prefixes require --prefix-cache"
     );
     let mut registry = ModelRegistry::new();
     #[cfg(feature = "qualification")]
@@ -246,6 +254,11 @@ fn evaluation_options(
 ) -> huncho_core::engine::EvalOptions {
     huncho_core::engine::EvalOptions {
         prefix_cache: args.prefix_cache && engine.supports_prefix_cache(),
+        persistent_prefix_bytes: if args.prefix_cache && engine.supports_prefix_cache() {
+            args.persistent_prefix_bytes
+        } else {
+            0
+        },
         max_batch_tokens: args.max_batch_tokens.filter(|_| engine.supports_batch()),
         reference_readout: !args.candidate_readout,
         prepare_all: (args.max_prepared_per_model > 0
@@ -448,6 +461,7 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
         max_prepared_per_model: args.max_prepared_per_model,
         coalesce_bytes: args.coalesce_bytes,
         prefix_cache: args.prefix_cache,
+        persistent_prefix_bytes: args.persistent_prefix_bytes,
         max_batch_tokens: args.max_batch_tokens,
         batch_max_requests: args.batch_max_requests,
         batch_wait_ms: args.batch_wait_ms,

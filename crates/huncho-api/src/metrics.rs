@@ -46,6 +46,7 @@ pub struct Metrics {
     pub reused_prefix_tokens: IntCounter,
     pub batch_count: IntCounter,
     pub cross_request_batch_count: IntCounter,
+    pub persistent_prefix_hits: IntCounter,
     pub result_cache_hits: IntCounter,
     pub prompt_cache_hits: IntCounter,
     pub requests_coalesced: IntCounter,
@@ -91,6 +92,11 @@ impl Metrics {
         let cross_request_batch_count = IntCounter::new(
             "huncho_cross_request_batch_count",
             "Native backbone batches containing sequences from distinct requests.",
+        )
+        .unwrap();
+        let persistent_prefix_hits = IntCounter::new(
+            "huncho_persistent_prefix_hits",
+            "Caller-owned native prefix handles cloned from retained immutable snapshots.",
         )
         .unwrap();
         let reused_prefix_tokens = IntCounter::new(
@@ -220,6 +226,9 @@ impl Metrics {
             .register(Box::new(cross_request_batch_count.clone()))
             .unwrap();
         registry
+            .register(Box::new(persistent_prefix_hits.clone()))
+            .unwrap();
+        registry
             .register(Box::new(result_cache_hits.clone()))
             .unwrap();
         registry
@@ -254,6 +263,7 @@ impl Metrics {
             reused_prefix_tokens,
             batch_count,
             cross_request_batch_count,
+            persistent_prefix_hits,
             result_cache_hits,
             prompt_cache_hits,
             requests_coalesced,

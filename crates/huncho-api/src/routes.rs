@@ -95,8 +95,16 @@ async fn systemone(
     let admitted = GaugeGuard::new(&state.metrics.queue_depth);
     let opts = EvalOptions {
         extensions: wants_extensions(&headers) || state.config.default_extensions,
-        prefix_cache: state.config.prefix_cache,
-        max_batch_tokens: state.config.max_batch_tokens,
+        prefix_cache: state.config.prefix_cache && engine.supports_prefix_cache(),
+        persistent_prefix_bytes: if state.config.prefix_cache && engine.supports_prefix_cache() {
+            state.config.persistent_prefix_bytes
+        } else {
+            0
+        },
+        max_batch_tokens: state
+            .config
+            .max_batch_tokens
+            .filter(|_| engine.supports_batch()),
         reference_readout: !state.config.candidate_readout,
         prepare_all: engine.preparation.is_some(),
         ..Default::default()
@@ -288,6 +296,9 @@ async fn evaluate(
             .with_label_values(&[&job_model])
             .inc_by(stats.processed_tokens);
         metrics.fork_count.inc_by(stats.cache_forks);
+        metrics
+            .persistent_prefix_hits
+            .inc_by(stats.persistent_prefix_hits);
         metrics.batch_count.inc_by(stats.batch_calls);
         metrics
             .reused_prefix_tokens

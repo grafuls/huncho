@@ -31,6 +31,9 @@ pub struct EvalOptions {
     /// Opt in to request-local native Kev prefix reuse after qualifying this
     /// model/device with conformance. Independent forwards remain the default.
     pub prefix_cache: bool,
+    /// Charged bytes for exact native cross-request prefix snapshots. Zero
+    /// disables retention; positive values require qualified prefix fan-out.
+    pub persistent_prefix_bytes: usize,
     /// Opt-in equal-length per-question batches, bounded by total input tokens.
     /// Mutually exclusive with prefix reuse; F5 still owns the whole request.
     pub max_batch_tokens: Option<usize>,
@@ -51,6 +54,7 @@ pub struct EvalStats {
     pub batch_calls: u64,
     /// Native batches containing sequences from more than one request.
     pub cross_request_batches: u64,
+    pub persistent_prefix_hits: u64,
     /// Exact successful responses reused; a hit submits no physical work.
     pub result_cache_hits: u64,
     /// Prepared F1–F4 prompts reused; model forwards still execute normally.
@@ -68,6 +72,7 @@ impl EvalStats {
         self.cache_forks += work.cache_forks;
         self.batch_calls += work.batch_calls;
         self.cross_request_batches += work.cross_request_batches;
+        self.persistent_prefix_hits += work.persistent_prefix_hits;
         self.result_cache_hits += work.result_cache_hits;
         self.prompt_cache_hits += work.prompt_cache_hits;
         self.prepared_questions += work.prepared_questions;
@@ -244,6 +249,15 @@ impl Engine {
 
     pub fn supports_batch(&self) -> bool {
         self.family() != Family::F5 && self.supports_batch
+    }
+
+    /// Qualification starts retained-prefix tests from fresh model state.
+    /// Active immutable branch handles are not released by this operation.
+    pub fn clear_prefix_cache(&self) -> Result<()> {
+        self.backend
+            .lock()
+            .map_err(|_| Error::Backend("backend lock poisoned".into()))?
+            .clear_prefix_cache()
     }
 
     /// Evaluate a request and produce a response.
@@ -557,11 +571,12 @@ impl Engine {
     }
 
     fn validate_options(opts: &EvalOptions) -> Result<()> {
-        if opts.max_batch_tokens == Some(0)
+        if (opts.persistent_prefix_bytes > 0 && !opts.prefix_cache)
+            || opts.max_batch_tokens == Some(0)
             || (opts.prefix_cache && opts.max_batch_tokens.is_some())
         {
             return Err(Error::Request(
-                "batch token budget must be positive and cannot be combined with prefix reuse yet"
+                "batch token budget must be positive, batching cannot combine with prefix reuse, and persistent prefixes require prefix reuse"
                     .into(),
             ));
         }
@@ -671,7 +686,20 @@ impl Engine {
             if eligible && prefix.is_none() {
                 stats.prefill_calls += 1;
                 stats.processed_tokens += prefix_len as u64;
-                let handle = backend.prefill(&prompt.tokens[..prefix_len])?;
+                let handle = if opts.persistent_prefix_bytes > 0 {
+                    let cached = backend.prefill_cached(
+                        &prompt.tokens[..prefix_len],
+                        opts.persistent_prefix_bytes,
+                    )?;
+                    if cached.hit {
+                        stats.prefill_calls -= 1;
+                        stats.processed_tokens -= prefix_len as u64;
+                        stats.persistent_prefix_hits += 1;
+                    }
+                    cached.handle
+                } else {
+                    backend.prefill(&prompt.tokens[..prefix_len])?
+                };
                 prefix = Some(RequestPrefix {
                     backend: &self.backend,
                     handle,

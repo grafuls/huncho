@@ -52,6 +52,13 @@ pub struct ForwardInput {
     pub fork_from: Option<CacheHandle>,
 }
 
+/// A fresh caller-owned prefix handle, optionally cloned from an immutable
+/// retained snapshot. The caller releases it just like a normal prefill handle.
+pub struct CachedPrefill {
+    pub handle: CacheHandle,
+    pub hit: bool,
+}
+
 impl ForwardInput {
     pub fn new(tokens: Vec<u32>, positions: Vec<usize>) -> Self {
         ForwardInput {
@@ -192,6 +199,18 @@ pub trait Backend: Send + Sync {
         Err(crate::error::Error::Unsupported(
             "backend does not expose a prefill handle".into(),
         ))
+    }
+
+    /// Optional exact cross-request prefix retention under a charged-byte
+    /// budget. The default computes a fresh prefix and never claims a hit.
+    fn prefill_cached(&mut self, tokens: &[u32], _max_bytes: usize) -> Result<CachedPrefill> {
+        self.prefill(tokens)
+            .map(|handle| CachedPrefill { handle, hit: false })
+    }
+
+    /// Clear retained snapshots without invalidating active caller-owned forks.
+    fn clear_prefix_cache(&mut self) -> Result<()> {
+        Ok(())
     }
 
     /// Release a prefix or branch after use. Handles must belong to this loaded

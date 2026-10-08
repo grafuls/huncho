@@ -286,3 +286,55 @@ matching argmax, preserve option labels/usage, and cover context errors. Existin
 upstream scalar golden checks remain unchanged. This is real head execution
 coverage, not a full Cloudflare/Clef qualification or a measured production
 speedup. No GPU checks were run; the profile remains unqualified there.
+
+## Bounded native prefix snapshots (2026-10-08)
+
+O19 now includes exact cross-request Kev prefix retention through
+`--persistent-prefix-bytes B` with `--prefix-cache` (default budget zero).
+Each native backend owns an immutable FIFO of at most sixteen snapshots,
+charging token keys, conservative metadata and every retained KV/recurrent/
+convolution tensor. Snapshots are copied into compact detached storage so narrow
+views cannot retain larger temporary projections. Oversized prefixes and failed
+retention copies remain usable fresh prefixes and bypass retention. Reducing a
+budget evicts snapshots when the next retained-prefill operation executes.
+
+Every hit mints a separate caller-owned handle; question forks continue from that
+handle. Clear/eviction releases snapshot ownership while active handles remain
+valid. Successful and failed continuations preserve stored parents. Exact token
+keys and backend ownership isolate models/adapters/devices; the full hybrid state
+and absolute token count are retained. Changing projection/attention profiles
+with retained snapshots is rejected. No temperatures or token boundaries change.
+This is bounded prefix-snapshot reuse, not paged attention, tenant sharing,
+combined cached-branch batching or a global cross-model cache.
+
+Conformance explicitly clears snapshots per case, performs a fresh warm
+prefill/continuation, then exercises a real hit. It counts all warm and retained
+model work, bypasses result/prompt retention, and checks independent probability
+parity at the unchanged gate. A budget too small to retain any prefix cannot
+qualify. Startup runs this separate check for enabled retention; execution
+receipts bind the budget. `huncho_persistent_prefix_hits` separates successful
+snapshot reuse from logical usage and submitted token counters.
+
+CPU fp32/fp16 tiny-Kev tests pass upstream, independent and retained-prefix
+probability checks. They cover full hybrid state, parent/branch isolation,
+clearing with live handles, byte and sixteen-entry bounds, eviction, invalid
+inputs, reduced budgets, profile changes and physical-work accounting. Full
+Kev-4B acceptance/throughput for this increment is unmeasured; prior rejected T4
+FP16 prefix results remain rejected. No actual GPU checks were run.
+
+```sh
+huncho conform --model /path/to/kev-package --golden /path/to/pinned-golden.json \
+  --prefix-cache --persistent-prefix-bytes 67108864 --json
+huncho serve --model /path/to/kev-package --prefix-cache \
+  --persistent-prefix-bytes 67108864 \
+  --qualification-golden 'MODEL_NAME=/path/to/pinned-golden.json'
+huncho bench --model /path/to/kev-package --questions 5 --repeat-inputs \
+  --prefix-cache --persistent-prefix-bytes 67108864 --json
+```
+
+The budget controls retained snapshots, not active forks, allocator RSS or
+quadratic attention temporaries. In library use, stopping prefix retention does
+not automatically unload snapshots created by earlier requests; call
+`Engine::clear_prefix_cache` or unload the engine to release them. No request
+text is retained, but token IDs and model state remain in memory until eviction,
+clear or unload.

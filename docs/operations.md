@@ -524,3 +524,20 @@ not provide cached authorization for serving. Linux runtime/library identity is
 more complete than on other platforms; GPU hardware is not independently
 inventoried. Weight hashing adds startup I/O only when this opt-in workflow is
 used. The default build and normal model loads retain their existing behavior.
+
+### Persistent Kev prefixes
+
+`--persistent-prefix-bytes B` / `HUNCHO_PERSISTENT_PREFIX_BYTES` adds a charged
+native snapshot budget to qualified `--prefix-cache` serving. Default zero keeps
+retention disabled. Immutable snapshots contain all attention, recurrent and
+convolution state; each hit returns a fresh caller-owned handle. FIFO eviction
+is bounded by bytes and sixteen snapshots. Active forks remain valid through
+clear/eviction, and model/kernel changes cannot reuse these snapshots.
+
+Qualification clears and warms each case, requires actual snapshot hits, counts
+warm work and retains independent probability gates. An insufficient budget
+cannot qualify. `huncho_persistent_prefix_hits` counts hits, while physical token
+counters exclude their avoided prefill positions. The budget covers snapshots,
+not live forks or peak inference memory. Library callers can clear retained
+state with `Engine::clear_prefix_cache`; otherwise unused snapshots live until
+eviction or model unload. Full released-model and GPU qualification remain open.

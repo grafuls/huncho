@@ -84,6 +84,10 @@ pub struct BenchArgs {
     #[arg(long, default_value_t = false)]
     pub prefix_cache: bool,
 
+    /// Charged native prefix-snapshot budget; requires prefix reuse (0 disables).
+    #[arg(long, default_value = "0")]
+    pub persistent_prefix_bytes: usize,
+
     /// Opt-in native equal-length question batches bounded by total tokens.
     #[arg(long, conflicts_with = "prefix_cache")]
     pub max_batch_tokens: Option<usize>,
@@ -126,6 +130,7 @@ pub fn run(args: BenchArgs) -> anyhow::Result<()> {
     let options = EvalOptions {
         reference_readout: args.reference_readout,
         prefix_cache: args.prefix_cache,
+        persistent_prefix_bytes: args.persistent_prefix_bytes,
         max_batch_tokens: args.max_batch_tokens,
         ..Default::default()
     };
@@ -204,7 +209,7 @@ pub fn run(args: BenchArgs) -> anyhow::Result<()> {
             "repeat_inputs": args.repeat_inputs, "long_state": args.long_state,
             "result_cache_bytes": args.result_cache_bytes,
             "reference_readout": args.reference_readout,
-            "prefix_cache": args.prefix_cache, "max_batch_tokens": args.max_batch_tokens, "work": work,
+            "prefix_cache": args.prefix_cache, "persistent_prefix_bytes": args.persistent_prefix_bytes, "max_batch_tokens": args.max_batch_tokens, "work": work,
                 "mean_ms": mean, "p50_ms": p50, "p95_ms": p95, "p99_ms": p99,
                 "requests_per_second": qps, "questions_per_second": qps * args.questions as f64,
                 "measurement": "warm closed-loop in-process engine evaluation"
@@ -374,6 +379,7 @@ mod tests {
             json: true,
             reference_readout: false,
             prefix_cache: false,
+            persistent_prefix_bytes: 0,
             max_batch_tokens: None,
             long_state: false,
             mock_model: "mock".into(),

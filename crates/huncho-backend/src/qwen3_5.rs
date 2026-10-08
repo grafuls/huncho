@@ -844,6 +844,78 @@ struct ModelCache {
     layers: Vec<LayerCache>,
 }
 
+impl ModelCache {
+    fn retention_bytes(&self, tokens: usize) -> Option<usize> {
+        let mut bytes = tokens.checked_mul(8)?.checked_add(512)?;
+        for layer in &self.layers {
+            bytes = bytes.checked_add(512)?;
+            for tensor in [
+                &layer.key,
+                &layer.value,
+                &layer.recurrent,
+                &layer.convolution,
+            ]
+            .into_iter()
+            .flatten()
+            {
+                bytes = bytes.checked_add(
+                    tensor
+                        .elem_count()
+                        .checked_mul(tensor.dtype().size_in_bytes())?,
+                )?;
+            }
+        }
+        Some(bytes)
+    }
+
+    fn compact(&self) -> Result<Self> {
+        let copy = |tensor: &Option<Tensor>| {
+            tensor
+                .as_ref()
+                .map(|t| t.force_contiguous().map(|t| t.detach()))
+                .transpose()
+        };
+        let layers = self
+            .layers
+            .iter()
+            .map(|layer| {
+                Ok(LayerCache {
+                    key: copy(&layer.key)?,
+                    value: copy(&layer.value)?,
+                    recurrent: copy(&layer.recurrent)?,
+                    convolution: copy(&layer.convolution)?,
+                })
+            })
+            .collect::<Result<_>>()?;
+        Ok(Self {
+            tokens: self.tokens,
+            layers,
+        })
+    }
+}
+
+#[derive(Default)]
+struct PrefixSnapshots {
+    values: BTreeMap<Vec<u32>, (ModelCache, usize)>,
+    fifo: VecDeque<Vec<u32>>,
+    bytes: usize,
+}
+
+impl PrefixSnapshots {
+    fn trim(&mut self, max_bytes: usize, incoming: usize) {
+        while self.bytes > max_bytes.saturating_sub(incoming)
+            || self.values.len() >= 16 && incoming > 0
+        {
+            let Some(key) = self.fifo.pop_front() else {
+                break;
+            };
+            if let Some((_, bytes)) = self.values.remove(&key) {
+                self.bytes -= bytes;
+            }
+        }
+    }
+}
+
 #[derive(Clone)]
 struct AttentionInputs {
     cos: Tensor,
@@ -1119,6 +1191,7 @@ pub struct Qwen3_5Backend {
     dtype: String,
     device: Device,
     caches: BTreeMap<u64, ModelCache>,
+    prefixes: PrefixSnapshots,
 }
 
 enum Readout {
@@ -1131,7 +1204,9 @@ impl Qwen3_5Backend {
     /// their original dtype; only dense attention matmuls/softmax use FP32.
     /// Changing arithmetic requires qualification for this execution identity.
     pub fn with_fp32_attention(mut self, enabled: bool) -> CoreResult<Self> {
-        if enabled != self.model.fp32_attention && !self.caches.is_empty() {
+        if enabled != self.model.fp32_attention
+            && (!self.caches.is_empty() || !self.prefixes.values.is_empty())
+        {
             return Err(Error::Unsupported(
                 "release retained Qwen caches before changing attention kernels".into(),
             ));
@@ -1148,7 +1223,9 @@ impl Qwen3_5Backend {
                 "projection chunk rows must be at most 4096 (zero disables)".into(),
             ));
         }
-        if rows != self.model.projection_chunk_rows && !self.caches.is_empty() {
+        if rows != self.model.projection_chunk_rows
+            && (!self.caches.is_empty() || !self.prefixes.values.is_empty())
+        {
             return Err(Error::Unsupported(
                 "release retained Qwen caches before changing projection kernels".into(),
             ));
@@ -1351,6 +1428,7 @@ impl Qwen3_5Backend {
             dtype: dtype_str,
             device,
             caches: BTreeMap::new(),
+            prefixes: PrefixSnapshots::default(),
         })
     }
 }
@@ -1697,6 +1775,46 @@ impl Backend for Qwen3_5Backend {
             .map(|_| ())
             .ok_or_else(|| Error::Backend("unknown Qwen3.5 cache handle".into()))
     }
+
+    fn clear_prefix_cache(&mut self) -> CoreResult<()> {
+        self.prefixes = PrefixSnapshots::default();
+        Ok(())
+    }
+
+    fn prefill_cached(
+        &mut self,
+        tokens: &[u32],
+        max_bytes: usize,
+    ) -> CoreResult<huncho_core::backend::CachedPrefill> {
+        self.prefixes.trim(max_bytes, 0);
+        self.check_cache_capacity()?;
+        if max_bytes > 0 {
+            if let Some((cache, _)) = self.prefixes.values.get(tokens) {
+                let handle = crate::next_cache_handle()?;
+                self.caches.insert(handle.id, cache.clone());
+                return Ok(huncho_core::backend::CachedPrefill { handle, hit: true });
+            }
+        }
+        let handle = self.prefill(tokens)?;
+        let cache = &self.caches[&handle.id];
+        if let Some(bytes) = cache
+            .retention_bytes(tokens.len())
+            .filter(|bytes| *bytes <= max_bytes)
+        {
+            // Make compact immutable copies before retention so small views
+            // cannot retain larger temporary projection storage. Copy failures
+            // leave the already-computed caller-owned prefix valid and uncached.
+            if let Ok(snapshot) = cache.compact() {
+                self.prefixes.trim(max_bytes, bytes);
+                self.prefixes
+                    .values
+                    .insert(tokens.to_vec(), (snapshot, bytes));
+                self.prefixes.fifo.push_back(tokens.to_vec());
+                self.prefixes.bytes += bytes;
+            }
+        }
+        Ok(huncho_core::backend::CachedPrefill { handle, hit: false })
+    }
 }
 
 impl Qwen3_5Backend {
@@ -2028,6 +2146,7 @@ mod tests {
             dtype: "fp32".into(),
             device,
             caches: BTreeMap::new(),
+            prefixes: PrefixSnapshots::default(),
         };
         let out = backend
             .forward(ForwardInput::new(vec![1, 2, 3, 4], vec![3]))

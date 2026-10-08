@@ -67,6 +67,10 @@ pub struct ConformArgs {
     #[arg(long, default_value_t = false)]
     pub prefix_cache: bool,
 
+    /// Qualify exact retained native prefixes; requires prefix reuse and real hits.
+    #[arg(long, default_value = "0")]
+    pub persistent_prefix_bytes: usize,
+
     /// Qualify native equal-length question batching against the same suite.
     #[arg(long, conflicts_with = "prefix_cache")]
     pub max_batch_tokens: Option<usize>,
@@ -171,6 +175,7 @@ pub fn run(args: ConformArgs) -> anyhow::Result<()> {
     let options = EvalOptions {
         reference_readout: args.reference_readout,
         prefix_cache: args.prefix_cache,
+        persistent_prefix_bytes: args.persistent_prefix_bytes,
         max_batch_tokens: args.max_batch_tokens,
         prepare_all: args.prepare_all || args.batch_max_requests.is_some(),
         ..Default::default()

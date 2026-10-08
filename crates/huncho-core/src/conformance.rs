@@ -95,6 +95,8 @@ pub struct ConformanceReport {
     #[serde(default)]
     pub prefix_cache: bool,
     #[serde(default)]
+    pub persistent_prefix_bytes: usize,
+    #[serde(default)]
     pub max_batch_tokens: Option<usize>,
     #[serde(default)]
     pub prepare_all: bool,
@@ -245,6 +247,7 @@ fn run_suite_impl(
         || options.prepare_all;
     let mut independent_options = options.clone();
     independent_options.prefix_cache = false;
+    independent_options.persistent_prefix_bytes = 0;
     independent_options.max_batch_tokens = None;
     independent_options.prepare_all = false;
     if candidate_readout {
@@ -295,6 +298,15 @@ fn run_suite_impl(
             )));
         }
 
+        if options.persistent_prefix_bytes > 0 {
+            // Only this explicit retention qualification warms caches. Start
+            // fresh per case and count all warm model work; retained whole
+            // responses/prompts remain bypassed in both arms.
+            engine.clear_prefix_cache()?;
+            let mut warm = Default::default();
+            engine.eval_uncached_with_stats(&case.request, options, &mut warm)?;
+            work.accumulate(&warm);
+        }
         let mut stats = crate::engine::EvalStats::default();
         let resp = match responses {
             Some(responses) => responses
@@ -409,6 +421,9 @@ fn run_suite_impl(
     if options.prefix_cache && work.cache_forks == 0 {
         return Err(Error::Conformance("prefix-cache qualification requires a supported multi-question Kev case that actually forks".into()));
     }
+    if options.persistent_prefix_bytes > 0 && work.persistent_prefix_hits == 0 {
+        return Err(Error::Conformance("persistent-prefix qualification requires fresh prefill and actual retained-snapshot hits".into()));
+    }
     if options.max_batch_tokens.is_some() && work.batch_calls == 0 {
         return Err(Error::Conformance("batch qualification requires a supported case that actually batches equal-length questions".into()));
     }
@@ -449,6 +464,7 @@ fn run_suite_impl(
         execution_metadata: engine.execution_metadata().clone(),
         reference_readout: options.reference_readout,
         prefix_cache: options.prefix_cache,
+        persistent_prefix_bytes: options.persistent_prefix_bytes,
         max_batch_tokens: options.max_batch_tokens,
         prepare_all: options.prepare_all,
         cross_request_max_requests: None,
