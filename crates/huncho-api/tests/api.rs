@@ -124,6 +124,292 @@ fn state(auth_token: Option<&str>) -> Arc<AppState> {
     Arc::new(AppState::new(config, registry, Metrics::new()))
 }
 
+fn lazy_description(name: &str) -> huncho_api::ModelDescription {
+    huncho_api::ModelDescription {
+        name: name.into(),
+        family: Family::F1,
+        backend: BackendId::Onnx,
+        dtype: "fp32".into(),
+        max_context: 512,
+        replicas: 1,
+        residency: "cold".into(),
+    }
+}
+
+#[tokio::test]
+async fn lazy_http_auth_validation_and_idle_batch_workers_preserve_residency_limits() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+    struct Batched(MockBackend);
+    impl Backend for Batched {
+        fn id(&self) -> BackendId {
+            self.0.id()
+        }
+        fn capabilities(&self) -> huncho_core::backend::Capabilities {
+            self.0.capabilities()
+        }
+        fn supports_batch(&self) -> bool {
+            true
+        }
+        fn forward(
+            &mut self,
+            input: huncho_core::backend::ForwardInput,
+        ) -> huncho_core::Result<huncho_core::backend::ForwardOutput> {
+            self.0.forward(input)
+        }
+        fn forward_batch(
+            &mut self,
+            inputs: Vec<huncho_core::backend::ForwardInput>,
+        ) -> huncho_core::Result<Vec<huncho_core::backend::ForwardOutput>> {
+            inputs
+                .into_iter()
+                .map(|input| self.0.forward(input))
+                .collect()
+        }
+        fn fork(
+            &mut self,
+            handle: huncho_core::backend::CacheHandle,
+        ) -> huncho_core::Result<huncho_core::backend::CacheHandle> {
+            self.0.fork(handle)
+        }
+    }
+    let loads = Arc::new(AtomicUsize::new(0));
+    let count = loads.clone();
+    let mut registry = ModelRegistry::new();
+    registry.enable_lazy(1, Duration::from_millis(2)).unwrap();
+    registry
+        .register_lazy(lazy_description("mock-laya"), move || {
+            count.fetch_add(1, Ordering::SeqCst);
+            Ok(vec![Arc::new(engine_with_backend(
+                "mock-laya",
+                Box::new(Batched(MockBackend::with_vocab(4096))),
+            ))])
+        })
+        .unwrap();
+    let config = ServerConfig {
+        auth_token: Some("fixture-secret".into()),
+        batch_max_requests: Some(2),
+        max_batch_tokens: Some(4096),
+        ..Default::default()
+    };
+    let state = Arc::new(AppState::new(config, registry, Metrics::new()));
+    let (status, _) = send(
+        state.clone(),
+        Method::POST,
+        "/v1/systemone",
+        Some(choice_request()),
+        None,
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let mut invalid = choice_request();
+    invalid["questions"] = json!({});
+    let (status, _) = send(
+        state.clone(),
+        Method::POST,
+        "/v1/systemone",
+        Some(invalid),
+        Some("fixture-secret"),
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(loads.load(Ordering::SeqCst), 0);
+    let (first, second) = tokio::join!(
+        send(
+            state.clone(),
+            Method::POST,
+            "/v1/systemone",
+            Some(choice_request()),
+            Some("fixture-secret"),
+            false
+        ),
+        send(
+            state.clone(),
+            Method::POST,
+            "/v1/systemone",
+            Some(choice_request()),
+            Some("fixture-secret"),
+            false
+        ),
+    );
+    assert_eq!(first.0, StatusCode::OK);
+    assert_eq!(second, first);
+    assert_eq!(loads.load(Ordering::SeqCst), 1);
+    assert!(state.metrics.cross_request_batch_count.get() > 0);
+    tokio::time::sleep(Duration::from_millis(8)).await;
+    assert_eq!(
+        state.evict_idle_models().await,
+        1,
+        "an idle collation worker must not retain weights"
+    );
+}
+
+#[tokio::test]
+async fn lazy_residency_bounds_slots_and_never_unloads_external_contexts() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+    let loads = Arc::new(AtomicUsize::new(0));
+    let mut registry = ModelRegistry::new();
+    registry.enable_lazy(1, Duration::from_millis(2)).unwrap();
+    for name in ["cold-a", "cold-b"] {
+        let loads = loads.clone();
+        registry
+            .register_lazy(lazy_description(name), move || {
+                loads.fetch_add(1, Ordering::SeqCst);
+                Ok(vec![Arc::new(mock_engine(name))])
+            })
+            .unwrap();
+    }
+    assert_eq!(registry.names(), ["cold-a", "cold-b"]);
+    assert_eq!(registry.len(), 2);
+    assert_eq!(loads.load(Ordering::SeqCst), 0);
+    let state = AppState::new(ServerConfig::default(), registry, Metrics::new());
+    assert!(state.resolve_model("absent").await.unwrap().is_none());
+    let a = state.resolve_model("cold-a").await.unwrap().unwrap();
+    let retained = a.replica_engines()[0].clone();
+    assert!(state.resolve_model("cold-b").await.is_err());
+    drop(a);
+    // No ModelHandle survives, but an external engine still owns all weights.
+    assert!(state.resolve_model("cold-b").await.is_err());
+    tokio::time::sleep(Duration::from_millis(4)).await;
+    assert_eq!(state.evict_idle_models().await, 0);
+    drop(retained);
+    let b = state.resolve_model("cold-b").await.unwrap().unwrap();
+    assert_eq!(loads.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        state.registry.read().await.lazy_descriptions()[0].residency,
+        "cold"
+    );
+    drop(b);
+    tokio::time::sleep(Duration::from_millis(4)).await;
+    assert_eq!(state.evict_idle_models().await, 1);
+    let reloaded = state.resolve_model("cold-a").await.unwrap().unwrap();
+    assert_eq!(loads.load(Ordering::SeqCst), 3);
+    assert_eq!(reloaded.dtype(), "fp32");
+}
+
+#[tokio::test]
+async fn canceled_cold_load_keeps_its_reservation_and_one_shared_factory() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+    let loads = Arc::new(AtomicUsize::new(0));
+    let release = Arc::new(std::sync::Barrier::new(2));
+    let mut registry = ModelRegistry::new();
+    registry.enable_lazy(1, Duration::from_secs(300)).unwrap();
+    let started = loads.clone();
+    let finish = release.clone();
+    registry
+        .register_lazy(lazy_description("cold-a"), move || {
+            started.fetch_add(1, Ordering::SeqCst);
+            finish.wait();
+            Ok(vec![Arc::new(mock_engine("cold-a"))])
+        })
+        .unwrap();
+    registry
+        .register_lazy(lazy_description("cold-b"), || {
+            Ok(vec![Arc::new(mock_engine("cold-b"))])
+        })
+        .unwrap();
+    let state = Arc::new(AppState::new(
+        ServerConfig::default(),
+        registry,
+        Metrics::new(),
+    ));
+    let owner = state.clone();
+    let canceled = tokio::spawn(async move { owner.resolve_model("cold-a").await });
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while loads.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    canceled.abort();
+    assert!(canceled.await.err().unwrap().is_cancelled());
+    assert!(state.resolve_model("cold-b").await.is_err());
+    let owner = state.clone();
+    let follower = tokio::spawn(async move { owner.resolve_model("cold-a").await });
+    tokio::task::yield_now().await;
+    tokio::task::spawn_blocking(move || release.wait())
+        .await
+        .unwrap();
+    let loaded = tokio::time::timeout(Duration::from_secs(2), follower)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(loads.load(Ordering::SeqCst), 1);
+    assert_eq!(loaded.manifest().name, "cold-a");
+    assert_eq!(
+        state.registry.read().await.lazy_descriptions()[0].residency,
+        "resident"
+    );
+}
+
+#[tokio::test]
+async fn cold_waiters_are_bounded_and_failed_or_substituted_factories_are_not_retried() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+    let mut registry = ModelRegistry::new();
+    registry.enable_lazy(1, Duration::from_secs(300)).unwrap();
+    let loads = Arc::new(AtomicUsize::new(0));
+    let release = Arc::new(std::sync::Barrier::new(2));
+    let count = loads.clone();
+    let finish = release.clone();
+    registry
+        .register_lazy(lazy_description("cold-a"), move || {
+            count.fetch_add(1, Ordering::SeqCst);
+            finish.wait();
+            // An otherwise valid CPU engine cannot silently replace the model.
+            Ok(vec![Arc::new(mock_engine("substitute"))])
+        })
+        .unwrap();
+    registry
+        .register_lazy(lazy_description("panic"), || {
+            panic!("factory fixture failure")
+        })
+        .unwrap();
+    let config = ServerConfig {
+        max_queued_per_model: 0,
+        ..Default::default()
+    };
+    let state = Arc::new(AppState::new(config, registry, Metrics::new()));
+    let owner = state.clone();
+    let first = tokio::spawn(async move { owner.resolve_model("cold-a").await });
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while loads.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let error = state
+        .resolve_model("cold-a")
+        .await
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(error.contains("waiting queue is full"));
+    tokio::task::spawn_blocking(move || release.wait())
+        .await
+        .unwrap();
+    assert!(first.await.unwrap().is_err());
+    assert!(state.resolve_model("cold-a").await.is_err());
+    assert_eq!(loads.load(Ordering::SeqCst), 1);
+    assert!(state.resolve_model("panic").await.is_err());
+    assert!(state.resolve_model("panic").await.is_err());
+    assert!(state
+        .registry
+        .read()
+        .await
+        .lazy_descriptions()
+        .iter()
+        .all(|description| description.residency == "failed"));
+}
+
 async fn send(
     state: Arc<AppState>,
     method: Method,

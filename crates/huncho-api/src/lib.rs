@@ -9,12 +9,14 @@ mod coalesce;
 pub mod config;
 pub mod metrics;
 mod replicas;
+pub mod residency;
 pub mod routes;
 pub mod server;
 pub mod state;
 
 pub use config::ServerConfig;
 pub use metrics::Metrics;
+pub use residency::ModelDescription;
 pub use routes::router;
 pub use server::serve;
 pub use state::{AppState, ModelRegistry};

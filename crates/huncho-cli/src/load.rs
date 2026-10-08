@@ -39,7 +39,7 @@ impl BackendChoice {
     }
 }
 
-fn available_backends() -> Vec<BackendId> {
+pub(crate) fn available_backends() -> Vec<BackendId> {
     [
         (BackendId::Clef, cfg!(feature = "clef")),
         (BackendId::Candle, cfg!(feature = "candle")),

@@ -66,11 +66,20 @@ async fn systemone(
 
     let model = req.model.clone();
     let start = Instant::now();
+    if let Err(error) = req.validate() {
+        return map_error(&error);
+    }
     // Clone a model handle, then release the registry before waiting or running
     // inference. Health, metadata and model management remain responsive.
-    let engine = {
-        let registry = state.registry.read().await;
-        registry.get(&model)
+    let engine = match state.resolve_model(&model).await {
+        Ok(engine) => engine,
+        Err(error) => {
+            return error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "model_unavailable",
+                &error.to_string(),
+            )
+        }
     };
     let Some(engine) = engine else {
         return error_response(
@@ -79,9 +88,6 @@ async fn systemone(
             &format!("unknown model `{model}`"),
         );
     };
-    if let Err(error) = req.validate() {
-        return map_error(&error);
-    }
     if state.config.cooperative_prefill
         && (!state.config.prefix_cache
             || !engine.supports_resumable_prefill()
@@ -500,6 +506,7 @@ struct ModelInfo {
     dtype: String,
     max_context: usize,
     replicas: usize,
+    residency: String,
 }
 
 async fn list_models(State(state): State<Arc<AppState>>) -> Response {
@@ -513,8 +520,24 @@ async fn list_models(State(state): State<Arc<AppState>>) -> Response {
             dtype: engine.dtype().to_string(),
             max_context: engine.manifest().backbone.max_context,
             replicas: engine.replica_engines().len(),
+            residency: "eager".into(),
         });
     }
+    models.extend(
+        registry
+            .lazy_descriptions()
+            .into_iter()
+            .map(|model| ModelInfo {
+                name: model.name,
+                family: model.family.to_string(),
+                backend: model.backend.to_string(),
+                dtype: model.dtype,
+                max_context: model.max_context,
+                replicas: model.replicas,
+                residency: model.residency,
+            }),
+    );
+    models.sort_by(|a, b| a.name.cmp(&b.name));
     (StatusCode::OK, Json(ModelsResponse { models })).into_response()
 }
 

@@ -8,7 +8,10 @@ use huncho_core::manifest::{BackendId, CalibrationStatus, Family};
 
 use crate::load::{engine_from_ref, engine_from_resolved_manifest, mock_engine, BackendChoice};
 
-#[derive(Args)]
+#[cfg(feature = "qualification")]
+mod residency;
+
+#[derive(Args, Clone)]
 pub struct ServeArgs {
     /// Address to bind (host:port). Also read from `HUNCHO_BIND`.
     #[arg(long, default_value = "127.0.0.1:8080", env = "HUNCHO_BIND")]
@@ -139,9 +142,30 @@ pub struct ServeArgs {
     /// Model cache directory (also used by HF resolution; OPS-04). Also read from `HUNCHO_CACHE_DIR`.
     #[arg(long, env = "HUNCHO_CACHE_DIR")]
     pub cache_dir: Option<String>,
+
+    /// Load CPU weights on first use, qualify each cold load, and evict idle models.
+    /// Requires an explicit backend/dtype, HUNCHO_DEVICE=cpu and labeled goldens.
+    #[cfg(feature = "qualification")]
+    #[arg(long, default_value_t = false)]
+    pub lazy: bool,
+
+    /// Maximum resident/loading lazy model groups (each group includes replicas).
+    #[cfg(feature = "qualification")]
+    #[arg(long, default_value = "1", requires = "lazy", value_parser = clap::value_parser!(u16).range(1..=64))]
+    pub resident_models: u16,
+
+    /// Evict a lazy model after this many idle seconds, when no job owns it.
+    #[cfg(feature = "qualification")]
+    #[arg(long, default_value = "300", requires = "lazy", value_parser = clap::value_parser!(u64).range(1..))]
+    pub idle_evict_secs: u64,
+
+    /// Preload and qualify a registered lazy model name before listening (repeatable).
+    #[cfg(feature = "qualification")]
+    #[arg(long, requires = "lazy")]
+    pub preload: Vec<String>,
 }
 
-fn load_models(args: &ServeArgs) -> anyhow::Result<ModelRegistry> {
+fn validate_scheduling(args: &ServeArgs) -> anyhow::Result<()> {
     anyhow::ensure!(!args.cooperative_prefill || (args.replicas == 1 && args.max_queued_per_model <= 62),
         "cooperative prefill requires one context and at most 62 queued requests (64 native cache handles)");
     anyhow::ensure!(
@@ -172,6 +196,11 @@ fn load_models(args: &ServeArgs) -> anyhow::Result<ModelRegistry> {
             || args.persistent_prefix_bytes >= usize::from(args.replicas),
         "persistent prefix budget must provide at least one byte per replica"
     );
+    Ok(())
+}
+
+fn load_models(args: &ServeArgs) -> anyhow::Result<ModelRegistry> {
+    validate_scheduling(args)?;
     let mut registry = ModelRegistry::new();
     #[cfg(feature = "qualification")]
     let mut records = RecordBindings::load(&args.qualification_record)?;
@@ -552,6 +581,13 @@ fn qualify_optimizations(registry: &ModelRegistry, args: &ServeArgs) -> anyhow::
 }
 
 pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
+    #[cfg(feature = "qualification")]
+    let registry = if args.lazy {
+        residency::load_lazy(&args)?
+    } else {
+        load_models(&args)?
+    };
+    #[cfg(not(feature = "qualification"))]
     let registry = load_models(&args)?;
     let config = ServerConfig {
         bind: args.bind.clone(),
@@ -572,6 +608,15 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
     };
 
     let state = AppState::new(config, registry, Metrics::new());
+    #[cfg(feature = "qualification")]
+    if args.lazy {
+        for name in &args.preload {
+            state
+                .resolve_model(name)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("unknown preload model `{name}`"))?;
+        }
+    }
     tracing::info!("huncho starting (bind={}, mock={})", args.bind, args.mock,);
 
     huncho_api::serve(Arc::new(state)).await?;

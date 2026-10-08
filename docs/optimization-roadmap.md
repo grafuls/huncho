@@ -33,7 +33,7 @@ also show drift. Packed CPU fitting/held-out evaluation is still running.
 | O19 retained/paged prefixes | Bounded immutable CPU snapshots available | Paging, branch collation and tenant policies |
 | O20 Metal | Skipped by user | Apple work deferred |
 | O21 llama.cpp | CPU F2/F3, full-state forks/chunks, bounded native batches and pending FP32/FP16/Q8/Q4 exports available | Released fitting/qualification and graph-side readout efficiency |
-| O22 shared bases/residency | Immutable CPU bases shared across isolated merges | Lazy resident loading/eviction and runtime LoRA dispatch |
+| O22 shared bases/residency | Immutable CPU bases and bounded CPU lazy loading/preload/idle eviction available | Released residency measurements and runtime LoRA dispatch |
 | O23 vLLM custom readouts | Open | Actual no-decode family implementation and qualification |
 | O24 distributed/sharded inference | Open | Implementation; actual multi-GPU qualification deferred |
 | O25 prefill scheduling | Resumable CPU prefix/question scheduling available | Released labeled qualification and latency; tensor/device scheduling open |
@@ -41,6 +41,36 @@ also show drift. Packed CPU fitting/held-out evaluation is still running.
 | O27 browser WASM/WebGPU | Open | Separate actual browser runtime, packaging and gates |
 
 ## Implemented increments
+
+### Bounded qualified CPU lazy residency
+
+O22 now has actual opt-in cold loading, preloading and idle/capacity eviction,
+under the optional `qualification` CLI feature. Explicit CPU/backend/dtype
+selection avoids hardware probes and hidden precision changes. Registration
+pins all model inputs and complete labeled suites without materializing weights.
+Every cold load performs fresh existing native/optimized/replica conformance
+and receipt verification before publishing engines, with input/environment
+rechecks around loading. Failed/substituted/panicking loaders stay unavailable
+until restart. No temperature, golden threshold or default loading changes.
+
+A count bound covers loading/resident groups, including replicas. Concurrent
+cold callers share one worker under a bounded wait queue; cancellation leaves
+its reservation intact. LRU/idle eviction requires no model/pool/engine owners
+or admission permits. Native destructors run outside the registry mutex; idle
+batch workers hold weak references. Health/listing/metrics do not load weights.
+Cold gates cost latency; model size, temporary allocations and shared-base cache
+residency remain additional to the group count. This is not a measured RSS claim
+or runtime multi-LoRA dispatch.
+
+API fixtures exercise canceled/shared loads, full queues, busy slots, external
+engine references, retry refusal, authentication/validation, and idle batching
+workers. Native CPU Clef tests use unchanged upstream vectors through actual
+cold loads/reloads; incomplete labels, drifted goldens and changed pinned files
+fail closed. Their synthetic labels establish test plumbing only, without
+released-model or GPU/Apple acceptance.
+Default and `clef,qualification` CPU workspace tests pass. The final native
+cold-load process checks also pass after runtime pinning changes. Eager loading
+remains the default, and no source temperatures/goldens were changed.
 
 ### Bounded CPU attention query workspace
 

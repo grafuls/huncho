@@ -443,8 +443,8 @@ huncho bench --questions 5 --iterations 200 --long-state
 ## Model cache (OPS-04)
 
 `--cache-dir` seeds the Hugging Face cache directory when resolving `--model`
-refs (defaults to `HF_HUB_CACHE`). Models are loaded lazily; a preload flag and
-idle eviction are planned.
+refs (defaults to `HF_HUB_CACHE`). Serving eagerly loads by default. Optional
+CPU lazy loading, preloading and idle residency eviction are described below.
 
 ## Container (OPS-02)
 
@@ -884,3 +884,44 @@ conformance is required before serving. `scripts/qualify_kev_runtime.py
 --attention-query-rows 64 --device cpu ...` records the same explicit profile
 and rejects substituted sizes/metadata. Existing prefix/batch gates still apply
 when those modes are enabled. No temperature or golden threshold is changed.
+
+
+## Optional CPU lazy residency
+
+A `qualification` build can use `huncho serve --lazy` with an explicit real
+`--backend`, explicit `--dtype`, `HUNCHO_DEVICE=cpu` and a complete observed-label
+`--qualification-golden MODEL=PATH` for every registered model. CPU ONNX requires
+its CPU execution provider. Manifest/Hub resolution, artifact hashing and suite
+validation happen before listening; weights load on first authenticated, valid
+inference. `--preload MODEL` performs the same cold-load gates before listening.
+Preload names must be unique and fit the configured slots.
+
+`--resident-models 1..64` (default 1) bounds resident/loading lazy model groups,
+including all replicas in each group. Cold loads for one model share a worker,
+with at most `max_queued_per_model + replicas` waiting callers. Canceling HTTP
+waiters releases their waiting capacity but retains the worker's model slot
+until loading/qualification finishes. If every slot is busy/loading, new cold
+requests return 503. Capacity pressure evicts the least recently accessed idle
+group. `--idle-evict-secs` (default 300) also evicts groups after that interval
+since last access, provided no caller, preparation/execution job, admission
+permit or external engine reference owns them. Idle batch workers hold weak
+context references. Eager registrations are separate from the lazy slot bound.
+
+Each actual cold load rechecks the pinned manifest, tokenizer, backbone,
+adapter/head artifacts, executable, golden/receipt files, explicit runtime
+library files and execution environment before/after loading and fresh complete
+conformance. Prefix/readout/batch/cooperative and every replica's existing gates
+also apply. A previous pass or retained receipt never replaces fresh outcomes.
+Substituted engines/devices and failed/panicking factories remain unavailable;
+restart after correcting a failed package. `/v1/models` lists `cold`, `loading`,
+`resident` or `failed` for lazy registrations; listing/health never load weights.
+
+The limit counts model groups, not estimated bytes or peak RSS. Model size,
+replica contexts, temporary loading/qualification allocations and any separately
+bounded immutable base cache still matter; eviction does not flush a configured
+shared-base cache or guarantee an immediate allocator RSS decrease. Cold gates
+can dominate first-use latency and their inference work is separate from normal
+serving request counters. CPU frozen Clef fixtures cover real cold reloads and
+failures; synthetic fixture labels test gate plumbing, not released calibration.
+Runtime LoRA dispatch, released residency/RSS benchmarks and GPU residency remain
+open. Apple work and actual GPU checks remain deferred by the user's scope.

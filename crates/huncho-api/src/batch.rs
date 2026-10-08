@@ -1,7 +1,7 @@
 //! Bounded cross-request collation. The worker owns physical-work permits;
 //! queued cancellation never abandons another caller's batch.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use huncho_core::engine::{EvalStats, PreparedEvaluation};
@@ -62,7 +62,7 @@ impl BatchQueue {
             // model handle closes the queue and releases the engine after drain.
             tokio::spawn(run(
                 receiver,
-                pool,
+                Arc::downgrade(&pool),
                 metrics,
                 self.max_requests,
                 self.wait,
@@ -81,7 +81,7 @@ impl BatchQueue {
 
 async fn run(
     mut receiver: mpsc::Receiver<Pending>,
-    pool: Arc<ReplicaPool>,
+    pool: Weak<ReplicaPool>,
     metrics: Arc<Metrics>,
     max_requests: usize,
     wait: Duration,
@@ -116,6 +116,9 @@ async fn run(
         if group.is_empty() {
             continue;
         }
+        let Some(pool) = pool.upgrade() else {
+            break;
+        };
         let Ok(backend) = pool.acquire().await else {
             break;
         };
