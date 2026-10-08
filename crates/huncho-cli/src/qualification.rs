@@ -284,6 +284,7 @@ impl ExecutionIdentity {
             "HUNCHO_CPU_FUSED_GATE",
             "HUNCHO_CPU_BLAS_LIBRARY",
             "HUNCHO_CPU_BLAS_THREADS",
+            "HUNCHO_LAYA_SELECTED_HEAD",
             "HUNCHO_COOPERATIVE_PREFILL",
             "HUNCHO_PREFILL_CHUNK_TOKENS",
             "ORT_DYLIB_PATH",

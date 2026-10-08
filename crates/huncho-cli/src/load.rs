@@ -273,6 +273,15 @@ fn load_backend(
     dtype: &str,
     dir: &Path,
 ) -> Result<Box<dyn Backend>> {
+    if bool_env("HUNCHO_LAYA_SELECTED_HEAD")?
+        && (!cfg!(feature = "candle")
+            || backend_id != BackendId::Candle
+            || manifest.family != Family::F1)
+    {
+        return Err(Error::Unsupported(
+            "selected Laya head requires a candle build and a native F1 Laya package".into(),
+        ));
+    }
     if std::env::var_os("HUNCHO_CPU_BLAS_LIBRARY").is_some()
         || std::env::var_os("HUNCHO_CPU_BLAS_THREADS").is_some()
     {
@@ -461,7 +470,8 @@ fn load_candle(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<
         dtype.to_string(),
         huncho_backend::device::opt_in_device_from_env()?,
     )
-    .map_err(|e| Error::Package(format!("failed to load candle backend: {e}")))?;
+    .map_err(|e| Error::Package(format!("failed to load candle backend: {e}")))?
+    .with_selected_laya_head(bool_env("HUNCHO_LAYA_SELECTED_HEAD")?)?;
     Ok(Box::new(backend) as Box<dyn Backend>)
 }
 
@@ -495,7 +505,6 @@ fn fp32_attention_from_env() -> Result<bool> {
     bool_env("HUNCHO_ATTENTION_FP32")
 }
 
-#[cfg(any(feature = "candle", feature = "onnx"))]
 fn bool_env(name: &str) -> Result<bool> {
     match std::env::var(name) {
         Ok(value) if matches!(value.as_str(), "1" | "true") => Ok(true),

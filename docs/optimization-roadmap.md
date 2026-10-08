@@ -24,7 +24,7 @@ also show drift. Packed CPU fitting/held-out evaluation is still running.
 | O10 precision/calibration gates | Every real serving runtime requires fresh labeled conformance | Released CPU acceptance remains rejected/pending; no GPU checks |
 | O11 native Kev prefix forks | Available | Released CPU paired/labeled acceptance |
 | O12 dynamic batching | Equal-length question/request collation available | Mixed lengths, masks and cached-branch batching |
-| O13 F5 head/pooling | CPU vectorized heads and grouped spans available | Released Clef labeled qualification |
+| O13 family head work | CPU Clef vectorized heads/grouped spans and optional Laya final marker queries available | Released Clef/Laya labeled qualification |
 | O14 concurrent execution contexts | CPU shared-weight replicas, including optional ONNX initializers, available | Released concurrent workloads, memory and affinity measurements |
 | O15 device buffers/graph replay | Open | CUDA implementation and later device qualification |
 | O16 Candle device propagation | Optional CUDA loaders available | Actual GPU checks deferred |
@@ -41,6 +41,38 @@ also show drift. Packed CPU fitting/held-out evaluation is still running.
 | O27 browser WASM/WebGPU | Open | Separate actual browser runtime, packaging and gates |
 
 ## Implemented increments
+
+### Laya final-layer marker queries
+
+The F1 head now has a default-disabled CPU profile,
+`HUNCHO_LAYA_SELECTED_HEAD=1`. It keeps full backbone/earlier head layers and
+the same final Q/K/V projection, gathers only final query/residual rows, and
+applies final attention output and FFN to those rows before the existing trained
+scorer. All full-sequence keys/values, typed embeddings, temperatures and ordered
+markers remain. Final-layer attention storage becomes O(markers × sequence)
+instead of O(sequence²); earlier layers/backbone are unaffected. Extra gather
+cost can outweigh savings for short sequences or many markers.
+
+Nonzero typed fixtures exercise all three types, one/many/all/repeated/reversed
+markers, multiple attention heads, native batches and replicas at unchanged
+1e-4 calibrated paired tolerance. A counterexample test proves that dropping
+nonmarker keys would change outputs. Bare encoders/other runtimes and invalid
+flags are rejected. Metadata and retained runtime identities bind the profile,
+and every real serving runtime still requires fresh complete labeled gates.
+No trained head is substituted and no source temperature is refitted here.
+The CPU-only `laya_profile` example records full-package paired outputs and
+alternating timings on synthetic requests, always as unqualified evidence.
+
+The cached released checkpoint at revision `55cf4c4...` passes that six-question
+CPU paired diagnostic: maximum probability delta 2.9802322e-8, raw delta
+2.3841858e-7 and complete argmax agreement at unchanged package temperatures.
+Four alternating warm pairs average 9.221 s baseline and 9.125 s selected for
+two three-question requests. Timings overlap, so no reliable speedup is claimed.
+This has no independent external golden or observed outcomes and grants no
+serving acceptance. [Full outputs, timings and identities](verification/laya-selected-cpu-20261008/summary.json)
+retain the source, binary, model/tokenizer/config hashes and scope. Default and
+`clef,qualification` workspace checks plus CLI flag guards pass; no GPU check
+was executed.
 
 ### Qualification runner profile coverage
 

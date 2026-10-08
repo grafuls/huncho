@@ -170,6 +170,33 @@ At load time it:
   and `scorer.*` tensors when present. Bare encoders return selected hidden
   states with `index_select`.
 
+`HUNCHO_LAYA_SELECTED_HEAD=1` opts into a CPU-only final-head-layer profile.
+Earlier head layers still process every token. The final layer projects full
+Q/K/V, then computes only requested marker queries, their attention output,
+residual and position-wise FFN; every context token remains a key and value.
+The trained scorer, question-type embeddings, marker order and temperatures
+are unchanged. It reduces final-layer attention storage from heads × sequence²
+to heads × markers × sequence, and the last output/FFN rows to marker count.
+Backbone and earlier head costs remain. Duplicate/out-of-order markers and
+equal-length native batches retain their semantics.
+
+The flag defaults off, requires a loaded trained Laya head, and must be set
+before replicas. Bare encoders and other families/runtimes are rejected.
+`laya_head_execution=marker-queries-last-layer-v1` and the environment setting
+are bound into qualification records. Changed matrix shapes can change
+reduction arithmetic; fresh complete labeled serving conformance is required.
+The synthetic typed fixture establishes numerical integration, not released
+Laya calibration. `laya_profile` is a CPU-only paired diagnostic with real
+tokenization and the package's existing temperatures; its report is always
+unqualified because it has neither external goldens nor observed outcomes:
+
+```sh
+cargo build --release -p huncho-cli --example laya_profile \
+  --features candle,tokenizers,qualification
+RAYON_NUM_THREADS=4 CANDLE_NUM_THREADS=4 target/release/examples/laya_profile \
+  /path/to/local-laya-package /path/to/new-paired-report.json
+```
+
 ModernBERT and F3 Qwen retain CPU defaults, including `HUNCHO_DEVICE=auto`.
 `HUNCHO_DEVICE=cuda` or `cuda:N` explicitly selects their newly wired CUDA
 paths in a `cuda` build; unavailable devices fail instead of falling back.

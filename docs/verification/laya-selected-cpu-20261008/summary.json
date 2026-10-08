@@ -1,0 +1,22 @@
+{
+  "qualified": false,
+  "reason": "CPU paired diagnostic on synthetic unlabeled requests; no independent external reference or observed outcomes",
+  "checkpoint_revision": "55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851",
+  "source_base_commit": "829534c",
+  "source_overlay_sha256": {
+    "crates/huncho-backend/src/candle.rs": "a7410e8953f1c83bdb5bf17c60bb5b843c55aa6f6a675732c842244b5e951208",
+    "crates/huncho-cli/examples/laya_profile.rs": "637558d6397cf169261179a9445a2eac5c5b51816c485b58bfcbb6be38410f05",
+    "crates/huncho-cli/Cargo.toml": "7787e0366737023389fd1325616a9731cf99f4b440fced3a91622c28a0c7e3e3"
+  },
+  "paired_report_sha256": "8bbb5a81016825726fec188c443a7c148c9f9e2aeccf588cd4372d1c05dfa3a8",
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Fedora 1.97.1-1.fc44)",
+  "build": "cargo build --offline --release -p huncho-cli --example laya_profile --features clef,qualification",
+  "command": "RAYON_NUM_THREADS=4 CANDLE_NUM_THREADS=4 target/release/examples/laya_profile LOCAL_PINNED_LAYA NEW_REPORT.json",
+  "mean_seconds_by_selected": {
+    "False": 9.2206349165,
+    "True": 9.124946719499999
+  },
+  "baseline_over_selected_mean": 1.010486438983311,
+  "performance_claim": "No reliable speedup: overlapping four warm timing pairs, shared local CPU and no frequency isolation",
+  "validation": "Full workspace clef+qualification, native typed fixtures, multihead key-truncation counterexample and CLI option guards passed; GPU/Apple not executed"
+}

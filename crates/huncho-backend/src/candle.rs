@@ -3,8 +3,8 @@
 //! Loads a Hugging Face `safetensors` ModernBERT (the family behind
 //! `convaiinnovations/laya`) directly with [`candle_core`], so an F1 model can
 //! be served without an ONNX export or a Python/`optimum` toolchain. The
-//! backend runs the encoder and returns hidden states (`ForwardOutput::Features`)
-//! at the requested token positions, which the F1 head scores.
+//! backend runs the encoder and either the trained typed Laya candidate head
+//! (`ForwardOutput::Logits`) or selected bare-encoder hidden states.
 //!
 //! Enabled with the `candle` cargo feature.
 //!
@@ -12,8 +12,9 @@
 //! * Weights may use either an `encoder.` prefix (as `convaiinnovations/laya`
 //!   does) or a `model.` prefix (standard HF ModernBERT); `encoder.` is remapped
 //!   to `model.` at load time so [`candle_transformers::models::modernbert`]
-//!   finds them. Non-encoder tensors (e.g. `act_head.*`, `temperature`) are
-//!   ignored.
+//!   finds them. `head.*`, `type_emb.*` and `scorer.*` are retained. The separate
+//!   auxiliary action head (`act_head.*`) is outside the candidate contract;
+//!   `temperature` is applied by core calibration.
 //! * Weights may be `f16`/`bf16`; they are converted to `f32` for CPU inference.
 //! * `config.json` may use the flat `global_rope_theta`/`local_rope_theta`
 //!   fields or the newer transformers-5.0 `rope_parameters` object, which is
@@ -49,6 +50,7 @@ pub enum CandleError {
 pub struct CandleBackend {
     model: Arc<ModernBert>,
     head: Option<Arc<LayaHead>>,
+    selected_laya_head: bool,
     hidden_size: usize,
     vocab_size: usize,
     max_context: usize,
@@ -103,6 +105,7 @@ impl CandleBackend {
         Ok(CandleBackend {
             model: Arc::new(model),
             head: head.map(Arc::new),
+            selected_laya_head: false,
             hidden_size,
             vocab_size: config.vocab_size,
             max_context,
@@ -116,6 +119,24 @@ impl CandleBackend {
     /// The hidden size reported by the loaded model.
     pub fn hidden_size(&self) -> usize {
         self.hidden_size
+    }
+
+    /// Compute only marker queries/output rows in the final Laya head layer.
+    /// All earlier layers and final-layer keys/values retain the full sequence.
+    /// Changed GEMM shapes need fresh labeled qualification; default is false.
+    pub fn with_selected_laya_head(mut self, enabled: bool) -> Result<Self> {
+        if enabled && (!self.device.is_cpu() || self.head.is_none()) {
+            return Err(Error::Unsupported(
+                "selected Laya head requires a trained Laya head on CPU".into(),
+            ));
+        }
+        if enabled != self.selected_laya_head && Arc::strong_count(&self.model) != 1 {
+            return Err(Error::Unsupported(
+                "configure selected Laya head before creating replicas".into(),
+            ));
+        }
+        self.selected_laya_head = enabled;
+        Ok(self)
     }
 }
 
@@ -191,8 +212,8 @@ fn config_from_value(v: &serde_json::Value, path: &Path) -> Result<Config> {
 /// * Laya decision-head keys (`head.*`, `type_emb.*`, `scorer.*`) are kept
 ///   as-is so the backend can run the full typed option-marker head.
 /// * Anything else (e.g. `act_head.*`, `temperature`) is dropped — `temperature`
-///   is applied by huncho-core calibration, and `act_head` carries no useful
-///   signal.
+///   is applied by huncho-core calibration. `act_head` predicts auxiliary
+///   actions rather than the candidate probabilities in this wire contract.
 fn remap_key(name: &str) -> Option<String> {
     if let Some(rest) = name.strip_prefix("encoder.") {
         Some(format!("model.{rest}"))
@@ -233,6 +254,7 @@ impl Backend for CandleBackend {
         Ok(Box::new(Self {
             model: self.model.clone(),
             head: self.head.clone(),
+            selected_laya_head: self.selected_laya_head,
             hidden_size: self.hidden_size,
             vocab_size: self.vocab_size,
             max_context: self.max_context,
@@ -253,6 +275,12 @@ impl Backend for CandleBackend {
             ("native_execution".into(), "candle-modernbert-v1".into()),
         ]);
         crate::cpu_profile::record(&mut extra);
+        if self.selected_laya_head {
+            extra.insert(
+                "laya_head_execution".into(),
+                "marker-queries-last-layer-v1".into(),
+            );
+        }
         if self.device.is_cuda() {
             extra.insert("device_path".into(), "modernbert-cuda".into());
         }
@@ -366,11 +394,16 @@ impl CandleBackend {
             });
         }
 
-        // Laya decision-head path: run the typed option-marker head over the full
-        // sequence and read per-option logits at the mask positions.
+        // Typed Laya head. Optional final-layer query selection retains full
+        // keys/values; it does not truncate context or alter candidate order.
         if let Some(head) = &self.head {
             let logits = head
-                .forward(hidden_tensor, input.qtype, &input.positions)
+                .forward(
+                    hidden_tensor,
+                    input.qtype,
+                    &input.positions,
+                    self.selected_laya_head,
+                )
                 .map_err(|e| Error::Backend(CandleError::Inference(e.to_string()).to_string()))?;
             let values = core_from_tensor(&logits)?;
             return Ok(ForwardOutput::Logits {
@@ -421,6 +454,10 @@ struct LayaLayer {
 
 impl LayaLayer {
     fn forward(&self, x: &Tensor) -> candle::Result<Tensor> {
+        self.forward_queries(x, None)
+    }
+
+    fn forward_queries(&self, x: &Tensor, positions: Option<&Tensor>) -> candle::Result<Tensor> {
         let d_model = self.qkv_w.dims()[0] / 3;
         let batch = x.dims()[0];
         let seq = x.dims()[1];
@@ -435,8 +472,16 @@ impl LayaLayer {
         let k = qkv.narrow(2, d_model, d_model)?;
         let v = qkv.narrow(2, 2 * d_model, d_model)?;
 
+        // Keep the full projection (and all K/V rows) identical to the reference.
+        // Only final-layer queries and their pointwise residual/FFN are omitted.
+        let (q, residual) = match positions {
+            Some(pos) => (q.contiguous()?.index_select(pos, 1)?, x.index_select(pos, 1)?),
+            None => (q, x.clone()),
+        };
+        let query_len = q.dim(1)?;
+
         let q = q
-            .reshape((batch, seq, self.nhead, self.head_dim))?
+            .reshape((batch, query_len, self.nhead, self.head_dim))?
             .transpose(1, 2)?;
         let k = k
             .reshape((batch, seq, self.nhead, self.head_dim))?
@@ -450,11 +495,11 @@ impl LayaLayer {
         let attn = attn.affine(scale, 0.0)?;
         let attn = candle_nn::ops::softmax(&attn, 3)?;
         let out = attn.matmul(&v)?;
-        let out = out.transpose(1, 2)?.reshape((batch, seq, d_model))?;
+        let out = out.transpose(1, 2)?.reshape((batch, query_len, d_model))?;
         let out = out
             .broadcast_matmul(&self.out_w.t()?)?
             .broadcast_add(&self.out_b)?;
-        let x = x.broadcast_add(&out)?;
+        let x = residual.broadcast_add(&out)?;
 
         // Position-wise FFN with ReLU.
         let xn2 = candle_nn::ops::layer_norm(&x, &self.norm2_w, &self.norm2_b, eps)?;
@@ -542,16 +587,30 @@ impl LayaHead {
         }))
     }
 
-    fn forward(&self, h: &Tensor, qtype: u32, positions: &[usize]) -> candle::Result<Tensor> {
+    fn forward(
+        &self,
+        h: &Tensor,
+        qtype: u32,
+        positions: &[usize],
+        selected_last: bool,
+    ) -> candle::Result<Tensor> {
         let qrow = self.type_emb.narrow(0, qtype as usize, 1)?.unsqueeze(0)?; // [1, 1, d]
         let mut z = h.broadcast_add(&qrow)?;
-        for layer in &self.layers {
-            z = layer.forward(&z)?;
-        }
-
         let pos: Vec<u32> = positions.iter().map(|&p| p as u32).collect();
         let pos_t = Tensor::new(pos.as_slice(), h.device())?;
-        let m = z.index_select(&pos_t, 1)?.squeeze(0)?; // [n, d]
+        for (i, layer) in self.layers.iter().enumerate() {
+            z = if selected_last && i + 1 == self.layers.len() {
+                layer.forward_queries(&z, Some(&pos_t))?
+            } else {
+                layer.forward(&z)?
+            };
+        }
+        let m = if selected_last {
+            z
+        } else {
+            z.index_select(&pos_t, 1)?
+        }
+        .squeeze(0)?; // [n, d]
 
         let y = candle_nn::ops::layer_norm(&m, &self.scorer_ln_w, &self.scorer_ln_b, 1e-5f32)?;
         let y = y
@@ -585,6 +644,61 @@ fn core_from_tensor(t: &Tensor) -> Result<CoreTensor> {
 
 #[cfg(test)]
 mod tests {
+    #[allow(dead_code)]
+    mod laya_fixture {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/support/laya.rs"
+        ));
+    }
+
+    #[test]
+    fn selected_final_layer_keeps_all_keys_and_values_in_multihead_attention() {
+        let head = LayaHead::from_tensors(&laya_fixture::head_tensors(128, 2), 128)
+            .unwrap()
+            .unwrap();
+        let h = Tensor::from_vec(
+            (0..33 * 128)
+                .map(|i| ((i * 17 % 239) as f32 - 119.) / 128.)
+                .collect::<Vec<_>>(),
+            (1, 33, 128),
+            &Device::Cpu,
+        )
+        .unwrap();
+        for qtype in 0..3 {
+            for positions in [vec![32, 0, 9, 0], (0..33).rev().collect()] {
+                let full = head
+                    .forward(&h, qtype, &positions, false)
+                    .unwrap()
+                    .flatten_all()
+                    .unwrap()
+                    .to_vec1::<f32>()
+                    .unwrap();
+                let selected = head
+                    .forward(&h, qtype, &positions, true)
+                    .unwrap()
+                    .flatten_all()
+                    .unwrap()
+                    .to_vec1::<f32>()
+                    .unwrap();
+                assert!(full.iter().zip(selected).all(|(a, b)| (a - b).abs() < 1e-5));
+            }
+        }
+        let last = &head.layers[1];
+        let pos = Tensor::new(&[32u32, 0, 9, 0], &Device::Cpu).unwrap();
+        let selected = last.forward_queries(&h, Some(&pos)).unwrap();
+        let full = last.forward(&h).unwrap().index_select(&pos, 1).unwrap();
+        let trunc = last.forward(&h.index_select(&pos, 1).unwrap()).unwrap();
+        let a = selected.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let b = full.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let wrong = trunc.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        assert!(a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-5));
+        assert!(
+            a.iter().zip(wrong).any(|(a, b)| (a - b).abs() > 1e-3),
+            "fixture must detect the invalid key-truncation shortcut"
+        );
+    }
+
     #[test]
     fn cpu_replica_reuses_the_loaded_modernbert_storage() {
         let root = Path::new("tests/fixtures/tiny_modernbert");

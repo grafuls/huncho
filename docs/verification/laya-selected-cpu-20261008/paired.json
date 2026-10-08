@@ -1,0 +1,410 @@
+{
+  "qualified": false,
+  "basis": "paired CPU diagnostic, synthetic unlabeled inputs; no independent external golden or outcome calibration",
+  "model_files": {
+    "/home/grafuls/.cache/huggingface/hub/models--convaiinnovations--laya/snapshots/55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851/config.json": "bf3ab80598fdccf414855a2ce80f22859e4492d06ca8a62ddd1cfb63972f8979",
+    "/home/grafuls/.cache/huggingface/hub/models--convaiinnovations--laya/snapshots/55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851/huncho-model.json": "89d1aa052800e3fd73ac7913344daa7793415e8e14e5d6a1e2e257f1e899c0d4",
+    "/home/grafuls/.cache/huggingface/hub/models--convaiinnovations--laya/snapshots/55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851/model.safetensors": "891102d372688fc2a094dac56a384bc537b87c63f21f9f3dac0be2b7cbc8d86c",
+    "/home/grafuls/.cache/huggingface/hub/models--convaiinnovations--laya/snapshots/55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851/tokenizer/tokenizer.json": "6c8aaa9a542084f2457eab775d4eeb51f92a70c0fd9de28d5edb0ddec3c08d30"
+  },
+  "binary_sha256": "a5b7590dbd0a45d0f730f87eda1fffbe1094e72eb2bde836506b086577fa2d65",
+  "source_sha256": {
+    "example": "637558d6397cf169261179a9445a2eac5c5b51816c485b58bfcbb6be38410f05",
+    "backend": "a7410e8953f1c83bdb5bf17c60bb5b843c55aa6f6a675732c842244b5e951208"
+  },
+  "baseline_profile": {
+    "native_execution": "candle-modernbert-v1"
+  },
+  "selected_profile": {
+    "laya_head_execution": "marker-queries-last-layer-v1",
+    "native_execution": "candle-modernbert-v1"
+  },
+  "threads": {
+    "RAYON_NUM_THREADS": "4",
+    "CANDLE_NUM_THREADS": "4"
+  },
+  "max_probability_delta": 2.9802322387695312e-8,
+  "max_raw_delta": 2.384185791015625e-7,
+  "argmax_agreement": 1.0,
+  "paired_passed": true,
+  "cases": [
+    {
+      "request": {
+        "state": "The service responds correctly and meets its deadline.",
+        "model": "laya",
+        "questions": {
+          "choice": {
+            "type": "choice",
+            "instructions": "Choose the next action.",
+            "criteria": {
+              "accept": "Accept the result",
+              "review": "Ask for review",
+              "retry": "Retry the operation"
+            }
+          },
+          "score": {
+            "type": "score",
+            "instructions": "Rate the quality.",
+            "criteria": [
+              "poor",
+              "fair",
+              "good",
+              "excellent"
+            ]
+          },
+          "noul": {
+            "type": "noul",
+            "instructions": "Is the service ready?",
+            "criteria": null
+          }
+        }
+      },
+      "baseline": {
+        "model": "laya",
+        "answers": {
+          "choice": {
+            "type": "choice",
+            "choice": "accept",
+            "probabilities": {
+              "accept": 0.8095940351486206,
+              "retry": 0.08926370739936829,
+              "review": 0.10114223510026932
+            },
+            "confidence": 0.4370902180671692
+          },
+          "noul": {
+            "type": "noul",
+            "noul": 0.48151087760925293
+          },
+          "score": {
+            "type": "score",
+            "probabilities": {
+              "0": 0.00931977666914463,
+              "1": 0.236577108502388,
+              "2": 0.40935182571411133,
+              "3": 0.3447512984275818
+            },
+            "score": 2.0895347595214844,
+            "legend": {
+              "0": "poor",
+              "1": "fair",
+              "2": "good",
+              "3": "excellent"
+            },
+            "confidence": 0.19399601221084595
+          }
+        },
+        "usage": {
+          "input_tokens": 120,
+          "output_tokens": 0
+        },
+        "extensions": {
+          "backend": "candle",
+          "dtype": "fp32",
+          "calibration_status": "fit",
+          "confidence_definition": "entropy",
+          "prompt_contract_hash": "cdcf0c22349b70a6",
+          "raw_logits": {
+            "choice": [
+              2.906952381134033,
+              -0.7541723847389221,
+              -0.9740729928016663
+            ],
+            "noul": [
+              0.48612940311431885,
+              0.33937713503837585
+            ],
+            "score": [
+              -2.436878204345703,
+              1.6104166507720947,
+              2.296576738357544,
+              2.081641435623169
+            ]
+          }
+        }
+      },
+      "selected": {
+        "model": "laya",
+        "answers": {
+          "choice": {
+            "type": "choice",
+            "choice": "accept",
+            "probabilities": {
+              "accept": 0.8095940351486206,
+              "retry": 0.08926370739936829,
+              "review": 0.10114223510026932
+            },
+            "confidence": 0.4370902180671692
+          },
+          "noul": {
+            "type": "noul",
+            "noul": 0.48151084780693054
+          },
+          "score": {
+            "type": "score",
+            "probabilities": {
+              "0": 0.009319775737822056,
+              "1": 0.2365770936012268,
+              "2": 0.40935179591178894,
+              "3": 0.3447513282299042
+            },
+            "score": 2.0895347595214844,
+            "legend": {
+              "0": "poor",
+              "1": "fair",
+              "2": "good",
+              "3": "excellent"
+            },
+            "confidence": 0.19399601221084595
+          }
+        },
+        "usage": {
+          "input_tokens": 120,
+          "output_tokens": 0
+        },
+        "extensions": {
+          "backend": "candle",
+          "dtype": "fp32",
+          "calibration_status": "fit",
+          "confidence_definition": "entropy",
+          "prompt_contract_hash": "cdcf0c22349b70a6",
+          "raw_logits": {
+            "choice": [
+              2.906952381134033,
+              -0.7541723847389221,
+              -0.974073052406311
+            ],
+            "noul": [
+              0.4861295223236084,
+              0.33937713503837585
+            ],
+            "score": [
+              -2.436878204345703,
+              1.6104166507720947,
+              2.296576738357544,
+              2.081641674041748
+            ]
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "state": "The service responds correctly and meets its deadline. Sometimes a retry occurs and the operator reviews the result. The service responds correctly and meets its deadline. Sometimes a retry occurs and the operator reviews the result. The service responds correctly and meets its deadline. Sometimes a retry occurs and the operator reviews the result. The service responds correctly and meets its deadline. Sometimes a retry occurs and the operator reviews the result. The service responds correctly and meets its deadline. Sometimes a retry occurs and the operator reviews the result. The service responds correctly and meets its deadline. Sometimes a retry occurs and the operator reviews the result. The service responds correctly and meets its deadline. Sometimes a retry occurs and the operator reviews the result. The service responds correctly and meets its deadline. Sometimes a retry occurs and the operator reviews the result. The service responds correctly and meets its deadline. Sometimes a retry occurs and the operator reviews the result. The service responds correctly and meets its deadline. Sometimes a retry occurs and the operator reviews the result. The service responds correctly and meets its deadline. Sometimes a retry occurs and the operator reviews the result. The service responds correctly and meets its deadline. Sometimes a retry occurs and the operator reviews the result. The service responds correctly and meets its deadline. Sometimes a retry occurs and the operator reviews the result. The service responds correctly and meets its deadline. Sometimes a retry occurs and the operator reviews the result. The service responds correctly and meets its deadline. Sometimes a retry occurs and the operator reviews the result. The service responds correctly and meets its deadline. Sometimes a retry occurs and the operator reviews the result. The service responds correctly and meets its deadline. Sometimes a retry occurs and the operator reviews the result. The service responds correctly and meets its deadline. Sometimes a retry occurs and the operator reviews the result. The service responds correctly and meets its deadline. Sometimes a retry occurs and the operator reviews the result. The service responds correctly and meets its deadline. Sometimes a retry occurs and the operator reviews the result. The service responds correctly and meets its deadline. Sometimes a retry occurs and the operator reviews the result. The service responds correctly and meets its deadline. Sometimes a retry occurs and the operator reviews the result. The service responds correctly and meets its deadline. Sometimes a retry occurs and the operator reviews the result. The service responds correctly and meets its deadline. Sometimes a retry occurs and the operator reviews the result. The service responds correctly and meets its deadline. Sometimes a retry occurs and the operator reviews the result. The service responds correctly and meets its deadline. Sometimes a retry occurs and the operator reviews the result. The service responds correctly and meets its deadline. Sometimes a retry occurs and the operator reviews the result. The service responds correctly and meets its deadline. Sometimes a retry occurs and the operator reviews the result. The service responds correctly and meets its deadline. Sometimes a retry occurs and the operator reviews the result. The service responds correctly and meets its deadline. Sometimes a retry occurs and the operator reviews the result. The service responds correctly and meets its deadline. Sometimes a retry occurs and the operator reviews the result. The service responds correctly and meets its deadline. Sometimes a retry occurs and the operator reviews the result. ",
+        "model": "laya",
+        "questions": {
+          "choice": {
+            "type": "choice",
+            "instructions": "Choose the next action.",
+            "criteria": {
+              "accept": "Accept the result",
+              "review": "Ask for review",
+              "retry": "Retry the operation"
+            }
+          },
+          "score": {
+            "type": "score",
+            "instructions": "Rate the quality.",
+            "criteria": [
+              "poor",
+              "fair",
+              "good",
+              "excellent"
+            ]
+          },
+          "noul": {
+            "type": "noul",
+            "instructions": "Is the service ready?",
+            "criteria": null
+          }
+        }
+      },
+      "baseline": {
+        "model": "laya",
+        "answers": {
+          "choice": {
+            "type": "choice",
+            "choice": "accept",
+            "probabilities": {
+              "accept": 0.5481745004653931,
+              "retry": 0.27174144983291626,
+              "review": 0.18008404970169067
+            },
+            "confidence": 0.09675294160842896
+          },
+          "noul": {
+            "type": "noul",
+            "noul": 0.564041256904602
+          },
+          "score": {
+            "type": "score",
+            "probabilities": {
+              "0": 0.037824567407369614,
+              "1": 0.3977038860321045,
+              "2": 0.3181649446487427,
+              "3": 0.2463066130876541
+            },
+            "score": 1.7729536294937134,
+            "legend": {
+              "0": "poor",
+              "1": "fair",
+              "2": "good",
+              "3": "excellent"
+            },
+            "confidence": 0.13434910774230957
+          }
+        },
+        "usage": {
+          "input_tokens": 1536,
+          "output_tokens": 0
+        },
+        "extensions": {
+          "backend": "candle",
+          "dtype": "fp32",
+          "calibration_status": "fit",
+          "confidence_definition": "entropy",
+          "prompt_contract_hash": "cdcf0c22349b70a6",
+          "raw_logits": {
+            "choice": [
+              2.3304221630096436,
+              0.37107402086257935,
+              1.0952486991882324
+            ],
+            "noul": [
+              0.0826416015625,
+              0.5935251116752625
+            ],
+            "score": [
+              -0.7394311428070068,
+              2.204869508743286,
+              1.9256281852722168,
+              1.6052712202072144
+            ]
+          }
+        }
+      },
+      "selected": {
+        "model": "laya",
+        "answers": {
+          "choice": {
+            "type": "choice",
+            "choice": "accept",
+            "probabilities": {
+              "accept": 0.5481745004653931,
+              "retry": 0.27174144983291626,
+              "review": 0.18008404970169067
+            },
+            "confidence": 0.09675294160842896
+          },
+          "noul": {
+            "type": "noul",
+            "noul": 0.564041256904602
+          },
+          "score": {
+            "type": "score",
+            "probabilities": {
+              "0": 0.037824567407369614,
+              "1": 0.3977038860321045,
+              "2": 0.3181649446487427,
+              "3": 0.2463066130876541
+            },
+            "score": 1.7729536294937134,
+            "legend": {
+              "0": "poor",
+              "1": "fair",
+              "2": "good",
+              "3": "excellent"
+            },
+            "confidence": 0.13434910774230957
+          }
+        },
+        "usage": {
+          "input_tokens": 1536,
+          "output_tokens": 0
+        },
+        "extensions": {
+          "backend": "candle",
+          "dtype": "fp32",
+          "calibration_status": "fit",
+          "confidence_definition": "entropy",
+          "prompt_contract_hash": "cdcf0c22349b70a6",
+          "raw_logits": {
+            "choice": [
+              2.3304221630096436,
+              0.37107402086257935,
+              1.0952486991882324
+            ],
+            "noul": [
+              0.0826416015625,
+              0.5935251116752625
+            ],
+            "score": [
+              -0.7394311428070068,
+              2.204869508743286,
+              1.9256281852722168,
+              1.6052712202072144
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "timings": [
+    {
+      "repeat": 0,
+      "selected": true,
+      "seconds": 9.305995838,
+      "requests": 2,
+      "questions": 6
+    },
+    {
+      "repeat": 0,
+      "selected": false,
+      "seconds": 9.127768501,
+      "requests": 2,
+      "questions": 6
+    },
+    {
+      "repeat": 1,
+      "selected": false,
+      "seconds": 9.134152737,
+      "requests": 2,
+      "questions": 6
+    },
+    {
+      "repeat": 1,
+      "selected": true,
+      "seconds": 8.994231513999999,
+      "requests": 2,
+      "questions": 6
+    },
+    {
+      "repeat": 2,
+      "selected": true,
+      "seconds": 9.306497648,
+      "requests": 2,
+      "questions": 6
+    },
+    {
+      "repeat": 2,
+      "selected": false,
+      "seconds": 9.408397577,
+      "requests": 2,
+      "questions": 6
+    },
+    {
+      "repeat": 3,
+      "selected": false,
+      "seconds": 9.212220851,
+      "requests": 2,
+      "questions": 6
+    },
+    {
+      "repeat": 3,
+      "selected": true,
+      "seconds": 8.893061878,
+      "requests": 2,
+      "questions": 6
+    }
+  ]
+}

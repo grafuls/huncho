@@ -12,6 +12,10 @@ path = "src/main.rs"
 name = "laya_check"
 required-features = ["candle", "tokenizers"]
 
+[[example]]
+name = "laya_profile"
+required-features = ["candle", "tokenizers", "qualification"]
+
 [dependencies]
 huncho-core = { path = "../huncho-core" }
 huncho-backend = { path = "../huncho-backend" }
