@@ -414,6 +414,7 @@ fn requires_outcome_qualification(engine: &huncho_core::engine::Engine) -> bool 
         "prefill_chunk_tokens",
         "weight_quantization",
         "cpu_kernel_build",
+        "cpu_blas_execution",
         "llamacpp_execution",
     ]
     .iter()
@@ -932,6 +933,7 @@ mod qualification_tests {
     fn changed_kernels_require_labeled_qualification_even_with_fit_metadata() {
         for (key, value) in [
             ("native_execution", "candle-qwen35-v1"),
+            ("cpu_blas_execution", "openblas-lp64-fp32-v1"),
             ("projection_chunk_rows", "64"),
             ("attention_compute_dtype", "fp32"),
             ("device_path", "modernbert-cuda"),

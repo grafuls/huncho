@@ -2,7 +2,67 @@
 
 This tracks the staged implementation of [the research report](optimization.md). Source work began from `571f93c`. The report remains a dated analysis; this file records current implementation status. No optimization is considered qualified for a new model/device/precision merely because a fixture passes.
 
+## Current scope and remaining work
+
+The user has deferred Apple Silicon work and all checks against actual GPUs.
+CPU implementation and qualification continue. "Available" below describes
+code and fixture coverage; it does not promote a released model/precision.
+The CPU Kev held-out gate rejected FP32, and selected-case FP16 diagnostics
+also show drift. Packed CPU fitting/held-out evaluation is still running.
+
+| Area | Implementation status | Remaining work or qualification |
+|---|---|---|
+| O01 readout deduplication | Available | New model/profile coverage |
+| O02 buffers/allocations | Available in readouts, heads, CPU gate and selected ONNX outputs | Broader activation-buffer reuse and released workload measurements |
+| O03 CPU kernels/threads | Thread/build profiles and optional OpenBLAS available | Platform fitting, held-out gates and throughput |
+| O04 result reuse/coalescing | Available, bounded, default off | Tenant-specific retention policy |
+| O05 F3 selected projection | Available | Released Nimble qualification |
+| O06 execution/preparation workers | Available | Released workload capacity/latency measurements |
+| O07 tokenizer/prompt caching | Available, bounded, default off | Model-specific hit rates and memory measurements |
+| O08 ONNX output/readout path | CPU gather and output reuse available | Device I/O binding and device-resident head |
+| O09 fused compute | CPU SiLU/multiply available | FlashAttention and further fused native/device kernels |
+| O10 precision/calibration gates | Every real serving runtime requires fresh labeled conformance | Released CPU acceptance remains rejected/pending; no GPU checks |
+| O11 native Kev prefix forks | Available | Released CPU paired/labeled acceptance |
+| O12 dynamic batching | Equal-length question/request collation available | Mixed lengths, masks and cached-branch batching |
+| O13 F5 head/pooling | CPU vectorized heads and grouped spans available | Released Clef labeled qualification |
+| O14 concurrent execution contexts | CPU shared-weight replicas, including optional ONNX initializers, available | Released concurrent workloads, memory and affinity measurements |
+| O15 device buffers/graph replay | Open | CUDA implementation and later device qualification |
+| O16 Candle device propagation | Optional CUDA loaders available | Actual GPU checks deferred |
+| O17 recurrent/conv buffers | CPU implementations available | Released profile acceptance rejected; parallel device kernels open |
+| O18 quantization | Experimental Candle and llama.cpp CPU Q8/Q4 packages available | Portable Q8/Q4 fit/held-out job running; other families open |
+| O19 retained/paged prefixes | Bounded immutable CPU snapshots available | Paging, branch collation and tenant policies |
+| O20 Metal | Skipped by user | Apple work deferred |
+| O21 llama.cpp | CPU F2/F3 and pending FP32/FP16/Q8/Q4 exports available | Native prefix/batches and released fitting/qualification |
+| O22 shared bases/residency | Immutable CPU bases shared across isolated merges | Lazy resident loading/eviction and runtime LoRA dispatch |
+| O23 vLLM custom readouts | Open | Actual no-decode family implementation and qualification |
+| O24 distributed/sharded inference | Open | Implementation; actual multi-GPU qualification deferred |
+| O25 prefill scheduling | Resumable CPU prefix/question scheduling available | Released labeled qualification and latency; tensor/device scheduling open |
+| O26 MLX | Skipped by user | Apple work deferred |
+| O27 browser WASM/WebGPU | Open | Separate actual browser runtime, packaging and gates |
+
 ## Implemented increments
+
+### Optional OpenBLAS projections
+
+O03 now includes `cpu-blas`, an optional dynamic LP64 OpenBLAS path for dense
+FP32 Qwen F2/F3 and Clef backbone projections. It borrows contiguous CPU storage
+for row-major SGEMM and applies the existing bias operation afterward. Default
+builds and unset library variables use Candle unchanged. FP16, packed weights,
+OpenMP and ILP64 are rejected; single-thread libraries must use native locking
+for concurrent contexts. Configuration is fixed before caches/replicas and
+recorded as library hash, selected CPU kernel, build configuration and thread
+budget. This is changed reduction arithmetic, so fresh complete labeled
+serving conformance remains mandatory.
+
+Real CPU tests cover strided/offset inputs, shape/bias checks, frozen Kev
+probabilities, prefix and batch parity, independently executing replicas, F3
+selected logits, Clef whole-request heads, unsupported precision/thread bounds
+and CLI startup refusal. The tiny fixtures do not establish released outcome
+calibration. A one-thread release projection microbenchmark on local x86
+shows a median Candle/OpenBLAS latency ratio around 1.01 with overlapping
+individual timings. No reliable speedup or released-model throughput gain is
+claimed. [Retained measurements](verification/blas-cpu-20261008/microbenchmark.json)
+include the binary and library identities; this path stays default-disabled.
 
 ### CPU FP16 drift diagnosis
 

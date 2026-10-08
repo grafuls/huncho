@@ -41,6 +41,30 @@ pub struct ClefBackend {
     grouped_pooling: bool,
 }
 impl ClefBackend {
+    /// Configure the optional CPU FP32 backbone BLAS path before replicas.
+    /// The trained joint head and pooling keep their existing arithmetic.
+    pub fn with_cpu_blas_from_env(self) -> Result<Self> {
+        if std::env::var_os("HUNCHO_CPU_BLAS_LIBRARY").is_none()
+            && std::env::var_os("HUNCHO_CPU_BLAS_THREADS").is_none()
+        {
+            return Ok(self);
+        }
+        #[cfg(not(feature = "cpu-blas"))]
+        {
+            return Err(Error::Unsupported(
+                "OpenBLAS requires --features cpu-blas".into(),
+            ));
+        }
+        #[cfg(feature = "cpu-blas")]
+        {
+            let mut backend = self;
+            backend.model_mut()?.set_cpu_blas_from_env()?;
+            backend
+                .model
+                .record_cpu_blas(&mut backend.capabilities.extra);
+            Ok(backend)
+        }
+    }
     pub fn load(dir: &Path, manifest: &ModelManifest, dtype: &str, device: Device) -> Result<Self> {
         manifest.validate()?;
         if manifest.family != Family::F5

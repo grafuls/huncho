@@ -1,5 +1,24 @@
 # Backends
 
+`cpu-blas` is an optional build feature for dense FP32 Qwen F2/F3 and Clef
+backbone projections. Set `HUNCHO_CPU_BLAS_LIBRARY` to an explicit LP64
+OpenBLAS shared library and `HUNCHO_CPU_BLAS_THREADS=1` (default one, range
+1–256). Pthread/sequential builds are supported; ILP64, OpenMP, packed weights,
+FP16 and other backends are rejected. No library loads when these variables
+are unset. Configure before replicas or native caches. One immutable library
+and thread budget is supported per process. Heads, normalization, recurrence
+and calibrated softmax retain their existing paths.
+Single-thread builds require OpenBLAS `USE_LOCKING` for concurrent contexts;
+requested thread counts must also be accepted by the selected library.
+
+The profile records the library SHA256, OpenBLAS build/configuration, selected
+CPU kernel and thread count. Native reduction order changes require the same
+fresh complete labeled serving gate as other profiles; a source `fit` entry
+alone is insufficient. This is experimental and default-disabled. The default
+build gains no inference/runtime dependency. The supported ABI is checked
+against [the OpenBLAS header](https://raw.githubusercontent.com/OpenMathLib/OpenBLAS/v0.3.33/cblas.h)
+and [configuration getter](https://raw.githubusercontent.com/OpenMathLib/OpenBLAS/v0.3.33/driver/others/openblas_get_config.c).
+
 Every backend implements the same [`Backend`](../crates/huncho-core/src/backend.rs)
 trait:
 

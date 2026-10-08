@@ -1,0 +1,112 @@
+{
+  "shape": {
+    "input": [
+      1,
+      128,
+      1024
+    ],
+    "weight": [
+      1536,
+      1024
+    ]
+  },
+  "max_raw_delta": 3.814697265625e-06,
+  "metadata": {
+    "cpu_blas_config": "OpenBLAS 0.3.29 DYNAMIC_ARCH NO_AFFINITY USE_LOCKING Haswell SINGLE_THREADED",
+    "cpu_blas_core": "Haswell",
+    "cpu_blas_execution": "openblas-lp64-fp32-v1",
+    "cpu_blas_library_sha256": "cdbd139a1b9779434533ecb4c0079bb2e30d724006d91bdd59b10366644ff0d2",
+    "cpu_blas_threads": "1"
+  },
+  "pairs": [
+    {
+      "candle_seconds": 0.00322655175,
+      "openblas_seconds": 0.00315967275,
+      "candle_over_openblas": 1.0211664325047585
+    },
+    {
+      "candle_seconds": 0.0032289855,
+      "openblas_seconds": 0.003197195,
+      "candle_over_openblas": 1.0099432471275602
+    },
+    {
+      "candle_seconds": 0.003194886,
+      "openblas_seconds": 0.00317497625,
+      "candle_over_openblas": 1.0062708343093907
+    },
+    {
+      "candle_seconds": 0.00320446425,
+      "openblas_seconds": 0.003147582,
+      "candle_over_openblas": 1.018071729346527
+    },
+    {
+      "candle_seconds": 0.0031812535,
+      "openblas_seconds": 0.0031522755,
+      "candle_over_openblas": 1.009192724430336
+    },
+    {
+      "candle_seconds": 0.00322778125,
+      "openblas_seconds": 0.00315418875,
+      "candle_over_openblas": 1.0233316728429775
+    },
+    {
+      "candle_seconds": 0.00318419925,
+      "openblas_seconds": 0.0031578545,
+      "candle_over_openblas": 1.0083426104654283
+    },
+    {
+      "candle_seconds": 0.00316175225,
+      "openblas_seconds": 0.00314671775,
+      "candle_over_openblas": 1.0047778355716843
+    },
+    {
+      "candle_seconds": 0.003193876,
+      "openblas_seconds": 0.00314708075,
+      "candle_over_openblas": 1.0148694150920659
+    },
+    {
+      "candle_seconds": 0.00324488525,
+      "openblas_seconds": 0.003165228,
+      "candle_over_openblas": 1.0251663545248557
+    },
+    {
+      "candle_seconds": 0.00321055725,
+      "openblas_seconds": 0.0031884775,
+      "candle_over_openblas": 1.0069248567694142
+    },
+    {
+      "candle_seconds": 0.003162536,
+      "openblas_seconds": 0.003151676,
+      "candle_over_openblas": 1.003445785670862
+    }
+  ],
+  "qualified": false,
+  "limits": [
+    "Kernel microbenchmark only, not released-model throughput or calibration acceptance.",
+    "Library hash/kernel/thread profile is mandatory for any future labeled gate."
+  ],
+  "source_base": "0c3e3da4eb4939644fa978eb21d42e6523796f58",
+  "source_overlay_sha256": {
+    "crates/huncho-backend/src/cpu_blas.rs": "0ec74c2f6f7229bec272377ccfd8db96a2bf12d5486e8ebb5f7cd29368f18c5d",
+    "crates/huncho-backend/src/qwen3_5.rs": "8c630de4782300232e606433f1bb744d701e20bc3812d4d9705730dad42f2f42",
+    "crates/huncho-backend/src/clef.rs": "b4eb579f60c9e60cd16d936cd335d55ae034223e60731ddee0b06a68abb642de",
+    "crates/huncho-backend/src/lib.rs": "cdde490db2eb584ee5594d36b32b49a0a16491496de7031c272e8b4ad23a72f8",
+    "crates/huncho-backend/Cargo.toml": "99bcc2c508604d63d55a322576099f0c0d92ca507d9651cdff88a044d2a67c67",
+    "Cargo.lock": "21e18d01661740bb4c70b880ef9dd6b20baca7956d644b0328b30077f5aeb756"
+  },
+  "program_sha256": "4d68dfd6a7f58f5b968b1245b6389fd492251116bace55f59fd844582a0878d6",
+  "host": {
+    "os": "Linux",
+    "kernel": "6.19.10-300.fc44.x86_64",
+    "arch": "x86_64",
+    "cpu": "Intel(R) Core(TM) Ultra 7 165H"
+  },
+  "thread_environment": {
+    "RAYON_NUM_THREADS": "1",
+    "CANDLE_NUM_THREADS": "1",
+    "HUNCHO_CPU_BLAS_THREADS": "1",
+    "HUNCHO_CPU_BLAS_LIBRARY": "/usr/lib64/libopenblas.so.0"
+  },
+  "candle_over_openblas_median": 1.0095679857789481,
+  "disposition": "No reliable speedup demonstrated by this small CPU projection microbenchmark; profile stays optional and disabled."
+}

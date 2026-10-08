@@ -23,6 +23,8 @@ pub mod clef;
 mod conv_cpu;
 #[cfg(feature = "candle")]
 mod cpu_profile;
+#[cfg(feature = "cpu-blas")]
+mod cpu_blas;
 #[cfg(feature = "candle")]
 mod delta_cpu;
 #[cfg(feature = "candle")]

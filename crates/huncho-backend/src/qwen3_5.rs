@@ -302,6 +302,8 @@ fn repeat_interleave_head(t: &Tensor, n: usize, dim: usize) -> Result<Tensor> {
 struct BackboneLinear {
     linear: Projection,
     chunk_rows: usize,
+    #[cfg(feature = "cpu-blas")]
+    blas: Option<Arc<crate::cpu_blas::Runtime>>,
 }
 
 enum Projection {
@@ -399,6 +401,8 @@ impl ProjectionSource {
                         packed_width,
                     },
                     chunk_rows: 0,
+                    #[cfg(feature = "cpu-blas")]
+                    blas: None,
                 })
             }
         }
@@ -420,6 +424,8 @@ impl From<Linear> for BackboneLinear {
         Self {
             linear: Projection::Dense(linear),
             chunk_rows: 0,
+            #[cfg(feature = "cpu-blas")]
+            blas: None,
         }
     }
 }
@@ -427,7 +433,7 @@ impl From<Linear> for BackboneLinear {
 impl Module for BackboneLinear {
     fn forward(&self, input: &Tensor) -> Result<Tensor> {
         if self.chunk_rows == 0 {
-            return self.linear.forward(input);
+            return self.project(input);
         }
         let (batch, sequence, width) = input.dims3()?;
         let rows = batch * sequence;
@@ -452,12 +458,22 @@ impl Module for BackboneLinear {
                 )?
             };
             // Keep the original rank-three/batch-one Linear call convention.
-            let output = self.linear.forward(&chunk.unsqueeze(0)?)?.squeeze(0)?;
+            let output = self.project(&chunk.unsqueeze(0)?)?.squeeze(0)?;
             outputs.push(output.narrow(0, 0, count)?);
         }
         let output = Tensor::cat(&outputs, 0)?;
         let output_width = output.dim(1)?;
         output.reshape((batch, sequence, output_width))
+    }
+}
+
+impl BackboneLinear {
+    fn project(&self, input: &Tensor) -> Result<Tensor> {
+        #[cfg(feature = "cpu-blas")]
+        if let (Some(runtime), Projection::Dense(linear)) = (&self.blas, &self.linear) {
+            return runtime.forward(linear, input);
+        }
+        self.linear.forward(input)
     }
 }
 
@@ -1139,6 +1155,8 @@ pub struct Model {
     cpu_delta_rule: bool,
     cpu_causal_conv: bool,
     cpu_fused_gate: bool,
+    #[cfg(feature = "cpu-blas")]
+    cpu_blas: Option<Arc<crate::cpu_blas::Runtime>>,
 }
 
 impl Model {
@@ -1189,18 +1207,24 @@ impl Model {
             cpu_delta_rule: false,
             cpu_causal_conv: false,
             cpu_fused_gate: false,
+            #[cfg(feature = "cpu-blas")]
+            cpu_blas: None,
         })
     }
 
     fn set_projection_chunks(&mut self, rows: usize) {
         self.projection_chunk_rows = rows;
+        self.visit_projections(|projection| projection.chunk_rows = rows);
+    }
+
+    fn visit_projections(&mut self, mut visit: impl FnMut(&mut BackboneLinear)) {
         for layer in &mut self.layers {
             for projection in [
                 &mut layer.mlp.gate_proj,
                 &mut layer.mlp.up_proj,
                 &mut layer.mlp.down_proj,
             ] {
-                projection.chunk_rows = rows;
+                visit(projection);
             }
             if let Some(attention) = &mut layer.linear_attn {
                 for projection in [
@@ -1210,7 +1234,7 @@ impl Model {
                     &mut attention.in_proj_a,
                     &mut attention.out_proj,
                 ] {
-                    projection.chunk_rows = rows;
+                    visit(projection);
                 }
             }
             if let Some(attention) = &mut layer.self_attn {
@@ -1220,9 +1244,40 @@ impl Model {
                     &mut attention.v_proj,
                     &mut attention.o_proj,
                 ] {
-                    projection.chunk_rows = rows;
+                    visit(projection);
                 }
             }
+        }
+    }
+
+    #[cfg(feature = "cpu-blas")]
+    pub(crate) fn set_cpu_blas_from_env(&mut self) -> CoreResult<()> {
+        let Some(runtime) = crate::cpu_blas::configured()? else {
+            return Ok(());
+        };
+        if !self.device.is_cpu() || self.embed_tokens.embeddings().dtype() != DType::F32 {
+            return Err(Error::Unsupported(
+                "OpenBLAS requires a CPU FP32 Qwen backbone".into(),
+            ));
+        }
+        let mut compatible = true;
+        self.visit_projections(|projection| {
+            compatible &= matches!(&projection.linear, Projection::Dense(linear) if linear.weight().dtype() == DType::F32 && linear.weight().device().is_cpu());
+        });
+        if !compatible {
+            return Err(Error::Unsupported(
+                "OpenBLAS supports dense FP32 projections; packed weights are rejected".into(),
+            ));
+        }
+        self.visit_projections(|projection| projection.blas = Some(runtime.clone()));
+        self.cpu_blas = Some(runtime);
+        Ok(())
+    }
+
+    #[cfg(feature = "cpu-blas")]
+    pub(crate) fn record_cpu_blas(&self, extra: &mut BTreeMap<String, String>) {
+        if let Some(runtime) = &self.cpu_blas {
+            runtime.record(extra);
         }
     }
 
@@ -1503,6 +1558,32 @@ enum Readout {
 }
 
 impl Qwen3_5Backend {
+    /// Explicit immutable LP64 OpenBLAS profile, configured before any replica
+    /// or retained/partial prefix. Default/uncompiled builds load no library.
+    pub fn with_cpu_blas_from_env(self) -> CoreResult<Self> {
+        if std::env::var_os("HUNCHO_CPU_BLAS_LIBRARY").is_none()
+            && std::env::var_os("HUNCHO_CPU_BLAS_THREADS").is_none()
+        {
+            return Ok(self);
+        }
+        #[cfg(not(feature = "cpu-blas"))]
+        {
+            return Err(Error::Unsupported(
+                "OpenBLAS requires --features cpu-blas".into(),
+            ));
+        }
+        #[cfg(feature = "cpu-blas")]
+        {
+            if !self.caches.is_empty() || !self.prefixes.values.is_empty() {
+                return Err(Error::Unsupported(
+                    "configure OpenBLAS before creating Qwen caches".into(),
+                ));
+            }
+            let mut backend = self;
+            backend.model_mut()?.set_cpu_blas_from_env()?;
+            Ok(backend)
+        }
+    }
     fn model_mut(&mut self) -> CoreResult<&mut Model> {
         Arc::get_mut(&mut self.model).ok_or_else(|| {
             Error::Unsupported("configure Qwen kernels before creating shared replicas".into())
@@ -2082,6 +2163,8 @@ impl Backend for Qwen3_5Backend {
             extra.insert("base_weight_cache".into(), "content-checked-cpu-v1".into());
         }
         crate::cpu_profile::record(&mut extra);
+        #[cfg(feature = "cpu-blas")]
+        self.model.record_cpu_blas(&mut extra);
         if self.model.projection_chunk_rows > 0 {
             extra.insert(
                 "projection_chunk_rows".into(),

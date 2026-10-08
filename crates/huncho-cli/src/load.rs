@@ -273,6 +273,23 @@ fn load_backend(
     dtype: &str,
     dir: &Path,
 ) -> Result<Box<dyn Backend>> {
+    if std::env::var_os("HUNCHO_CPU_BLAS_LIBRARY").is_some()
+        || std::env::var_os("HUNCHO_CPU_BLAS_THREADS").is_some()
+    {
+        if !cfg!(feature = "cpu-blas") {
+            return Err(Error::Unsupported(
+                "OpenBLAS requires --features cpu-blas".into(),
+            ));
+        }
+        if !((backend_id == BackendId::Candle
+            && matches!(manifest.family, Family::F2 | Family::F3))
+            || backend_id == BackendId::Clef)
+        {
+            return Err(Error::Unsupported(
+                "OpenBLAS currently supports native Qwen F2/F3 and Clef backbones only".into(),
+            ));
+        }
+    }
     match backend_id {
         BackendId::Onnx => load_onnx(manifest, dtype, dir),
         BackendId::Candle => load_candle(manifest, dtype, dir),
@@ -324,7 +341,9 @@ fn load_clef(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<dy
         .with_grouped_pooling(bool_env("HUNCHO_CLEF_GROUPED_POOL")?)?
         .with_cpu_delta_rule(bool_env("HUNCHO_CPU_DELTA_RULE")?)?
         .with_cpu_causal_conv(bool_env("HUNCHO_CPU_CAUSAL_CONV")?)?
-        .with_cpu_fused_gate(bool_env("HUNCHO_CPU_FUSED_GATE")?)?))
+        .with_cpu_fused_gate(bool_env("HUNCHO_CPU_FUSED_GATE")?)?
+        .with_cpu_blas_from_env()?,
+    ))
 }
 
 #[cfg(not(feature = "clef"))]
@@ -373,6 +392,7 @@ fn load_candle(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<
             .with_cpu_delta_rule(bool_env("HUNCHO_CPU_DELTA_RULE")?)?
             .with_cpu_causal_conv(bool_env("HUNCHO_CPU_CAUSAL_CONV")?)?
             .with_cpu_fused_gate(bool_env("HUNCHO_CPU_FUSED_GATE")?)?
+            .with_cpu_blas_from_env()?
             .with_prefill_chunk_tokens(prefill_chunk_tokens_from_env()?)?;
             return Ok(Box::new(backend));
         }
@@ -391,6 +411,7 @@ fn load_candle(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<
         .with_cpu_delta_rule(bool_env("HUNCHO_CPU_DELTA_RULE")?)?
         .with_cpu_causal_conv(bool_env("HUNCHO_CPU_CAUSAL_CONV")?)?
         .with_cpu_fused_gate(bool_env("HUNCHO_CPU_FUSED_GATE")?)?
+        .with_cpu_blas_from_env()?
         .with_prefill_chunk_tokens(prefill_chunk_tokens_from_env()?)?;
         return Ok(Box::new(backend));
     }
@@ -423,6 +444,7 @@ fn load_candle(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<
             .with_cpu_delta_rule(bool_env("HUNCHO_CPU_DELTA_RULE")?)?
             .with_cpu_causal_conv(bool_env("HUNCHO_CPU_CAUSAL_CONV")?)?
             .with_cpu_fused_gate(bool_env("HUNCHO_CPU_FUSED_GATE")?)?
+            .with_cpu_blas_from_env()?
             .with_prefill_chunk_tokens(prefill_chunk_tokens_from_env()?)?;
         return Ok(Box::new(backend) as Box<dyn Backend>);
     }
