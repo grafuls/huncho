@@ -1059,3 +1059,11 @@ entry and fresh complete labeled startup gates. Equal-length native batching
 uses existing budgets and paired gates. CPU prefixes, replicas, quantization,
 other families and device execution are unsupported. See
 [environment, export, fitting and limits](vllm.md).
+
+`HUNCHO_VLLM_TENSOR_PARALLEL=2` optionally shards this same CPU backbone across
+two local spawned ranks. Loaded projection ownership and per-rank forward
+counts are checked. Thread/KV settings apply per rank; total rank threads are
+bounded at 64. The full reduced hidden states feed replicated FP32 pointer
+heads before shared calibration. Rank count/runtime/layout bind fresh receipts
+and are distinct arithmetic profiles requiring fitting and held-out gates.
+This increment does not implement pipeline, multi-node or GPU execution.

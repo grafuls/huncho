@@ -1866,6 +1866,7 @@ dependencies = [
  "candle-transformers",
  "cc",
  "huncho-core",
+ "libc",
  "libloading 0.8.9",
  "llama-cpp-sys-2",
  "log",

@@ -28,6 +28,8 @@ pub struct VllmOptions {
     pub threads: usize,
     pub batch_rows: usize,
     pub kv_cache_bytes: usize,
+    /// One local unsharded context or two local CPU tensor-parallel ranks.
+    pub tensor_parallel: usize,
     pub timeout: Duration,
 }
 
@@ -83,6 +85,7 @@ pub struct VllmBackend {
     capabilities: Capabilities,
     vocab: usize,
     rows: usize,
+    ranks: usize,
     timeout: Duration,
     seq: u64,
     failed: bool,
@@ -112,13 +115,15 @@ impl VllmBackend {
             || !options.python.is_file()
             || !(1..=64).contains(&options.threads)
             || !(1..=8).contains(&options.batch_rows)
+            || ![1, 2].contains(&options.tensor_parallel)
+            || options.threads.saturating_mul(options.tensor_parallel) > 64
             || !(64u64 * 1024 * 1024..=16u64 * 1024 * 1024 * 1024)
                 .contains(&(options.kv_cache_bytes as u64))
             || options.timeout < Duration::from_secs(1)
             || options.timeout > Duration::from_secs(600)
             || !(1..=65536).contains(&manifest.backbone.max_context)
         {
-            return Err(Error::Request("vLLM requires an absolute CPU Python executable, 1..64 threads, 1..8 rows, 64 MiB..16 GiB KV bytes, 1..600 seconds timeout and 1..65536 context".into()));
+            return Err(Error::Request("vLLM requires an absolute CPU Python executable, 1 or 2 CPU ranks, 1..64 total rank threads, 1..8 rows, 64 MiB..16 GiB KV bytes per rank, 1..600 seconds timeout and 1..65536 context".into()));
         }
         let reference = manifest
             .find_artifact(BackendId::Vllm, dtype)
@@ -177,11 +182,45 @@ impl VllmBackend {
                 "unsupported CPU Qwen3.5/pointer configuration",
             ));
         }
+        let ranks = options.tensor_parallel;
+        for key in [
+            "num_attention_heads",
+            "num_key_value_heads",
+            "intermediate_size",
+        ]
+        .into_iter()
+        .chain(
+            layers
+                .iter()
+                .any(|s| s == "linear_attention")
+                .then_some("linear_num_key_heads"),
+        )
+        .chain(
+            layers
+                .iter()
+                .any(|s| s == "linear_attention")
+                .then_some("linear_num_value_heads"),
+        ) {
+            if !config[key]
+                .as_u64()
+                .is_some_and(|n| n > 0 && n % ranks as u64 == 0)
+            {
+                return Err(package_error(
+                    "CPU tensor-parallel dimensions must divide the rank count",
+                ));
+            }
+        }
         let driver = tempfile::tempdir()?;
         let script = driver.path().join("huncho_vllm_cpu.py");
         std::fs::write(&script, DRIVER)?;
         let mut command = Command::new(&options.python);
         command.env_clear();
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            // Descendants inherit this owned group; failures cannot strand ranks.
+            command.process_group(0);
+        }
         for name in ["PATH", "HOME", "TMPDIR", "LD_PRELOAD", "LD_LIBRARY_PATH"] {
             if let Some(value) = std::env::var_os(name) {
                 command.env(name, value);
@@ -196,12 +235,14 @@ impl VllmBackend {
             .arg(options.batch_rows.to_string())
             .arg(options.threads.to_string())
             .arg(options.kv_cache_bytes.to_string())
+            .arg(ranks.to_string())
             .env("PYTHONPATH", driver.path())
             .env("VLLM_TARGET_DEVICE", "cpu")
             .env("VLLM_PLUGINS", "")
             .env("VLLM_LOGGING_LEVEL", "ERROR")
             .env("VLLM_NO_USAGE_STATS", "1")
             .env("VLLM_ENABLE_V1_MULTIPROCESSING", "0")
+            .env("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
             .env("HF_HUB_OFFLINE", "1")
             .env("TRANSFORMERS_OFFLINE", "1")
             .env("OMP_NUM_THREADS", options.threads.to_string())
@@ -243,6 +284,7 @@ impl VllmBackend {
             },
             vocab,
             rows: options.batch_rows,
+            ranks,
             timeout: options.timeout,
             seq: 0,
             failed: false,
@@ -255,6 +297,7 @@ impl VllmBackend {
             || ready["head_dtype"] != "fp32"
             || ready["context"] != manifest.backbone.max_context
             || ready["batch_rows"] != options.batch_rows
+            || ready["tensor_parallel"] != ranks
             || ready["vllm"] != "0.31.0+cpu"
             || ready["torch"] != "2.13.0+cpu"
             || !ready["runtime_sha256"]
@@ -264,6 +307,42 @@ impl VllmBackend {
             return Err(Error::Backend(
                 "vLLM worker returned inconsistent runtime identity".into(),
             ));
+        }
+        let layouts = ready["rank_layouts"]
+            .as_array()
+            .ok_or_else(|| Error::Backend("missing CPU rank ownership".into()))?;
+        if layouts.len() != ranks {
+            return Err(Error::Backend("CPU rank ownership count mismatch".into()));
+        }
+        let expected_head = json!([
+            [config["huncho_pointer_dim"], manifest.backbone.hidden_size],
+            [config["huncho_pointer_dim"], manifest.backbone.hidden_size]
+        ]);
+        let intermediate = config["intermediate_size"].as_u64().unwrap() / ranks as u64;
+        let expected_mlp = json!({
+            "gate_up": [2 * intermediate, manifest.backbone.hidden_size],
+            "down": [manifest.backbone.hidden_size, intermediate],
+            "dtype": "torch.bfloat16"
+        });
+        for (rank, layout) in layouts.iter().enumerate() {
+            let mlps = layout["mlps"]
+                .as_array()
+                .ok_or_else(|| Error::Backend("missing CPU sharded projections".into()))?;
+            if layout["rank"] != rank
+                || layout["world_size"] != ranks
+                || layout["threads"] != options.threads
+                || layout["head_shapes"] != expected_head
+                || layout["head_dtype"] != "torch.float32"
+                || !layout["runtime_sha256"]
+                    .as_str()
+                    .is_some_and(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
+                || mlps.len() != layers.len()
+                || mlps.iter().any(|m| m != &expected_mlp)
+            {
+                return Err(Error::Backend(
+                    "CPU tensor-parallel ownership/shapes/dtypes mismatch".into(),
+                ));
+            }
         }
         backend.capabilities.extra = BTreeMap::from([
             ("device".into(), "CPU".into()),
@@ -281,6 +360,8 @@ impl VllmBackend {
                 options.python.to_string_lossy().into_owned(),
             ),
             ("vllm_threads".into(), options.threads.to_string()),
+            ("vllm_tensor_parallel".into(), ranks.to_string()),
+            ("vllm_rank_layouts".into(), serde_json::to_string(layouts)?),
             ("vllm_batch_rows".into(), options.batch_rows.to_string()),
             (
                 "vllm_kv_cache_bytes".into(),
@@ -304,9 +385,20 @@ impl VllmBackend {
             .and_then(|frame| frame);
         if result.is_err() {
             self.failed = true;
-            let _ = self.child.kill();
+            self.stop_worker();
         }
         result
+    }
+    fn stop_worker(&mut self) {
+        #[cfg(unix)]
+        if let Ok(group) = i32::try_from(self.child.id()) {
+            // SAFETY: process_group(0) created this child's group. The Child has
+            // not been reaped, so its positive PID cannot have been reused.
+            unsafe {
+                libc::kill(-group, libc::SIGKILL);
+            }
+        }
+        let _ = self.child.kill();
     }
     fn execute(&mut self, inputs: Vec<ForwardInput>) -> Result<Vec<ForwardOutput>> {
         if self.failed {
@@ -349,7 +441,7 @@ impl VllmBackend {
             .and_then(|_| self.input.flush())
         {
             self.failed = true;
-            let _ = self.child.kill();
+            self.stop_worker();
             return Err(Error::from(error));
         }
         let frame = self.receive()?;
@@ -358,6 +450,7 @@ impl VllmBackend {
                 || frame["kind"] != "scores"
                 || frame["seq"] != self.seq
                 || frame["forward_calls"] != 1
+                || frame["rank_forward_calls"] != json!(vec![1; self.ranks])
                 || frame["processed_tokens"] != inputs.iter().map(|i| i.tokens.len()).sum::<usize>()
             {
                 return Err(Error::Backend(
@@ -388,7 +481,7 @@ impl VllmBackend {
         let result = parse();
         if result.is_err() {
             self.failed = true;
-            let _ = self.child.kill();
+            self.stop_worker();
         }
         result
     }
@@ -423,7 +516,27 @@ impl Backend for VllmBackend {
 }
 impl Drop for VllmBackend {
     fn drop(&mut self) {
-        let _ = self.child.kill();
+        // Let native workers release communicators/shared memory on success.
+        // A poisoned/blocked worker is killed with all owned descendants.
+        if !self.failed
+            && self
+                .input
+                .write_all(b"{\"shutdown\":true}\n")
+                .and_then(|_| self.input.flush())
+                .is_ok()
+        {
+            let started = std::time::Instant::now();
+            while started.elapsed() < Duration::from_secs(5) {
+                if self.child.try_wait().is_ok_and(|s| s.is_some()) {
+                    if let Some(reader) = self.reader.take() {
+                        let _ = reader.join();
+                    }
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        self.stop_worker();
         let _ = self.child.wait();
         if let Some(reader) = self.reader.take() {
             let _ = reader.join();

@@ -346,6 +346,7 @@ fn load_vllm(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<dy
             threads: number("HUNCHO_VLLM_THREADS", 2)?,
             batch_rows: number("HUNCHO_VLLM_BATCH_ROWS", 1)?,
             kv_cache_bytes: number("HUNCHO_VLLM_KV_BYTES", 1024 * 1024 * 1024)?,
+            tensor_parallel: number("HUNCHO_VLLM_TENSOR_PARALLEL", 1)?,
             timeout: std::time::Duration::from_secs(number("HUNCHO_VLLM_TIMEOUT_SECS", 180)? as u64),
         },
     )?))

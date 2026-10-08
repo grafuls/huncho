@@ -25,6 +25,7 @@ fn options() -> VllmOptions {
         threads: 2,
         batch_rows: 4,
         kv_cache_bytes: 64 * 1024 * 1024,
+        tensor_parallel: 1,
         timeout: Duration::from_secs(180),
     }
 }
@@ -50,6 +51,7 @@ fn unsupported_profiles_and_changed_artifacts_fail_before_python_startup() {
         threads: 2,
         batch_rows: 1,
         kv_cache_bytes: 64 * 1024 * 1024,
+        tensor_parallel: 1,
         timeout: Duration::from_secs(10),
     };
     for dtype in ["fp32", "fp16", "int8"] {
@@ -79,6 +81,7 @@ fn modified_weights_and_incompatible_configs_fail_before_worker_startup() {
         threads: 2,
         batch_rows: 1,
         kv_cache_bytes: 64 * 1024 * 1024,
+        tensor_parallel: 1,
         timeout: Duration::from_secs(1),
     };
     let path = root.join("vllm/artifact.json");
@@ -105,6 +108,108 @@ fn modified_weights_and_incompatible_configs_fail_before_worker_startup() {
         .unwrap()
         .to_string();
     assert!(error.contains("unsupported CPU Qwen"), "{error}");
+}
+
+#[test]
+fn unsupported_rank_budgets_fail_before_worker_startup() {
+    let root = Path::new(ROOT);
+    let manifest = ModelManifest::load(root.join("huncho-model.json")).unwrap();
+    for (tensor_parallel, threads) in [(0, 2), (3, 2), (4, 2), (2, 64)] {
+        let options = VllmOptions {
+            python: "/bin/false".into(),
+            threads,
+            batch_rows: 1,
+            kv_cache_bytes: 64 * 1024 * 1024,
+            tensor_parallel,
+            timeout: Duration::from_secs(1),
+        };
+        let error = VllmBackend::load(root, &manifest, "bf16", options)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(error.contains("total rank threads"), "{error}");
+    }
+}
+
+#[test]
+#[ignore = "requires explicitly pinned optional CPU vLLM/Python environment"]
+fn real_cpu_two_ranks_shard_weights_replicate_raw_head_and_preserve_fixed_gates() {
+    assert_eq!(std::env::var("HUNCHO_DEVICE").as_deref(), Ok("cpu"));
+    let root = Path::new(ROOT);
+    let manifest = ModelManifest::load(root.join("huncho-model.json")).unwrap();
+    let reference: Value =
+        serde_json::from_slice(&std::fs::read(root.join("golden.json")).unwrap()).unwrap();
+    let rows: Vec<_> = reference["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|c| c["rows"].as_array().unwrap())
+        .collect();
+    let mut single = VllmBackend::load(root, &manifest, "bf16", options()).unwrap();
+    let mut independent = Vec::new();
+    for row in &rows {
+        independent.push(
+            single
+                .forward(ForwardInput::new(
+                    serde_json::from_value(row["tokens"].clone()).unwrap(),
+                    serde_json::from_value(row["positions"].clone()).unwrap(),
+                ))
+                .unwrap(),
+        );
+    }
+    drop(single);
+    let mut opts = options();
+    opts.tensor_parallel = 2;
+    let mut sharded = VllmBackend::load(root, &manifest, "bf16", opts).unwrap();
+    assert_eq!(sharded.capabilities().extra["vllm_tensor_parallel"], "2");
+    let layout: Value =
+        serde_json::from_str(&sharded.capabilities().extra["vllm_rank_layouts"]).unwrap();
+    assert_eq!(layout.as_array().unwrap().len(), 2);
+    // These are actual loaded tensor dimensions, not a requested-size flag.
+    for (rank, entry) in layout.as_array().unwrap().iter().enumerate() {
+        assert_eq!(entry["rank"], rank);
+        assert_eq!(entry["mlps"][0]["gate_up"], serde_json::json!([256, 128]));
+        assert_eq!(entry["mlps"][0]["down"], serde_json::json!([128, 128]));
+        assert_eq!(
+            entry["head_shapes"],
+            serde_json::json!([[32, 128], [32, 128]])
+        );
+    }
+    for (row, single) in rows.iter().zip(&independent) {
+        let input = ForwardInput::new(
+            serde_json::from_value(row["tokens"].clone()).unwrap(),
+            serde_json::from_value(row["positions"].clone()).unwrap(),
+        );
+        let output = sharded.forward(input.clone()).unwrap();
+        let frozen: Vec<f32> = serde_json::from_value(row["probabilities"].clone()).unwrap();
+        let actual = calibrate(output.values().data(), 2.40605).unwrap();
+        let baseline = calibrate(single.values().data(), 2.40605).unwrap();
+        assert_eq!(argmax(&actual), argmax(&frozen));
+        assert_eq!(argmax(&actual), argmax(&baseline));
+        assert!(actual
+            .iter()
+            .zip(frozen)
+            .all(|(a, b)| (a - b).abs() <= 1e-3));
+        assert!(actual
+            .iter()
+            .zip(baseline)
+            .all(|(a, b)| (a - b).abs() <= 1e-3));
+        // Batch invariance is gated within the selected arithmetic profile.
+        for batch in sharded.forward_batch(vec![input.clone(), input]).unwrap() {
+            pair(batch.values().data(), output.values().data(), 1e-4);
+            assert_eq!(batch.positions(), output.positions());
+        }
+    }
+    let empty = sharded
+        .forward(ForwardInput::new(vec![1, 2], vec![]))
+        .unwrap();
+    assert_eq!(empty.values().shape(), &[0, 1]);
+    let mut invalid = ForwardInput::new(vec![1, 2], vec![0]);
+    invalid.retain_cache = true;
+    assert!(sharded.forward(invalid).is_err());
+    assert!(sharded
+        .forward(ForwardInput::new(vec![1, 2], vec![1, 0, 1]))
+        .is_ok());
 }
 
 #[test]

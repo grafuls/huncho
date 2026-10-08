@@ -296,6 +296,7 @@ impl ExecutionIdentity {
             "HUNCHO_VLLM_BATCH_ROWS",
             "HUNCHO_VLLM_KV_BYTES",
             "HUNCHO_VLLM_TIMEOUT_SECS",
+            "HUNCHO_VLLM_TENSOR_PARALLEL",
             "HUNCHO_CPU_DELTA_RULE",
             "HUNCHO_CPU_CAUSAL_CONV",
             "HUNCHO_CPU_FUSED_GATE",

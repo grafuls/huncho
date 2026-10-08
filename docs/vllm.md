@@ -65,6 +65,7 @@ Set `HUNCHO_DEVICE=cpu` (or leave it unset). Options are:
 | `HUNCHO_VLLM_BATCH_ROWS` | 1 | 1..8 independent native rows |
 | `HUNCHO_VLLM_KV_BYTES` | 1073741824 | 64 MiB..16 GiB native KV budget |
 | `HUNCHO_VLLM_TIMEOUT_SECS` | 180 | 1..600 seconds per worker reply |
+| `HUNCHO_VLLM_TENSOR_PARALLEL` | 1 | 1 or 2 local CPU ranks; see below |
 
 With more than one configured row, existing per-/cross-request batching can
 collate equal-length independent prompts within token/readout limits. The
@@ -81,6 +82,45 @@ forks, partial/chunked prefills, padding, replicas, quantization and device
 execution are unsupported in this increment. Native KV allocations remain
 useful for complete prefills but are not a Huncho retained-prefix capability.
 The byte budget excludes weights, recurrence and runtime/workspace overhead.
+
+## Local CPU tensor parallelism
+
+`HUNCHO_VLLM_TENSOR_PARALLEL=2` selects the pinned multiprocessing CPU executor,
+with spawned workers and local CPU collectives. Attention/recurrent head counts
+and the MLP intermediate width must divide the rank count; incompatible
+configurations fail before startup. Each rank owns its backbone tensor shards,
+while normalization and the FP32 q/k pointer remain replicated. The pointer
+consumes the complete reduced final hidden state and never an independently
+calibrated partial score. Pipeline/data/context parallelism, multiple nodes,
+more than two ranks, GPUs and other architectures remain unsupported.
+
+Startup verifies the actual loaded per-rank MLP projection dimensions, rank
+ownership, pointer shapes/dtype and thread count. Each rank's runtime/library
+identity is included in qualification metadata. Every submitted group must
+execute exactly one forward on **each** rank; missing or extra rank work
+invalidates the context. Huncho counts one collective model forward and unique
+model tokens, rather than summing the same tokens over tensor shards. The rank
+count remains explicit in execution metadata and receipts.
+
+The thread option applies per rank, with at most 64 total rank threads. The KV
+byte option is also **per rank**; two ranks reserve twice that budget. Weights,
+replicated heads/normalization, recurrence, collectives and runtime overhead
+are additional. CPU thread binding is disabled in this increment. Reduction
+order can change probabilities, so rank count is an arithmetic profile that
+requires its own fitting/held-out evaluation and fresh unchanged serving gates.
+Single-rank acceptance or a shared backend/dtype label cannot replace those
+checks. Native batches retain the fixed paired gate within the selected rank
+profile.
+
+The worker registers the custom model in spawned processes and uses picklable
+module functions for collective counters. Successful disposal attempts native
+shutdown to release workers/communicators/shared memory; protocol/timeout
+failure kills the entire owned process group. Upstream's
+[parallel runtime](https://docs.vllm.ai/en/v0.31.0/serving/parallelism_scaling/)
+and [pinned CPU platform](https://raw.githubusercontent.com/vllm-project/vllm/v0.31.0/vllm/platforms/cpu.py)
+provide the execution machinery. This is actual two-process CPU tensor
+sharding, not multi-GPU qualification or a capacity/performance claim for 4B.
+See [CPU distributed evidence](verification/vllm-cpu-sharding-20261008/README.md).
 
 Pending packages may collect actual raw fitting rows offline:
 

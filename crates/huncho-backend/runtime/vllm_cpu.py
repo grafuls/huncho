@@ -90,6 +90,12 @@ class HunchoKevForPooling(Qwen3_5ForCausalLMBase):
         return AutoWeightsLoader(self).load_weights(weights, mapper=self.hf_to_vllm_mapper)
 
 
+# Spawned CPU ranks import this pinned module afresh; registration solely in
+# main() belongs to the scheduler process and is absent from their registries.
+from vllm import ModelRegistry
+ModelRegistry.register_model("HunchoKevForPooling", "huncho_vllm_cpu:HunchoKevForPooling")
+
+
 def runtime_identity():
     """Hash installed core runtime bytes and loaded executable libraries."""
     paths = {Path(sys.executable).resolve()}
@@ -120,67 +126,89 @@ def runtime_identity():
     return digest.hexdigest()
 
 
+def rank_layout(model):
+    from vllm.distributed import get_tp_group
+    group = get_tp_group()
+    return {"rank": group.rank_in_group, "world_size": group.world_size,
+        "threads": torch.get_num_threads(), "runtime_sha256": runtime_identity(),
+        "head_shapes": [list(model.pooler.q.weight.shape), list(model.pooler.k.weight.shape)],
+        "head_dtype": str(model.pooler.q.weight.dtype),
+        "mlps": [{"gate_up": list(layer.mlp.gate_up_proj.weight.shape),
+                  "down": list(layer.mlp.down_proj.weight.shape),
+                  "dtype": str(layer.mlp.down_proj.weight.dtype)} for layer in model.model.layers]}
+
+
+def forward_count(model):
+    return model.huncho_forward_calls
+
+
 def main():
     # Reserve a protocol FD, then redirect OS-level runtime/extension output.
     # A Python context manager alone misses native prints and child inspectors.
     output = PROTOCOL_OUTPUT
-    from vllm import LLM, ModelRegistry, PoolingParams
+    from vllm import LLM, PoolingParams
     from vllm.config import PoolerConfig
-    model_dir, context, batch_rows, threads, kv_bytes = sys.argv[1:]
-    context, batch_rows, threads, kv_bytes = map(int, (context, batch_rows, threads, kv_bytes))
+    model_dir, context, batch_rows, threads, kv_bytes, ranks = sys.argv[1:]
+    context, batch_rows, threads, kv_bytes, ranks = map(int, (context, batch_rows, threads, kv_bytes, ranks))
     # The legacy CPU variable accepts integer GiB and overrides byte limits.
     # Use the supported exact byte option; never round a configured budget.
     os.environ.pop("VLLM_CPU_KVCACHE_SPACE", None)
     os.environ["VLLM_CPU_OMP_THREADS_BIND"] = "nobind"
     os.environ["OMP_NUM_THREADS"] = str(threads)
     torch.set_num_threads(threads)
-    ModelRegistry.register_model("HunchoKevForPooling", "huncho_vllm_cpu:HunchoKevForPooling")
     llm = LLM(model=model_dir, runner="pooling", dtype="bfloat16", trust_remote_code=False,
               skip_tokenizer_init=True, max_model_len=context, max_num_seqs=batch_rows,
               max_num_batched_tokens=context * batch_rows, enable_chunked_prefill=False,
-              enable_prefix_caching=False, enforce_eager=True, tensor_parallel_size=1,
+              enable_prefix_caching=False, enforce_eager=True, tensor_parallel_size=ranks,
+              distributed_executor_backend=("uni" if ranks == 1 else "mp"),
               pipeline_parallel_size=1, kv_cache_memory_bytes=kv_bytes, pooler_config=PoolerConfig(task="classify", use_activation=False))
     config = json.loads((Path(model_dir) / "config.json").read_text())
     def emit(value):
         output.write(json.dumps(value, allow_nan=False, separators=(",", ":")) + "\n")
-    emit({"protocol": 1, "kind": "ready", "runtime_sha256": runtime_identity(),
-          "vllm": "0.31.0+cpu", "torch": "2.13.0+cpu", "device": "CPU", "dtype": "bf16",
-          "context": context, "batch_rows": batch_rows, "head_dtype": "fp32"})
-    for line in sys.stdin:
-        if len(line.encode()) > 32 * 1024 * 1024:
-            raise ValueError("protocol input exceeds 32 MiB")
-        request = json.loads(line)
-        if set(request) != {"seq", "inputs"} or type(request["seq"]) is not int:
-            raise ValueError("invalid protocol request")
-        inputs = request["inputs"]
-        if not isinstance(inputs, list) or not 1 <= len(inputs) <= batch_rows:
-            raise ValueError("invalid batch rows")
-        for item in inputs:
-            if set(item) != {"tokens", "positions"}:
-                raise ValueError("invalid row fields")
-            tokens, positions = item["tokens"], item["positions"]
-            if not isinstance(tokens, list) or not 1 <= len(tokens) <= context:
-                raise ValueError("invalid sequence length")
-            if any(type(x) is not int or not 0 <= x < config["vocab_size"] for x in tokens):
-                raise ValueError("invalid token")
-            if not isinstance(positions, list) or len(positions) > 255 or any(type(x) is not int or not 0 <= x < len(tokens) for x in positions):
-                raise ValueError("invalid positions")
-        before = llm.apply_model(lambda model: model.huncho_forward_calls)
-        outputs = llm.encode([{"prompt_token_ids": item["tokens"]} for item in inputs],
-            pooling_params=[PoolingParams(task="classify", use_activation=False,
-                extra_kwargs={"positions": item["positions"]}) for item in inputs],
-            pooling_task="classify", use_tqdm=False)
-        after = llm.apply_model(lambda model: model.huncho_forward_calls)
-        calls = [a - b for a, b in zip(after, before)]
-        if calls != [1] or len(outputs) != len(inputs):
-            raise RuntimeError("pooling scheduler did not execute exactly one complete native forward")
-        logits = [result.outputs.data.tolist() for result in outputs]
-        if any(len(values) != len(item["positions"]) or any(not math.isfinite(x) for x in values)
-               for values, item in zip(logits, inputs)):
-            raise RuntimeError("nonfinite or incomplete raw pointer readout")
-        emit({"protocol": 1, "kind": "scores", "seq": request["seq"], "forward_calls": 1,
-              "processed_tokens": sum(len(item["tokens"]) for item in inputs), "logits": logits})
-    llm.llm_engine.engine_core.shutdown()
+    try:
+        emit({"protocol": 1, "kind": "ready", "runtime_sha256": runtime_identity(),
+              "vllm": "0.31.0+cpu", "torch": "2.13.0+cpu", "device": "CPU", "dtype": "bf16",
+              "context": context, "batch_rows": batch_rows, "head_dtype": "fp32",
+              "tensor_parallel": ranks, "rank_layouts": llm.apply_model(rank_layout)})
+        for line in sys.stdin:
+            if len(line.encode()) > 32 * 1024 * 1024:
+                raise ValueError("protocol input exceeds 32 MiB")
+            request = json.loads(line)
+            if request == {"shutdown": True}:
+                break
+            if set(request) != {"seq", "inputs"} or type(request["seq"]) is not int:
+                raise ValueError("invalid protocol request")
+            inputs = request["inputs"]
+            if not isinstance(inputs, list) or not 1 <= len(inputs) <= batch_rows:
+                raise ValueError("invalid batch rows")
+            for item in inputs:
+                if set(item) != {"tokens", "positions"}:
+                    raise ValueError("invalid row fields")
+                tokens, positions = item["tokens"], item["positions"]
+                if not isinstance(tokens, list) or not 1 <= len(tokens) <= context:
+                    raise ValueError("invalid sequence length")
+                if any(type(x) is not int or not 0 <= x < config["vocab_size"] for x in tokens):
+                    raise ValueError("invalid token")
+                if not isinstance(positions, list) or len(positions) > 255 or any(type(x) is not int or not 0 <= x < len(tokens) for x in positions):
+                    raise ValueError("invalid positions")
+            before = llm.apply_model(forward_count)
+            outputs = llm.encode([{"prompt_token_ids": item["tokens"]} for item in inputs],
+                pooling_params=[PoolingParams(task="classify", use_activation=False,
+                    extra_kwargs={"positions": item["positions"]}) for item in inputs],
+                pooling_task="classify", use_tqdm=False)
+            after = llm.apply_model(forward_count)
+            calls = [a - b for a, b in zip(after, before)]
+            if calls != [1] * ranks or len(outputs) != len(inputs):
+                raise RuntimeError("pooling scheduler did not execute exactly one complete native forward")
+            logits = [result.outputs.data.tolist() for result in outputs]
+            if any(len(values) != len(item["positions"]) or any(not math.isfinite(x) for x in values)
+                   for values, item in zip(logits, inputs)):
+                raise RuntimeError("nonfinite or incomplete raw pointer readout")
+            emit({"protocol": 1, "kind": "scores", "seq": request["seq"], "forward_calls": 1,
+                  "rank_forward_calls": calls,
+                  "processed_tokens": sum(len(item["tokens"]) for item in inputs), "logits": logits})
+    finally:
+        llm.llm_engine.engine_core.shutdown()
 
 
 if __name__ == "__main__":

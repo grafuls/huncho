@@ -281,6 +281,10 @@ fn real_cpu_cli_qualifies_raw_pooling_and_refuses_unqualified_serving() {
     assert_eq!(report["device"], "CPU");
     assert_eq!(report["dtype"], "bf16");
     assert_eq!(report["execution_metadata"]["vllm_decode"], "disabled");
+    assert_eq!(
+        report["execution_metadata"]["vllm_tensor_parallel"],
+        std::env::var("HUNCHO_VLLM_TENSOR_PARALLEL").unwrap_or_else(|_| "1".into())
+    );
     assert_eq!(report["outcome_calibration"]["questions"], 9);
     assert!(report["work"]["cross_request_batches"].as_u64().unwrap() > 0);
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();

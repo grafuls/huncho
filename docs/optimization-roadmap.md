@@ -8,7 +8,9 @@ The user has deferred Apple Silicon work and all checks against actual GPUs.
 CPU implementation and qualification continue. "Available" below describes
 code and fixture coverage; it does not promote a released model/precision.
 The CPU Kev held-out gate rejected FP32, and selected-case FP16 diagnostics
-also show drift. Packed CPU fitting/held-out evaluation is still running.
+also show drift. Packed CPU fitting/held-out evaluation was staged remotely;
+its current completion cannot be verified because SSH to the supplied host
+still times out. These variants remain unqualified.
 
 | Area | Implementation status | Remaining work or qualification |
 |---|---|---|
@@ -29,18 +31,40 @@ also show drift. Packed CPU fitting/held-out evaluation is still running.
 | O15 device buffers/graph replay | Open | CUDA implementation and later device qualification |
 | O16 Candle device propagation | Optional CUDA loaders available | Actual GPU checks deferred |
 | O17 recurrent/conv buffers | CPU implementations available | Released profile acceptance rejected; parallel device kernels open |
-| O18 quantization | Experimental Candle and llama.cpp CPU Q8/Q4 packages available | Portable Q8/Q4 fit/held-out job running; other families open |
+| O18 quantization | Experimental Candle and llama.cpp CPU Q8/Q4 packages available | Portable Q8/Q4 fit/held-out job staged; host currently unreachable; other families open |
 | O19 retained/paged prefixes | Bounded immutable CPU snapshots available | Paging, branch collation and tenant policies |
 | O20 Metal | Skipped by user | Apple work deferred |
 | O21 llama.cpp | CPU F2/F3, full-state forks/chunks, bounded native batches and pending FP32/FP16/Q8/Q4 exports available | Released fitting/qualification and graph-side readout efficiency |
 | O22 shared bases/residency | Immutable CPU bases and bounded CPU lazy loading/preload/idle eviction available | Released residency measurements and runtime LoRA dispatch |
 | O23 vLLM custom readouts | Pinned actual CPU Kev F2 raw pooling and equal-length batches available | Released fitting/held-out acceptance; other families, prefixes, quantization and device profiles |
-| O24 distributed/sharded inference | Open | Implementation; actual multi-GPU qualification deferred |
+| O24 distributed/sharded inference | Actual two-rank local CPU vLLM tensor sharding available | Released fitting/acceptance, capacity/latency; pipeline/multi-node/device implementation and multi-GPU qualification |
 | O25 prefill scheduling | Resumable CPU prefix/question scheduling available | Released labeled qualification and latency; tensor/device scheduling open |
 | O26 MLX | Skipped by user | Apple work deferred |
 | O27 browser WASM/WebGPU | Separate CPU WASM F1 integrated-head SDK, packaging and fresh labeled gates available | Released exports/calibration, other families and browser scheduling; WebGPU deferred |
 
 ## Implemented increments
+
+### Actual local CPU tensor sharding
+
+O24 now uses vLLM's pinned two-process CPU tensor-parallel executor for Kev.
+Loaded MLP dimensions prove shard ownership; normalized full hidden states
+feed replicated FP32 pointer projections and unchanged core calibration.
+Every rank must report exactly one complete native forward per group.
+Actual rank layout, thread/runtime/library identities and configured rank count
+bind fresh qualification. Thread and KV options are per rank with an explicit
+total thread bound. Graceful native shutdown and owned-group failure cleanup
+cover spawned workers. No default runtime dependency is enabled.
+
+Independent frozen PyTorch probabilities/argmax and single-rank agreement use
+the existing fixed 1e-3 bound, while native batch parity within the two-rank
+profile uses the unchanged 1e-4 gate. CLI CPU processes exercise Pending raw
+capture, complete synthetic labeled qualification, receipts, HTTP serving and
+refusal paths. Synthetic labels cannot release Kev. Rank counts are separate
+arithmetic profiles requiring independent fitting/held-out gates; one-rank
+acceptance never authorizes another. More ranks, other families, pipeline,
+multi-node/device execution and released capacity/performance remain open.
+Actual GPU checks are deferred. [Operation and bounds](vllm.md) and
+[retained CPU evidence](verification/vllm-cpu-sharding-20261008/README.md).
 
 ### Actual CPU vLLM raw pointer pooling
 
