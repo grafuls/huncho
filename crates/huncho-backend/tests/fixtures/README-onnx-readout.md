@@ -23,3 +23,10 @@ dependency is added to Cargo or serving.
 Gather fixture; changing graph metadata alone does not make arbitrary exported
 encoders batch correctly. The existing mock graph already declares a dynamic
 batch and supplies the end-to-end batching probability fixtures.
+
+`tiny_encoder_external.onnx` and `tiny_encoder_external.weights` contain the
+same deterministic 16 x 8 embedding in external raw FP32 storage. Regenerate
+both new files with `python scripts/generate_onnx_external_fixture.py` after
+removing the old fixture pair. The generator refuses existing outputs. CPU
+shared-initializer tests compare embedded and external graph paths and replay
+independently owned sessions after the original files change.

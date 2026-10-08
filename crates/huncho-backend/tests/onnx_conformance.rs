@@ -190,3 +190,59 @@ fn native_onnx_batches_qualify_per_request_and_cross_request_work() {
         per_request.work.processed_tokens
     );
 }
+
+#[cfg(feature = "onnx-shared")]
+#[test]
+fn actual_shared_cpu_contexts_pass_unchanged_probability_goldens_concurrently() {
+    let manifest = ModelManifest::load("../../examples/mock-model/huncho-model.json").unwrap();
+    let suite = conformance::load_suite("../../examples/mock-model/golden.json").unwrap();
+    let primary = Engine::new(
+        manifest.clone(),
+        Box::new(
+            OnnxBackend::load_with_options(
+                "../../examples/mock-model/mock-model.onnx",
+                manifest.backbone.hidden_size,
+                manifest.backbone.max_context,
+                "fp32",
+                OnnxOptions {
+                    shared_initializers: true,
+                    intra_threads: 1,
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+        ),
+        Box::new(SimpleTokenizer::new(32768)),
+        HeadParams::default(),
+        BackendId::Onnx,
+        "fp32",
+    )
+    .unwrap();
+    let contexts = vec![
+        primary.replica().unwrap(),
+        primary.replica().unwrap(),
+        primary,
+    ];
+    std::thread::scope(|scope| {
+        let jobs: Vec<_> = contexts
+            .iter()
+            .map(|engine| {
+                scope.spawn(|| {
+                    let report =
+                        conformance::run_suite(engine, &suite, &Default::default()).unwrap();
+                    assert!(report.passed);
+                    assert_eq!(report.max_prob_delta, 0.);
+                    assert_eq!(report.argmax_agreement, 1.);
+                    assert_eq!(
+                        report.execution_metadata["onnx_initializer_residency"],
+                        "immutable-cpu-v1"
+                    );
+                    assert!(report.work.forward_calls > 0);
+                })
+            })
+            .collect();
+        for job in jobs {
+            job.join().unwrap();
+        }
+    });
+}

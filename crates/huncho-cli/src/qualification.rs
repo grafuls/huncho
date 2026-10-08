@@ -278,6 +278,7 @@ impl ExecutionIdentity {
             "HUNCHO_ONNX_THREADS",
             "HUNCHO_LLAMA_THREADS",
             "HUNCHO_ONNX_NATIVE_BATCH",
+            "HUNCHO_ONNX_SHARED_INITIALIZERS",
             "HUNCHO_CPU_DELTA_RULE",
             "HUNCHO_CPU_CAUSAL_CONV",
             "HUNCHO_CPU_FUSED_GATE",

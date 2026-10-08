@@ -675,8 +675,9 @@ cargo test --release -p huncho-backend --features candle --lib \
 
 `--replicas N` leases one independently locked context per complete model job,
 with a maximum of eight. Native CPU ModernBERT/Laya, Qwen F2/F3, packed CPU Kev,
-Clef/F5 and the offline mock support it. ONNX, GPU contexts and unsupported
-backends fail explicitly when more than one replica is requested. The default
+Clef/F5, CPU llama.cpp, optional shared-initializer ONNX and the offline mock
+support it. Ordinary ONNX loads, GPU contexts and unsupported backends fail
+explicitly when more than one replica is requested. The default
 remains one. CLI cross-request collation cannot be combined with replicas;
 per-request native batches, prefix reuse and bounded preprocessing can be used
 when separately qualified.
@@ -721,6 +722,54 @@ exact prompt/result caches remain shared. Changing N while keeping a fixed
 host thread budget can expose oversubscription. This is a warm closed-loop
 engine benchmark, with no HTTP admission, idle-context dispatch, CPU affinity
 management, peak-RSS measurement or calibration approval.
+
+## Isolated CPU ONNX sessions with shared initializers
+
+Build with `--features onnx-shared` and set
+`HUNCHO_ONNX_SHARED_INITIALIZERS=1` (default off). This opt-in loader captures
+the original graph and dense initializer bytes once, injects preallocated
+CPU tensors with ORT's `AddInitializer`, and shares its prepack container.
+`--replicas 2..8` creates separate real ORT sessions, thread pools and output
+buffers. Session creation is serialized for prepacking; inference has no shared
+session mutex. The primary can be dropped without invalidating other contexts.
+Later replica construction uses the immutable snapshot rather than rereading
+source files.
+
+The supported profile is a flat graph with FP32, FP64, INT32, INT64 and BOOL
+dense initializers. Little-endian raw and typed repeated data are supported.
+External initializer files must stay inside the graph directory; offset/length,
+dimensions, payload counts and unique names are validated. External tensors are
+also supplied through `AddExternalInitializers` to replace file references before
+graph validation; that ORT step copies data into the graph. Subgraphs, local
+functions, sparse/segmented initializers, external tensor attributes, other
+dtypes and GPU providers fail explicitly. The ordinary loader remains available
+for graphs outside this profile.
+
+`onnx_initializer_residency=immutable-cpu-v1` and
+`onnx_model_snapshot_sha256` bind the execution to original graph bytes and full
+selected external files. `onnx_shared_initializer_bytes` describes tensor payload,
+excluding retained graph bytes, temporary external copies, optimized graph
+constants, packed weights, thread pools, activations and metadata. ORT can still
+duplicate transformed constants and allocate per-session state. This is not a
+peak-RSS bound or a promise that every operator shares its transformed weights.
+Snapshotting inline graphs adds retained graph storage and startup copying/hash
+work; choose replica counts using real workload/RSS measurements.
+
+Serving requires fresh complete observed-label conformance at the unchanged
+thresholds, concurrently on every actual context, even for fitted source
+packages. Receipts include the flag and snapshot identity. CPU deterministic
+fixtures pass raw/probability comparisons, selected-row/batch isolation and
+concurrent execution after source mutation and primary drop. Those fixtures do
+not qualify a released Laya graph or establish throughput improvements. The
+new parser/hash dependencies are optional; the default build is unchanged.
+
+```sh
+HUNCHO_ONNX_SHARED_INITIALIZERS=1 HUNCHO_ONNX_THREADS=1 \
+  huncho bench --model /path/to/onnx-package --replicas 2 --concurrency 2 --json
+HUNCHO_ONNX_SHARED_INITIALIZERS=1 HUNCHO_ONNX_THREADS=1 \
+  huncho serve --model /path/to/onnx-package --replicas 2 \
+  --qualification-golden 'REGISTERED_MODEL_NAME=/path/to/pinned-labeled-golden.json'
+```
 
 ## Immutable CPU base residency across adapters
 

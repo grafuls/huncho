@@ -875,3 +875,25 @@ temperature refit, threshold change, golden replacement or new GPU execution
 is made. [Reports, identities and reproducible analysis](verification/kev-cpu-heldout-20261008/summary.json)
 retain the rejection without corpus text. Cross-precision acceptance and
 full-profile paired CPU qualification remain open.
+
+## CPU ONNX replica sessions (2026-10-08)
+
+O14 now supports optional independent CPU ORT sessions under `onnx-shared` and
+`HUNCHO_ONNX_SHARED_INITIALIZERS=1`. Dense initializers use managed preallocated
+CPU storage and one shared prepack container; every session owns its mutable
+execution/output buffers. Source graph and external values are captured once
+and hashed. Replicas use that immutable snapshot, including after source file
+mutation or primary drop. External graph replacement temporarily copies data
+inside ORT; transformed graph constants and per-session allocations can still
+duplicate storage. No total-weight or peak-RSS reduction is assumed.
+
+The opt-in profile validates flat supported FP32/FP64/INT32/INT64/BOOL graphs,
+external ranges and directory bounds, unique names, dimensions and byte counts.
+Unsupported graph/storage kinds and GPU providers fail explicitly; ordinary
+ONNX loading remains unchanged. Fresh complete labeled gates apply to every
+actual serving context, even with fitted source calibration. CPU fixtures prove
+raw bits, unchanged probability goldens, row/batch isolation and concurrent
+sessions; CLI checks exercise per-context benchmark work and refuse unlabeled
+serving. Released Laya graph calibration, controlled pool throughput/RSS and
+GPU replicas/device I/O remain open. See [operation and limits](operations.md#isolated-cpu-onnx-sessions-with-shared-initializers).
+No Apple or actual GPU checks were performed.

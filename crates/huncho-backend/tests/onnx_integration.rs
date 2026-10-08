@@ -217,6 +217,10 @@ fn disabled_or_oversized_binding_retains_no_output_storage() {
 
 #[test]
 fn provider_and_thread_configuration_validate_without_gpu_probes() {
+    #[cfg(not(feature = "onnx-shared"))]
+    assert!(OnnxBackend::load_with_options("absent.onnx", 8, 512, "fp32", OnnxOptions {
+        shared_initializers: true, ..Default::default()
+    }).err().unwrap().to_string().contains("onnx-shared"));
     assert_eq!(
         OnnxExecutionProvider::parse("CPU").unwrap(),
         OnnxExecutionProvider::Cpu

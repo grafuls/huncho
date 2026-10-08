@@ -35,6 +35,8 @@ pub mod mock;
 pub mod null;
 #[cfg(feature = "onnx")]
 pub mod onnx;
+#[cfg(feature = "onnx-shared")]
+mod onnx_shared;
 #[cfg(feature = "candle")]
 pub mod qwen3_5;
 #[cfg(feature = "shared-base")]

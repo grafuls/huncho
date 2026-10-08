@@ -36,6 +36,8 @@ pub enum OnnxError {
 /// An ONNX Runtime backend.
 pub struct OnnxBackend {
     session: Session,
+    #[cfg(feature = "onnx-shared")]
+    source: SessionSource,
     /// Input name for the token ids.
     input_ids_name: String,
     /// Optional input name for an attention mask.
@@ -70,6 +72,16 @@ pub struct OnnxOptions {
     /// Opt into native equal-length tensor batches on a validated dynamic graph.
     /// Compact readout graphs use a different contract and cannot enable this.
     pub native_batch: bool,
+    /// Snapshot a supported flat CPU graph and share initializer/prepack storage
+    /// across independently owned sessions. Requires `onnx-shared`; default off.
+    pub shared_initializers: bool,
+}
+
+#[derive(Clone)]
+enum SessionSource {
+    File(std::path::PathBuf),
+    #[cfg(feature = "onnx-shared")]
+    Shared(std::sync::Arc<crate::onnx_shared::SharedSource>),
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -147,6 +159,37 @@ impl OnnxBackend {
             }
             _ => {}
         }
+        if options.shared_initializers && options.execution_provider != OnnxExecutionProvider::Cpu {
+            return Err(Error::Unsupported(
+                "shared ONNX initializers support CPU only".into(),
+            ));
+        }
+        let source = if options.shared_initializers {
+            #[cfg(feature = "onnx-shared")]
+            {
+                SessionSource::Shared(std::sync::Arc::new(crate::onnx_shared::SharedSource::load(
+                    path.as_ref(),
+                )?))
+            }
+            #[cfg(not(feature = "onnx-shared"))]
+            {
+                return Err(Error::Unsupported(
+                    "shared ONNX initializers require onnx-shared".into(),
+                ));
+            }
+        } else {
+            SessionSource::File(path.as_ref().to_path_buf())
+        };
+        Self::load_source(source, hidden_size, max_context, dtype.into(), options)
+    }
+
+    fn load_source(
+        source: SessionSource,
+        hidden_size: usize,
+        max_context: usize,
+        dtype: String,
+        options: OnnxOptions,
+    ) -> Result<Self> {
         let mut builder = Session::builder()
             .map_err(|e| Error::Backend(OnnxError::Init(e.to_string()).to_string()))?
             .with_no_environment_execution_providers()
@@ -172,9 +215,35 @@ impl OnnxBackend {
                 .with_disable_cpu_fallback()
                 .map_err(|e| Error::Backend(OnnxError::Init(e.to_string()).to_string()))?;
         }
-        let session = builder
-            .commit_from_file(path.as_ref())
-            .map_err(|e| Error::Backend(OnnxError::Init(e.to_string()).to_string()))?;
+        let session = match &source {
+            SessionSource::File(path) => builder.commit_from_file(path),
+            #[cfg(feature = "onnx-shared")]
+            SessionSource::Shared(shared) => {
+                // Serialize session creation/prepacking only. Inference has no
+                // shared session lock; every context owns its session/buffers.
+                let _guard = shared
+                    .creation
+                    .lock()
+                    .map_err(|_| Error::Backend("ONNX session creation lock poisoned".into()))?;
+                for (name, value) in &shared.initializers {
+                    if shared.external_names.contains(name) {
+                        builder = builder
+                            .with_external_initializer(name, value.clone())
+                            .map_err(|e| {
+                                Error::Backend(OnnxError::Init(e.to_string()).to_string())
+                            })?;
+                    }
+                    builder = builder
+                        .with_initializer(name, value.clone())
+                        .map_err(|e| Error::Backend(OnnxError::Init(e.to_string()).to_string()))?;
+                }
+                builder = builder
+                    .with_prepacked_weights(&shared.prepacked)
+                    .map_err(|e| Error::Backend(OnnxError::Init(e.to_string()).to_string()))?;
+                builder.commit_from_memory(&shared.model)
+            }
+        }
+        .map_err(|e| Error::Backend(OnnxError::Init(e.to_string()).to_string()))?;
 
         let input_names = session
             .inputs()
@@ -288,6 +357,8 @@ impl OnnxBackend {
 
         Ok(OnnxBackend {
             session,
+            #[cfg(feature = "onnx-shared")]
+            source,
             input_ids_name,
             mask_name,
             input_names,
@@ -527,6 +598,22 @@ impl OnnxBackend {
 }
 
 impl Backend for OnnxBackend {
+    fn replica(&self) -> Result<Box<dyn Backend>> {
+        #[cfg(feature = "onnx-shared")]
+        if matches!(&self.source, SessionSource::Shared(_)) {
+            return Ok(Box::new(Self::load_source(
+                self.source.clone(),
+                self.hidden_size,
+                self.max_context,
+                self.dtype.clone(),
+                self.options.clone(),
+            )?));
+        }
+        Err(Error::Unsupported(
+            "ONNX CPU replicas require shared-initializer loading (onnx-shared)".into(),
+        ))
+    }
+
     fn id(&self) -> BackendId {
         self.id
     }
@@ -545,6 +632,18 @@ impl Backend for OnnxBackend {
                     OnnxExecutionProvider::Cuda { device } => format!("GPU (CUDA device {device})"),
                 };
                 let mut extra = BTreeMap::from([("device".into(), device)]);
+                #[cfg(feature = "onnx-shared")]
+                if let SessionSource::Shared(shared) = &self.source {
+                    extra.insert(
+                        "onnx_initializer_residency".into(),
+                        "immutable-cpu-v1".into(),
+                    );
+                    extra.insert(
+                        "onnx_shared_initializer_bytes".into(),
+                        shared.bytes.to_string(),
+                    );
+                    extra.insert("onnx_model_snapshot_sha256".into(), shared.sha256.clone());
+                }
                 if matches!(
                     self.options.execution_provider,
                     OnnxExecutionProvider::Cuda { .. }

@@ -30,6 +30,7 @@ sha2 = { version = "0.10.9", optional = true }
 [features]
 default = []
 onnx = ["huncho-backend/onnx"]
+onnx-shared = ["onnx", "huncho-backend/onnx-shared"]
 onnx-cuda = ["onnx", "huncho-backend/onnx-cuda"]
 candle = ["huncho-backend/candle", "huncho-hub?/candle"]
 hf = ["dep:huncho-hub"]
