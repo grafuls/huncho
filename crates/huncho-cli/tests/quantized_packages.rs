@@ -137,7 +137,9 @@ fn cpu_conversion_is_durable_no_overwrite_and_requires_exact_refit_and_heldout_g
         let fitting = temp.path().join(format!("{dtype}-fitting.jsonl"));
         let record = json!({"id":"fitting-only", "request":reference["cases"][0]["request"],
             "targets":{"team":"returns", "urgent":"yes", "priority":"2"}});
-        std::fs::write(&fitting, format!("{}\n", record)).unwrap();
+        let mut next = record.clone();
+        next["id"] = json!("second-fitting-record");
+        std::fs::write(&fitting, format!("{}\n{}\n", record, next)).unwrap();
         let captured = temp.path().join(format!("{dtype}-captured"));
         let collected = command(
             &[
@@ -160,14 +162,25 @@ fn cpu_conversion_is_durable_no_overwrite_and_requires_exact_refit_and_heldout_g
         );
         let audit: Value = serde_json::from_slice(&collected.stdout).unwrap();
         assert_eq!(audit["qualified"], false);
-        assert_eq!(audit["work"]["forward_calls"], 3);
+        assert_eq!(audit["questions"], 6);
+        assert_eq!(audit["work"]["forward_calls"], 6);
+        let tokens: usize = reference["cases"][0]["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["tokens"].as_array().unwrap().len())
+            .sum();
+        assert_eq!(audit["work"]["processed_tokens"], tokens * 2);
         assert_eq!(audit["work"]["prefill_calls"], 0);
         assert_eq!(audit["work"]["batch_calls"], 0);
         assert!(!captured.join("golden.json").exists());
         let fit: Value =
             serde_json::from_slice(&std::fs::read(captured.join("fit.json")).unwrap()).unwrap();
-        assert_eq!(fit["targets"], json!([1, 1, 2]));
-        assert_eq!(fit["qtypes"], json!(["choice", "noul", "score"]));
+        assert_eq!(fit["targets"], json!([1, 1, 2, 1, 1, 2]));
+        assert_eq!(
+            fit["qtypes"],
+            json!(["choice", "noul", "score", "choice", "noul", "score"])
+        );
         let dry_run = command(
             &[
                 "calibrate",

@@ -133,7 +133,11 @@ pub fn run(args: CaptureArgs) -> anyhow::Result<()> {
     let (mut rows, mut targets, mut qtypes) = (Vec::new(), Vec::new(), Vec::new());
     let mut work = EvalStats::default();
     for record in records {
-        let response = engine.eval_with_stats(&record.request, &options, &mut work)?;
+        // Evaluation resets its per-request stats; retain all fitting work,
+        // rather than letting each record overwrite the preceding counters.
+        let mut record_work = EvalStats::default();
+        let response = engine.eval_with_stats(&record.request, &options, &mut record_work)?;
+        work.accumulate(&record_work);
         let logits = response
             .extensions
             .and_then(|e| e.raw_logits)

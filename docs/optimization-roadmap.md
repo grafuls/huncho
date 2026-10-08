@@ -675,3 +675,16 @@ These cases have no observed outcomes and remain `qualified=false`. Elapsed
 times include loads, warm-up and paired work while other CPU jobs run; they are
 not an isolated speed comparison, labeled acceptance or replica/chunk profile
 qualification. Separate held-out CPU and packed fitting jobs remain active.
+
+
+## Complete fitting-work accounting (2026-10-08)
+
+The full-model CPU pilot exposed that offline `capture-logits` passed its
+aggregate counters into an evaluator that resets them for every request. The
+final fitting audit therefore described only the last record's work. Collection
+now accumulates a fresh per-record `EvalStats`; logits, targets, question order,
+input identity and temperature behavior are unchanged. The CLI process test
+uses two distinct record IDs, three typed questions per record, both packed
+schemes and unchanged fixture token rows to require all six forwards and every
+submitted token position. Old in-flight fitting binaries retain their original
+identity; their partial work counters cannot support aggregate speed claims.

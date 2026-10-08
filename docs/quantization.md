@@ -108,3 +108,11 @@ probabilities at three temperatures for both Q8_0 and Q4_0. The production dense
 map contains no projection weights; schema/row/original-width checks apply
 before execution. Conversion still requires the full merged FP32 backbone;
 loading-time peak RSS and released-model measurements remain outstanding.
+
+
+Fitting work counters accumulate across all input records. Binaries through
+`aeec2c3` reported only the final record's counters because evaluation resets
+per-request statistics. Their row arrays, targets and hashes still cover the
+complete collection, but those work counters cannot support an aggregate
+performance claim. Interrupted collections still supply no completed audit or
+qualification.
