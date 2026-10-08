@@ -205,7 +205,16 @@ pub fn engine_from_manifest(
     backend_id: BackendId,
     dtype: Option<&str>,
 ) -> Result<Engine> {
-    let manifest = ModelManifest::load(path.as_ref())?;
+    engine_from_manifest_observed(path.as_ref(), backend_id, dtype, |_, _, _, _| Ok(()))
+}
+
+fn engine_from_manifest_observed(
+    path: &Path,
+    backend_id: BackendId,
+    dtype: Option<&str>,
+    observer: impl FnOnce(&ModelManifest, BackendId, &str, &Path) -> Result<()>,
+) -> Result<Engine> {
+    let manifest = ModelManifest::load(path)?;
     backend_id.require_available(&available_backends())?;
     // F3 (Qwen3.5+LoRA) backbones are large (9B+); default them to fp16 so a
     // plain `serve --backend candle` does not try to materialize a multi-GB
@@ -242,9 +251,10 @@ pub fn engine_from_manifest(
 
     // Artifacts and the tokenizer are declared relative to the manifest's
     // directory, not the manifest file itself.
-    let dir = path.as_ref().parent()
+    let dir = path.parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
+    observer(&manifest, backend_id, &dtype, dir)?;
     // The native Clef backend owns tokenization of the complete schema.
     let tokenizer: Box<dyn Tokenizer> = if backend_id == BackendId::Clef {
         Box::new(SimpleTokenizer::new(32768))
@@ -377,8 +387,8 @@ fn fp32_attention_from_env() -> Result<bool> {
 /// same cache, so we walk up to the cache root and rebuild the base path from
 /// `backbone.source`. Falls back to `adapter_dir` when the layout does not match
 /// the HF cache (e.g. a locally-authored manifest).
-#[cfg(feature = "candle")]
-fn adapter_base_dir(manifest: &ModelManifest, adapter_dir: &Path) -> PathBuf {
+#[cfg(any(feature = "candle", feature = "qualification"))]
+pub(crate) fn adapter_base_dir(manifest: &ModelManifest, adapter_dir: &Path) -> PathBuf {
     let BackboneSource::Hf { repo, revision } = &manifest.backbone.source else {
         return adapter_dir.to_path_buf();
     };
@@ -452,6 +462,23 @@ pub fn engine_from_resolved_manifest(
             engine_from_manifest(manifest_path, backend_id, dtype)
         }
     }
+}
+
+/// Optional qualification tooling observes selected artifacts before loading.
+/// Normal loads do not hash weights or add any startup work.
+#[cfg(feature = "qualification")]
+pub(crate) fn engine_from_resolved_manifest_observed(
+    manifest_path: &Path,
+    backend: BackendChoice,
+    dtype: Option<&str>,
+    observer: impl FnOnce(&ModelManifest, BackendId, &str, &Path) -> Result<()>,
+) -> Result<Engine> {
+    let backend_id = match backend {
+        BackendChoice::Mock => return Err(Error::Unsupported("mock execution cannot produce a real-artifact qualification record".into())),
+        BackendChoice::Explicit(id) => id,
+        BackendChoice::Auto => ModelManifest::load(manifest_path)?.select_backend(&available_backends(), dtype)?,
+    };
+    engine_from_manifest_observed(manifest_path, backend_id, dtype, observer)
 }
 
 /// Resolve a model reference (local path or `owner/repo`) to a local package

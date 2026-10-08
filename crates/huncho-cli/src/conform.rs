@@ -53,6 +53,12 @@ pub struct ConformArgs {
     #[arg(long, default_value_t = false)]
     pub json: bool,
 
+    /// Persist an execution-bound audit receipt (requires `qualification`).
+    /// Refuses to overwrite an existing file; never replaces fresh serving gates.
+    #[cfg(feature = "qualification")]
+    #[arg(long)]
+    pub write_qualification: Option<String>,
+
     /// Check the legacy F3 readout against the same golden suite.
     #[arg(long, default_value_t = false)]
     pub reference_readout: bool,
@@ -79,11 +85,24 @@ pub struct ConformArgs {
 }
 
 pub fn run(args: ConformArgs) -> anyhow::Result<()> {
+    #[cfg(feature = "qualification")]
+    if let Some(path) = &args.write_qualification {
+        anyhow::ensure!(
+            !Path::new(path).exists(),
+            "qualification output already exists"
+        );
+        anyhow::ensure!(
+            args.model.is_some() || args.manifest.is_some(),
+            "qualification records require a real manifest/model"
+        );
+    }
     let backend = BackendChoice::parse(&args.backend)?;
     let dtype = args.dtype.as_deref();
 
     let engine: Engine;
     let golden_path: String;
+    #[cfg(feature = "qualification")]
+    let mut inputs = None;
 
     if let Some(model) = &args.model {
         let manifest_path = resolve_model(
@@ -111,13 +130,25 @@ pub fn run(args: ConformArgs) -> anyhow::Result<()> {
                     })?
             }
         };
-        engine = engine_from_resolved_manifest(&manifest_path, backend, dtype)?;
+        engine = load_engine(
+            &manifest_path,
+            backend,
+            dtype,
+            #[cfg(feature = "qualification")]
+            (&args.write_qualification, &mut inputs),
+        )?;
     } else if let Some(path) = &args.manifest {
         golden_path = args
             .golden
             .clone()
             .ok_or_else(|| anyhow::anyhow!("`--golden` is required when using `--manifest`"))?;
-        engine = engine_from_resolved_manifest(std::path::Path::new(path), backend, dtype)?;
+        engine = load_engine(
+            Path::new(path),
+            backend,
+            dtype,
+            #[cfg(feature = "qualification")]
+            (&args.write_qualification, &mut inputs),
+        )?;
     } else {
         golden_path = args.golden.clone().ok_or_else(|| {
             anyhow::anyhow!("`--golden` is required when no manifest/model is given")
@@ -125,6 +156,12 @@ pub fn run(args: ConformArgs) -> anyhow::Result<()> {
         engine = mock_engine(&args.mock_model, Family::F1, BackendId::Onnx, "fp32", 1.0)?;
     }
 
+    #[cfg(feature = "qualification")]
+    let golden_identity = args
+        .write_qualification
+        .as_ref()
+        .map(|_| crate::qualification::hash_file(Path::new(&golden_path)))
+        .transpose()?;
     let suite = conformance::load_suite(&golden_path)?;
     let thresholds = ConformanceThresholds {
         max_prob_delta: args.max_delta.unwrap_or(1e-3),
@@ -150,6 +187,26 @@ pub fn run(args: ConformArgs) -> anyhow::Result<()> {
         conformance::run_suite_with_options(&engine, &suite, &thresholds, &options)?
     };
 
+    #[cfg(feature = "qualification")]
+    if let Some(path) = &args.write_qualification {
+        anyhow::ensure!(
+            golden_identity.as_ref()
+                == Some(&crate::qualification::hash_file(Path::new(&golden_path))?),
+            "golden bytes changed during qualification"
+        );
+        let record = crate::qualification::QualificationRecord::create(
+            &engine,
+            inputs
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("missing artifact capture"))?,
+            &options,
+            &suite,
+            Path::new(&golden_path),
+            report.clone(),
+        )?;
+        record.write_new(Path::new(path))?;
+    }
+
     if args.json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
@@ -160,6 +217,34 @@ pub fn run(args: ConformArgs) -> anyhow::Result<()> {
         std::process::exit(1);
     }
     Ok(())
+}
+
+fn load_engine(
+    path: &Path,
+    backend: BackendChoice,
+    dtype: Option<&str>,
+    #[cfg(feature = "qualification")] evidence: (
+        &Option<String>,
+        &mut Option<crate::qualification::InputSnapshot>,
+    ),
+) -> huncho_core::error::Result<Engine> {
+    #[cfg(feature = "qualification")]
+    if evidence.0.is_some() {
+        let engine = crate::load::engine_from_resolved_manifest_observed(
+            path,
+            backend,
+            dtype,
+            |manifest, backend, dtype, dir| {
+                *evidence.1 = Some(crate::qualification::InputSnapshot::capture(
+                    path, manifest, backend, dtype, dir,
+                )?);
+                Ok(())
+            },
+        )?;
+        evidence.1.as_ref().unwrap().recheck()?;
+        return Ok(engine);
+    }
+    engine_from_resolved_manifest(path, backend, dtype)
 }
 
 fn print_report(report: &ConformanceReport) {

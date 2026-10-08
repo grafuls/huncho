@@ -5,6 +5,8 @@ mod calibrate;
 mod conform;
 mod convert;
 mod load;
+#[cfg(feature = "qualification")]
+mod qualification;
 mod serve;
 
 use clap::{Parser, Subcommand};

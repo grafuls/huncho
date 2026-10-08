@@ -505,3 +505,22 @@ questions share tensors without padding; F5 remains whole-request execution.
 reach every affected caller; disconnected queued callers submit no work, while
 running jobs retain admission until completion. CPU fixture success does not
 qualify full released checkpoints or GPU paths.
+
+### Execution receipts
+
+Build with optional `qualification` to retain a content-addressed conformance
+receipt using `huncho conform --write-qualification PATH ...`. The output must
+be new. `huncho serve --qualification-record MODEL=PATH` verifies that receipt
+against loaded artifact bytes, executable/runtime identity, calibration,
+execution options and exact golden bytes. A matching `--qualification-golden`
+is still required, and serving performs fresh conformance before opening the
+listener. Keep the executable, thread/affinity configuration and inference
+options identical. Store ONNX receipts outside the graph directory tree, which
+is included conservatively to cover external tensor data.
+
+Receipts distinguish numerical evidence from observed-outcome checks. They do
+not establish fitting/evaluation provenance or universal calibration, and do
+not provide cached authorization for serving. Linux runtime/library identity is
+more complete than on other platforms; GPU hardware is not independently
+inventoried. Weight hashing adds startup I/O only when this opt-in workflow is
+used. The default build and normal model loads retain their existing behavior.

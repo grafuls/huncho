@@ -206,3 +206,62 @@ huncho serve --model /path/to/package --batch-max-requests 8 \
 Padding, mixed-length tensor masks, persistent cached-branch collation and chunk
 admission remain separate increments. This implements decision-forward dynamic
 batching; there is no generation/decode scheduler.
+
+## Persisted execution evidence (2026-10-08)
+
+The optional CLI `qualification` feature adds `conform --write-qualification
+PATH` and `serve --qualification-record MODEL=PATH`. Normal loads and the
+lightweight default build do not hash model weights or acquire the optional
+SHA-256 dependency. Records are immutable output files: creation refuses an
+existing path, including a failed or diagnostic record.
+
+The recorder observes selected input bytes before loading and rechecks them
+after loading/conformance. Native Qwen captures every base shard plus its separate
+adapter, config, trained head and tokenizer. Clef captures base and joint-head
+inputs; ModernBERT captures the selected weights/config/tokenizer. ONNX captures
+its graph directory tree conservatively to cover external tensor data. Store
+ONNX records outside that tree. Directory symlinks in that tree are rejected;
+ordinary Hub file symlinks are hashed by content. Artifacts added/removed between
+snapshots or changed bytes invalidate the record.
+
+Execution identity includes the running executable, resolved manifest and
+calibration, actual backend/dtype/device/kernel metadata, inference options and
+collation size. Linux also records executable library mappings with matching
+file inodes, CPU model/features, kernel, affinity, available parallelism and an
+allowlist of thread/device/runtime environment settings. Request text, fitting
+rows and corpus text are not copied into the receipt. Unchanged F1/F2/F4/F5
+reference-readout flags and response extension settings are normalized because
+they do not alter arithmetic. Numerical-only evidence is explicitly distinct
+from complete observed-outcome gates; numerical passes cannot be relabeled as
+outcome acceptance. Strict metric limits are checked independently of a stored
+report's `passed` field.
+
+Serving with a record still requires a pinned golden binding and executes fresh
+conformance before listening. It then verifies current artifacts, executable,
+runtime, options, golden bytes and required outcome coverage against the record.
+A record never bypasses inference gates. Refit or changed-kernel serving retains
+its labeled-suite requirement. This is persisted, execution-bound audit evidence,
+not a signed release certificate or cached serving authorization. It cannot
+prove fitting/evaluation separation, training overlap, or universal calibration;
+GPU device hardware is not independently inventoried, and non-Linux runtime
+library identity is incomplete. Those stronger certification requirements remain
+open, with actual GPU checks deferred by the user.
+
+Real CPU tiny-Kev process tests cover receipt creation, matching-record startup,
+refusal to overwrite, changed preparation options, modified golden/config bytes,
+and attempts to substitute numerical-only evidence as an outcome pass. No mock
+backend can emit a real-artifact record. No actual GPU checks were run.
+
+```sh
+cargo build --release --features clef,qualification
+HUNCHO_DEVICE=cpu huncho conform --model /path/to/package --dtype fp32 \
+  --golden /path/to/pinned-golden.json --write-qualification /path/to/receipt.json --json
+HUNCHO_DEVICE=cpu huncho serve --model /path/to/package --dtype fp32 \
+  --qualification-golden 'MODEL_NAME=/path/to/pinned-golden.json' \
+  --qualification-record 'MODEL_NAME=/path/to/receipt.json'
+```
+
+Use the same executable, thread/affinity settings and exact inference options
+for recording and serving. Qualification hashes all selected inputs; its startup
+I/O cost can be substantial for large checkpoints and is excluded from warm
+inference benchmarks.

@@ -107,6 +107,12 @@ pub struct ServeArgs {
     #[arg(long = "qualification-golden")]
     pub qualification_golden: Vec<String>,
 
+    /// Require a matching retained receipt in addition to fresh conformance.
+    /// MODEL=PATH (repeatable); requires the `qualification` build feature.
+    #[cfg(feature = "qualification")]
+    #[arg(long = "qualification-record")]
+    pub qualification_record: Vec<String>,
+
     /// Model cache directory (also used by HF resolution; OPS-04). Also read from `HUNCHO_CACHE_DIR`.
     #[arg(long, env = "HUNCHO_CACHE_DIR")]
     pub cache_dir: Option<String>,
@@ -129,6 +135,8 @@ fn load_models(args: &ServeArgs) -> anyhow::Result<ModelRegistry> {
         "prefix reuse and batching cannot be combined yet"
     );
     let mut registry = ModelRegistry::new();
+    #[cfg(feature = "qualification")]
+    let mut records = RecordBindings::load(&args.qualification_record)?;
 
     if args.mock {
         let names = if args.mock_model.is_empty() {
@@ -151,11 +159,11 @@ fn load_models(args: &ServeArgs) -> anyhow::Result<ModelRegistry> {
 
     for path in &args.manifest {
         tracing::info!("loading model manifest {path}");
-        let engine = engine_from_resolved_manifest(
-            std::path::Path::new(path),
-            backend,
-            args.dtype.as_deref(),
-        )?;
+        let path = std::path::Path::new(path);
+        #[cfg(feature = "qualification")]
+        let engine = records.load_engine(path, backend, args.dtype.as_deref())?;
+        #[cfg(not(feature = "qualification"))]
+        let engine = engine_from_resolved_manifest(path, backend, args.dtype.as_deref())?;
         let name = engine.manifest().name.clone();
         let device = engine.device().to_owned();
         registry.insert(
@@ -178,6 +186,34 @@ fn load_models(args: &ServeArgs) -> anyhow::Result<ModelRegistry> {
         tracing::info!(
             "loading model `{model}` (fetching base weights if needed, then materializing; first load can take a couple of minutes)..."
         );
+        #[cfg(feature = "qualification")]
+        let recorded_path = if records.records.is_empty() {
+            None
+        } else {
+            Some(crate::load::resolve_model(
+                model,
+                backend,
+                args.dtype.as_deref(),
+                args.revision.clone(),
+                args.token.clone(),
+                args.cache_dir.clone(),
+                false,
+            )?)
+        };
+        #[cfg(feature = "qualification")]
+        let engine = if let Some(path) = recorded_path {
+            records.load_engine(&path, backend, args.dtype.as_deref())?
+        } else {
+            engine_from_ref(
+                model,
+                backend,
+                args.dtype.as_deref(),
+                args.revision.clone(),
+                args.token.clone(),
+                args.cache_dir.clone(),
+            )?
+        };
+        #[cfg(not(feature = "qualification"))]
         let engine = engine_from_ref(
             model,
             backend,
@@ -199,7 +235,128 @@ fn load_models(args: &ServeArgs) -> anyhow::Result<ModelRegistry> {
         tracing::warn!("no models registered; /v1/systemone will return 422 for every model");
     }
     qualify_optimizations(&registry, args)?;
+    #[cfg(feature = "qualification")]
+    records.verify(&registry, args)?;
     Ok(registry)
+}
+
+fn evaluation_options(
+    engine: &huncho_core::engine::Engine,
+    args: &ServeArgs,
+) -> huncho_core::engine::EvalOptions {
+    huncho_core::engine::EvalOptions {
+        prefix_cache: args.prefix_cache && engine.supports_prefix_cache(),
+        max_batch_tokens: args.max_batch_tokens.filter(|_| engine.supports_batch()),
+        reference_readout: !args.candidate_readout,
+        prepare_all: (args.max_prepared_per_model > 0
+            || (args.batch_max_requests.is_some() && engine.supports_batch()))
+            && engine.family() != Family::F5,
+        ..Default::default()
+    }
+}
+
+#[cfg(feature = "qualification")]
+struct RecordBindings {
+    records: std::collections::BTreeMap<String, crate::qualification::QualificationRecord>,
+    inputs: std::collections::BTreeMap<String, crate::qualification::InputSnapshot>,
+}
+
+#[cfg(feature = "qualification")]
+impl RecordBindings {
+    fn load(bindings: &[String]) -> anyhow::Result<Self> {
+        let mut records = std::collections::BTreeMap::new();
+        for binding in bindings {
+            let (name, path) = binding
+                .split_once('=')
+                .ok_or_else(|| anyhow::anyhow!("qualification record must be MODEL=PATH"))?;
+            anyhow::ensure!(
+                !name.is_empty() && !path.is_empty(),
+                "qualification record must be MODEL=PATH"
+            );
+            anyhow::ensure!(
+                !records.contains_key(name),
+                "duplicate qualification record for `{name}`"
+            );
+            records.insert(
+                name.into(),
+                crate::qualification::QualificationRecord::load(std::path::Path::new(path))?,
+            );
+        }
+        Ok(Self {
+            records,
+            inputs: Default::default(),
+        })
+    }
+
+    fn load_engine(
+        &mut self,
+        path: &std::path::Path,
+        backend: BackendChoice,
+        dtype: Option<&str>,
+    ) -> huncho_core::error::Result<huncho_core::engine::Engine> {
+        if self.records.is_empty() {
+            return engine_from_resolved_manifest(path, backend, dtype);
+        }
+        crate::load::engine_from_resolved_manifest_observed(
+            path,
+            backend,
+            dtype,
+            |manifest, backend, dtype, dir| {
+                if self.records.contains_key(&manifest.name) {
+                    self.inputs.insert(
+                        manifest.name.clone(),
+                        crate::qualification::InputSnapshot::capture(
+                            path, manifest, backend, dtype, dir,
+                        )?,
+                    );
+                }
+                Ok(())
+            },
+        )
+    }
+
+    fn verify(&self, registry: &ModelRegistry, args: &ServeArgs) -> anyhow::Result<()> {
+        for (name, record) in &self.records {
+            let engine = registry
+                .get(name)
+                .ok_or_else(|| anyhow::anyhow!("qualification model `{name}` is not registered"))?;
+            let inputs = self.inputs.get(name).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "qualification record requires observed real-artifact loading for `{name}`"
+                )
+            })?;
+            let golden = args
+                .qualification_golden
+                .iter()
+                .filter_map(|binding| binding.split_once('='))
+                .find(|(model, _)| *model == name)
+                .map(|(_, path)| path)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "qualification records require fresh --qualification-golden {name}=PATH"
+                    )
+                })?;
+            let require_outcomes = engine.calibration().status == CalibrationStatus::Refit
+                || [
+                    "projection_chunk_rows",
+                    "attention_compute_dtype",
+                    "device_path",
+                ]
+                .iter()
+                .any(|key| engine.execution_metadata().contains_key(*key));
+            record.verify(
+                &engine,
+                inputs,
+                &evaluation_options(&engine, args),
+                std::path::Path::new(golden),
+                args.batch_max_requests
+                    .filter(|_| engine.supports_batch())
+                    .map(usize::from),
+                require_outcomes,
+            )?;
+        }
+        Ok(())
+    }
 }
 
 fn qualify_optimizations(registry: &ModelRegistry, args: &ServeArgs) -> anyhow::Result<()> {
@@ -207,7 +364,6 @@ fn qualify_optimizations(registry: &ModelRegistry, args: &ServeArgs) -> anyhow::
         load_suite, run_suite_with_cross_request_batches, run_suite_with_options,
         ConformanceThresholds,
     };
-    use huncho_core::engine::EvalOptions;
     let mut paths = std::collections::BTreeMap::new();
     for binding in &args.qualification_golden {
         let (name, path) = binding
@@ -241,15 +397,7 @@ fn qualify_optimizations(registry: &ModelRegistry, args: &ServeArgs) -> anyhow::
         ]
         .iter()
         .any(|key| engine.execution_metadata().contains_key(*key));
-        let opts = EvalOptions {
-            prefix_cache: args.prefix_cache && engine.supports_prefix_cache(),
-            max_batch_tokens: args.max_batch_tokens.filter(|_| engine.supports_batch()),
-            reference_readout: !args.candidate_readout,
-            prepare_all: (args.max_prepared_per_model > 0
-                || (args.batch_max_requests.is_some() && engine.supports_batch()))
-                && engine.family() != Family::F5,
-            ..Default::default()
-        };
+        let opts = evaluation_options(engine, args);
         if !opts.prefix_cache
             && opts.max_batch_tokens.is_none()
             && !(args.candidate_readout && engine.family() == Family::F3)
