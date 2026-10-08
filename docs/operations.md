@@ -572,3 +572,23 @@ Both profiles require fresh `--qualification-golden MODEL=PATH` at server startu
 and are included in persisted execution identity. Exact CPU fixture rows and
 unchanged mock probability goldens pass; real Laya exports still require their
 own pinned qualification. These profiles do not refit or enable rejected variants.
+
+### Explicit ONNX provider and thread selection
+
+`HUNCHO_ONNX_EP` defaults to `cpu`; `cuda:N` requires building with the separate
+`onnx-cuda` feature and a compatible ONNX Runtime CUDA distribution and its
+CUDA/cuDNN libraries. This does not enable Candle CUDA. CUDA selection disables
+TF32, fails registration errors, and disables CPU fallback. A graph with
+unsupported CUDA operators is rejected. Session selection excludes inherited
+global ORT execution providers. Actual GPU checks are deferred; this
+path is unqualified for released models. Consult the runtime distribution's
+[CUDA requirements](https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html)
+for its supported library versions.
+
+`HUNCHO_ONNX_THREADS=0..256` controls intra-op threads; zero keeps ORT's automatic
+choice. Positive values use an independent session thread pool; ORT builds with
+OpenMP may instead require `OMP_NUM_THREADS`. Positive values and CUDA selection require a pinned labeled
+`--qualification-golden MODEL=PATH` before HTTP startup, with probability,
+argmax and observed calibration gates. They do not select a new temperature.
+Choose thread counts from measured workload evidence; no universal setting is
+promoted. Both settings are part of optional persisted qualification identity.

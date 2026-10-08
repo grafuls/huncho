@@ -64,6 +64,36 @@ pub struct OnnxOptions {
     /// Retain one exact-shape CPU output allocation, bounded by payload bytes.
     /// Zero disables retention; oversized or unknown-width outputs bypass it.
     pub output_buffer_bytes: usize,
+    pub execution_provider: OnnxExecutionProvider,
+    /// Intra-op threads; zero preserves ORT's automatic choice (maximum 256).
+    pub intra_threads: usize,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum OnnxExecutionProvider {
+    #[default]
+    Cpu,
+    /// Strict CUDA placement: no CPU fallback, TF32 disabled.
+    Cuda { device: i32 },
+}
+
+impl OnnxExecutionProvider {
+    pub fn parse(value: &str) -> Result<Self> {
+        let value = value.trim().to_ascii_lowercase();
+        if value == "cpu" {
+            return Ok(Self::Cpu);
+        }
+        if let Some(device) = value.strip_prefix("cuda:") {
+            if let Ok(device) = device.parse::<i32>() {
+                if device >= 0 {
+                    return Ok(Self::Cuda { device });
+                }
+            }
+        }
+        Err(Error::Request(
+            "ONNX provider must be cpu or cuda:NONNEGATIVE_DEVICE_ID".into(),
+        ))
+    }
 }
 
 impl OnnxBackend {
@@ -90,10 +120,51 @@ impl OnnxBackend {
         dtype: impl Into<String>,
         options: OnnxOptions,
     ) -> Result<OnnxBackend> {
-        let session = Session::builder()
+        if options.intra_threads > 256 {
+            return Err(Error::Request(
+                "ONNX intra-op threads must be from 0 to 256".into(),
+            ));
+        }
+        match options.execution_provider {
+            OnnxExecutionProvider::Cuda { device } if device < 0 => {
+                return Err(Error::Request(
+                    "ONNX CUDA device must be nonnegative".into(),
+                ));
+            }
+            #[cfg(not(feature = "onnx-cuda"))]
+            OnnxExecutionProvider::Cuda { .. } => {
+                return Err(Error::Unsupported(
+                    "ONNX CUDA requires the separate onnx-cuda feature".into(),
+                ));
+            }
+            _ => {}
+        }
+        let mut builder = Session::builder()
+            .map_err(|e| Error::Backend(OnnxError::Init(e.to_string()).to_string()))?
+            .with_no_environment_execution_providers()
             .map_err(|e| Error::Backend(OnnxError::Init(e.to_string()).to_string()))?
             .with_optimization_level(GraphOptimizationLevel::Level3)
-            .map_err(|e| Error::Backend(OnnxError::Init(e.to_string()).to_string()))?
+            .map_err(|e| Error::Backend(OnnxError::Init(e.to_string()).to_string()))?;
+        if options.intra_threads > 0 {
+            builder = builder
+                .with_independent_thread_pool()
+                .map_err(|e| Error::Backend(OnnxError::Init(e.to_string()).to_string()))?
+                .with_intra_threads(options.intra_threads)
+                .map_err(|e| Error::Backend(OnnxError::Init(e.to_string()).to_string()))?;
+        }
+        #[cfg(feature = "onnx-cuda")]
+        if let OnnxExecutionProvider::Cuda { device } = options.execution_provider {
+            builder = builder
+                .with_execution_providers([ort::ep::CUDA::default()
+                    .with_device_id(device)
+                    .with_tf32(false)
+                    .build()
+                    .error_on_failure()])
+                .map_err(|e| Error::Backend(OnnxError::Init(e.to_string()).to_string()))?
+                .with_disable_cpu_fallback()
+                .map_err(|e| Error::Backend(OnnxError::Init(e.to_string()).to_string()))?;
+        }
+        let session = builder
             .commit_from_file(path.as_ref())
             .map_err(|e| Error::Backend(OnnxError::Init(e.to_string()).to_string()))?;
 
@@ -394,9 +465,27 @@ impl Backend for OnnxBackend {
             supports_fork: false,
             supports_lora: false,
             families: self.families.clone(),
-            // This session uses ONNX Runtime's CPU execution provider.
             extra: {
-                let mut extra = BTreeMap::from([("device".into(), "CPU".into())]);
+                let device = match self.options.execution_provider {
+                    OnnxExecutionProvider::Cpu => "CPU".into(),
+                    OnnxExecutionProvider::Cuda { device } => format!("GPU (CUDA device {device})"),
+                };
+                let mut extra = BTreeMap::from([("device".into(), device)]);
+                if matches!(
+                    self.options.execution_provider,
+                    OnnxExecutionProvider::Cuda { .. }
+                ) {
+                    extra.insert(
+                        "onnx_execution_provider".into(),
+                        "cuda-strict-tf32-off-v1".into(),
+                    );
+                }
+                if self.options.intra_threads > 0 {
+                    extra.insert(
+                        "onnx_intra_threads".into(),
+                        self.options.intra_threads.to_string(),
+                    );
+                }
                 if self.options.compact_readout {
                     extra.insert("onnx_readout".into(), "gather-v1".into());
                 }

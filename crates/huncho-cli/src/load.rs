@@ -429,6 +429,17 @@ fn load_onnx(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<dy
             Error::Package(format!("no ONNX artifact for dtype `{dtype}`"))
         })?;
     let onnx_path = dir.join(&artifact.path);
+    let execution_provider = match std::env::var("HUNCHO_ONNX_EP") {
+        Ok(value) => huncho_backend::onnx::OnnxExecutionProvider::parse(&value)?,
+        Err(std::env::VarError::NotPresent) => Default::default(),
+        Err(_) => return Err(Error::Request("invalid HUNCHO_ONNX_EP".into())),
+    };
+    let intra_threads = match std::env::var("HUNCHO_ONNX_THREADS") {
+        Ok(value) => value.parse::<usize>().map_err(|_| Error::Request(
+            "HUNCHO_ONNX_THREADS must be an integer from 0 to 256".into()))?,
+        Err(std::env::VarError::NotPresent) => 0,
+        Err(_) => return Err(Error::Request("invalid HUNCHO_ONNX_THREADS".into())),
+    };
     let output_buffer_bytes = match std::env::var("HUNCHO_ONNX_OUTPUT_BUFFER_BYTES") {
         Ok(value) => value.parse::<usize>().map_err(|_| Error::Request(
             "HUNCHO_ONNX_OUTPUT_BUFFER_BYTES must be a nonnegative integer".into()))?,
@@ -443,6 +454,8 @@ fn load_onnx(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<dy
         huncho_backend::onnx::OnnxOptions {
             compact_readout: bool_env("HUNCHO_ONNX_COMPACT_READOUT")?,
             output_buffer_bytes,
+            execution_provider,
+            intra_threads,
         },
     )
     .map_err(|e| Error::Package(format!("failed to load ONNX backend: {e}")))?;

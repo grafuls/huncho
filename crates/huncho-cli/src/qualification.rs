@@ -258,6 +258,8 @@ impl ExecutionIdentity {
             "HUNCHO_CLEF_VECTOR_HEAD",
             "HUNCHO_ONNX_COMPACT_READOUT",
             "HUNCHO_ONNX_OUTPUT_BUFFER_BYTES",
+            "HUNCHO_ONNX_EP",
+            "HUNCHO_ONNX_THREADS",
             "ORT_DYLIB_PATH",
             "LD_LIBRARY_PATH",
             "LD_PRELOAD",

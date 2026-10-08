@@ -93,6 +93,7 @@ fn graph_side_readout_and_bound_buffer_pass_unchanged_probability_goldens() {
                     OnnxOptions {
                         compact_readout: true,
                         output_buffer_bytes: bytes,
+                        ..Default::default()
                     },
                 )
                 .unwrap(),

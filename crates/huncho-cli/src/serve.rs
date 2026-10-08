@@ -409,6 +409,8 @@ fn qualify_optimizations(registry: &ModelRegistry, args: &ServeArgs) -> anyhow::
             "attention_compute_dtype",
             "device_path",
             "joint_head_execution",
+            "onnx_execution_provider",
+            "onnx_intra_threads",
         ]
         .iter()
         .any(|key| engine.execution_metadata().contains_key(*key));
@@ -766,6 +768,8 @@ mod qualification_tests {
             ("device_path", "modernbert-cuda"),
             ("device_path", "qwen-f3-cuda"),
             ("joint_head_execution", "vectorized-v1"),
+            ("onnx_execution_provider", "cuda-strict-tf32-off-v1"),
+            ("onnx_intra_threads", "4"),
         ] {
             let registry = registry_with_execution_metadata(
                 0.0,

@@ -338,6 +338,7 @@ not automatically unload snapshots created by earlier requests; call
 `Engine::clear_prefix_cache` or unload the engine to release them. No request
 text is retained, but token IDs and model state remain in memory until eviction,
 clear or unload.
+
 ## ONNX readout and allocation increment (2026-10-08)
 
 O08 now includes an explicit F1 graph-side Gather contract and optional bounded
@@ -364,3 +365,22 @@ features into the core host tensor. As documented by
 [ORT I/O binding](https://docs.rs/ort/2.0.0-rc.13/ort/session/struct.IoBinding.html),
 binding alone does not establish an acceleration benefit for CPU-to-GPU-to-CPU
 pipelines; no such benefit is claimed here.
+
+## Explicit ONNX providers and thread profiles (2026-10-08)
+
+O08 now has CPU/default and explicit CUDA selection through
+`HUNCHO_ONNX_EP=cpu|cuda:N`. CUDA requires the separate `onnx-cuda` Cargo feature,
+fails provider registration rather than silently substituting CPU, disables
+TF32, and rejects graphs needing CPU fallback. CPU defaults and the separate
+Candle CUDA feature remain unchanged. This is a strict placement profile; graphs
+using CPU-only operators may be rejected. Outputs still use host feature rows;
+there is no device-resident trained head or full-model CUDA acceptance.
+
+The O03 thread-control portion adds `HUNCHO_ONNX_THREADS=0..256` (zero preserves
+ORT defaults). Positive values and CUDA provider choice are recorded execution
+profiles and require fresh labeled conformance before HTTP serving, even with
+an existing fitted temperature. Receipts also bind these environment settings.
+CPU tests validate parser errors, feature rejection before attempting a CUDA
+load, thread-profile output parity and startup gates. The CUDA path is compiled
+only; actual GPU checks and provider/model qualification remain deferred. No
+latency or cost improvement is inferred from compile and fixture checks.

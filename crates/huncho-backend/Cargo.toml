@@ -23,6 +23,7 @@ zip = { version = "8.6", optional = true, default-features = false }
 [features]
 default = []
 onnx = ["dep:ort"]
+onnx-cuda = ["onnx", "ort/cuda"]
 candle = ["dep:candle", "dep:candle-nn", "dep:candle-transformers", "dep:zip"]
 clef = ["candle", "huncho-core/tokenizers"]
 cuda = ["clef", "candle/cuda", "candle-nn/cuda"]

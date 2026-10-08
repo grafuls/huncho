@@ -8,7 +8,10 @@
 
 #![cfg(feature = "onnx")]
 
-use huncho_backend::{onnx::OnnxOptions, OnnxBackend};
+use huncho_backend::{
+    onnx::{OnnxExecutionProvider, OnnxOptions},
+    OnnxBackend,
+};
 use huncho_core::backend::{Backend, ForwardInput};
 
 fn fixture() -> &'static str {
@@ -141,6 +144,7 @@ fn compact_graph_and_bound_output_reuse_preserve_exact_rows() {
             OnnxOptions {
                 compact_readout,
                 output_buffer_bytes: 128,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -181,6 +185,7 @@ fn compact_graph_and_bound_output_reuse_preserve_exact_rows() {
         OnnxOptions {
             compact_readout: true,
             output_buffer_bytes: 0,
+            ..Default::default()
         }
     )
     .is_err());
@@ -208,4 +213,89 @@ fn disabled_or_oversized_binding_retains_no_output_storage() {
         assert_eq!(backend.retained_output_bytes(), 0);
         assert_eq!(backend.output_buffer_reuses(), 0);
     }
+}
+
+#[test]
+fn provider_and_thread_configuration_validate_without_gpu_probes() {
+    assert_eq!(
+        OnnxExecutionProvider::parse("CPU").unwrap(),
+        OnnxExecutionProvider::Cpu
+    );
+    assert_eq!(
+        OnnxExecutionProvider::parse("cuda:2").unwrap(),
+        OnnxExecutionProvider::Cuda { device: 2 }
+    );
+    for value in [
+        "cuda",
+        "auto",
+        "cuda:-1",
+        "cuda:x",
+        "cuda:2147483648",
+        "metal:0",
+    ] {
+        assert!(OnnxExecutionProvider::parse(value).is_err());
+    }
+    let mut reference = OnnxBackend::load(fixture(), 8, 512, "fp32").unwrap();
+    let expected = reference
+        .forward(ForwardInput::new(vec![3, 10], vec![1, 0]))
+        .unwrap();
+    for threads in [1, 4] {
+        let mut configured = OnnxBackend::load_with_options(
+            fixture(),
+            8,
+            512,
+            "fp32",
+            OnnxOptions {
+                intra_threads: threads,
+                output_buffer_bytes: 128,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let actual = configured
+            .forward(ForwardInput::new(vec![3, 10], vec![1, 0]))
+            .unwrap();
+        assert_eq!(bits(actual.values().data()), bits(expected.values().data()));
+        assert_eq!(
+            configured.capabilities().extra["onnx_intra_threads"],
+            threads.to_string()
+        );
+    }
+    assert!(OnnxBackend::load_with_options(
+        fixture(),
+        8,
+        512,
+        "fp32",
+        OnnxOptions {
+            intra_threads: 257,
+            ..Default::default()
+        }
+    )
+    .is_err());
+    assert!(OnnxBackend::load_with_options(
+        fixture(),
+        8,
+        512,
+        "fp32",
+        OnnxOptions {
+            execution_provider: OnnxExecutionProvider::Cuda { device: -1 },
+            ..Default::default()
+        }
+    )
+    .is_err());
+    #[cfg(not(feature = "onnx-cuda"))]
+    assert!(OnnxBackend::load_with_options(
+        "unused.onnx",
+        8,
+        512,
+        "fp32",
+        OnnxOptions {
+            execution_provider: OnnxExecutionProvider::Cuda { device: 0 },
+            ..Default::default()
+        }
+    )
+    .err()
+    .unwrap()
+    .to_string()
+    .contains("onnx-cuda"));
 }
