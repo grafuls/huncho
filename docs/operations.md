@@ -1,5 +1,14 @@
 # Operations
 
+CPU Kev can opt into fair scheduling between prefix chunks with
+`HUNCHO_PREFILL_CHUNK_TOKENS=64 huncho serve ... --prefix-cache --cooperative-prefill`.
+Supply the same complete labeled `--qualification-golden MODEL=PATH` binding
+used by other native serving profiles. Startup requires actual interleaving of
+split prefixes from distinct requests, external conformance and independent
+parity. One context, no batching and at most 62 queued requests are supported.
+This remains experimental: current released CPU Kev profiles have not passed
+the full held-out gate. [Implementation and limits](optimization-roadmap.md#resumable-cpu-prefill-scheduling-2026-10-08).
+
 ## Build
 
 The default build is dependency-free and works offline (the mock backend is

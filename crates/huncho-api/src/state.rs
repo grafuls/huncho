@@ -1,7 +1,7 @@
 //! Shared application state for the HTTP server.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, Weak};
 
 use huncho_core::engine::Engine;
 use tokio::sync::{RwLock, Semaphore};
@@ -31,6 +31,7 @@ pub struct ModelHandle {
     pub(crate) flights: Arc<RequestFlights>,
     pub(crate) preparation: Option<Arc<Semaphore>>,
     pub(crate) batch: Option<Arc<BatchQueue>>,
+    pub(crate) last_prefill: Arc<Mutex<Option<(Weak<()>, bool)>>>,
 }
 
 impl ModelHandle {
@@ -56,6 +57,7 @@ impl ModelHandle {
             flights: RequestFlights::new(coalesce_bytes),
             preparation,
             batch: batch.map(|(rows, wait, tokens)| BatchQueue::new(capacity, rows, wait, tokens)),
+            last_prefill: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -200,7 +202,11 @@ impl AppState {
         registry.configure_queue(
             config.max_queued_per_model,
             config.coalesce_bytes,
-            config.max_prepared_per_model,
+            if config.cooperative_prefill {
+                config.max_prepared_per_model.max(1)
+            } else {
+                config.max_prepared_per_model
+            },
             config
                 .batch_max_requests
                 .zip(config.max_batch_tokens)

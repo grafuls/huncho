@@ -100,6 +100,8 @@ pub struct ConformanceReport {
     pub max_batch_tokens: Option<usize>,
     #[serde(default)]
     pub prepare_all: bool,
+    #[serde(default)]
+    pub cooperative_prefill: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cross_request_max_requests: Option<usize>,
     #[serde(default)]
@@ -151,7 +153,82 @@ pub fn run_suite_with_options(
     thresholds: &ConformanceThresholds,
     options: &EvalOptions,
 ) -> Result<ConformanceReport> {
+    if options.cooperative_prefill {
+        return run_suite_with_resumable_prefill(engine, suite, thresholds, options);
+    }
     run_suite_impl(engine, suite, thresholds, options, None)
+}
+
+/// Exercise actual round-robin prefix chunks from distinct requests before
+/// checking the unchanged external vectors and independent-forward parity.
+pub fn run_suite_with_resumable_prefill(
+    engine: &Engine,
+    suite: &GoldenSuite,
+    thresholds: &ConformanceThresholds,
+    options: &EvalOptions,
+) -> Result<ConformanceReport> {
+    if !options.cooperative_prefill || !engine.supports_resumable_prefill() {
+        return Err(Error::Conformance(
+            "resumable qualification requires CPU Kev and cooperative prefill".into(),
+        ));
+    }
+    let mut responses = Vec::with_capacity(suite.cases.len());
+    let mut work = crate::engine::EvalStats::default();
+    // At most 63 parents plus one temporary question branch fit the backend's
+    // existing 64-handle bound. No padding or native cached-branch batch.
+    for group in suite.cases.chunks(63) {
+        engine.clear_prefix_cache()?;
+        let mut cursors = group
+            .iter()
+            .map(|case| {
+                let mut preparation = Default::default();
+                let prepared = engine.prepare_eval_uncached_with_stats(
+                    case.request.clone(),
+                    options.clone(),
+                    &mut preparation,
+                )?;
+                work.accumulate(&preparation);
+                engine.begin_resumable_evaluation(prepared).map(Some)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut group_responses = vec![None; group.len()];
+        let mut last_pending = None;
+        while cursors.iter().any(Option::is_some) {
+            for (index, cursor) in cursors.iter_mut().enumerate() {
+                let Some(active) = cursor.as_mut() else {
+                    continue;
+                };
+                let mut step = Default::default();
+                let result = engine.advance_resumable_evaluation(active, &mut step);
+                if step.prefill_calls > 0 {
+                    if last_pending.is_some_and(|previous| previous != index) {
+                        step.prefill_interleaves += 1;
+                    }
+                    last_pending = (step.prefill_yields > 0).then_some(index);
+                }
+                work.accumulate(&step);
+                if let Some(response) = result? {
+                    group_responses[index] = Some(response);
+                    *cursor = None;
+                }
+            }
+        }
+        for (case, response) in group.iter().zip(group_responses) {
+            if options.persistent_prefix_bytes > 0 {
+                let mut retained_work = Default::default();
+                let retained =
+                    engine.eval_uncached_with_stats(&case.request, options, &mut retained_work);
+                work.accumulate(&retained_work);
+                responses.push(retained?);
+            } else {
+                responses.push(response.unwrap());
+            }
+        }
+    }
+    if work.prefill_yields == 0 || work.prefill_interleaves == 0 {
+        return Err(Error::Conformance("cooperative qualification requires actual split prefixes interleaved across distinct requests".into()));
+    }
+    run_suite_impl(engine, suite, thresholds, options, Some((&responses, work)))
 }
 
 /// Qualify actual cross-request tensor collation, with fresh preparations and
@@ -250,6 +327,7 @@ fn run_suite_impl(
     independent_options.persistent_prefix_bytes = 0;
     independent_options.max_batch_tokens = None;
     independent_options.prepare_all = false;
+    independent_options.cooperative_prefill = false;
     if candidate_readout {
         independent_options.reference_readout = true;
     }
@@ -298,7 +376,7 @@ fn run_suite_impl(
             )));
         }
 
-        if options.persistent_prefix_bytes > 0 {
+        if options.persistent_prefix_bytes > 0 && responses.is_none() {
             // Only this explicit retention qualification warms caches. Start
             // fresh per case and count all warm model work; retained whole
             // responses/prompts remain bypassed in both arms.
@@ -478,6 +556,7 @@ fn run_suite_impl(
         persistent_prefix_bytes: options.persistent_prefix_bytes,
         max_batch_tokens: options.max_batch_tokens,
         prepare_all: options.prepare_all,
+        cooperative_prefill: options.cooperative_prefill,
         cross_request_max_requests: None,
         work,
         cases,

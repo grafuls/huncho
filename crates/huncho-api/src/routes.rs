@@ -82,6 +82,16 @@ async fn systemone(
     if let Err(error) = req.validate() {
         return map_error(&error);
     }
+    if state.config.cooperative_prefill
+        && (!state.config.prefix_cache
+            || !engine.supports_resumable_prefill()
+            || engine.replica_engines().len() != 1
+            || state.config.max_queued_per_model > 62
+            || state.config.max_batch_tokens.is_some()
+            || engine.batch.is_some())
+    {
+        return map_error(&Error::Unsupported("cooperative prefill requires CPU Kev, prefix reuse, configured chunks, one context, no batching and at most 62 queued requests".into()));
+    }
     let admission = match engine.admission.clone().try_acquire_owned() {
         Ok(permit) => permit,
         Err(_) => {
@@ -107,6 +117,7 @@ async fn systemone(
             .filter(|_| engine.supports_batch()),
         reference_readout: !state.config.candidate_readout,
         prepare_all: engine.preparation.is_some(),
+        cooperative_prefill: state.config.cooperative_prefill,
         ..Default::default()
     };
     let flight = if engine.flights.enabled() {
@@ -190,6 +201,7 @@ async fn evaluate(
     admitted: GaugeGuard,
 ) -> Arc<JobResult> {
     let model = req.model.clone();
+    let cooperative = opts.cooperative_prefill;
     let (input, preparation_slot, admission, admitted) = if let Some(slots) = &engine.preparation {
         let start = Instant::now();
         let slot = match slots.clone().acquire_owned().await {
@@ -234,6 +246,19 @@ async fn evaluate(
     let prepared_waiting = preparation_slot
         .as_ref()
         .map(|_| GaugeGuard::new(&metrics.prepared_waiting));
+    if cooperative {
+        return evaluate_resumable(
+            engine,
+            input,
+            model,
+            metrics,
+            admission,
+            admitted,
+            preparation_slot,
+            prepared_waiting,
+        )
+        .await;
+    }
     let waiting = GaugeGuard::new(&metrics.requests_waiting);
     let queue_start = Instant::now();
     if let Some(queue) = &engine.batch {
@@ -289,21 +314,7 @@ async fn evaluate(
                 execution.eval_prepared_with_stats(prepared, &mut stats)
             }
         };
-        metrics.tokens_prefilled.inc_by(stats.processed_tokens);
-        metrics.prefill_calls.inc_by(stats.prefill_calls);
-        metrics.chunked_prefills.inc_by(stats.chunked_prefills);
-        metrics
-            .model_tokens
-            .with_label_values(&[&job_model])
-            .inc_by(stats.processed_tokens);
-        metrics.fork_count.inc_by(stats.cache_forks);
-        metrics
-            .persistent_prefix_hits
-            .inc_by(stats.persistent_prefix_hits);
-        metrics.batch_count.inc_by(stats.batch_calls);
-        metrics
-            .reused_prefix_tokens
-            .inc_by(stats.reused_prefix_tokens);
+        record_execution(&metrics, &job_model, &stats);
         metrics
             .evaluation_latency
             .with_label_values(&[&job_model])
@@ -316,6 +327,119 @@ async fn evaluate(
         Ok(result) => JobResult::Finished(result),
         Err(_) => JobResult::WorkerFailed,
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn evaluate_resumable(
+    engine: ModelHandle,
+    input: EvaluationInput,
+    model: String,
+    metrics: Arc<Metrics>,
+    mut admission: tokio::sync::OwnedSemaphorePermit,
+    mut admitted: GaugeGuard,
+    mut preparation_slot: Option<tokio::sync::OwnedSemaphorePermit>,
+    mut prepared_waiting: Option<GaugeGuard>,
+) -> Arc<JobResult> {
+    if engine.replica_engines().len() != 1 || engine.batch.is_some() {
+        return Arc::new(JobResult::Finished(Err(Error::Unsupported(
+            "cooperative prefill requires one execution context without collation".into(),
+        ))));
+    }
+    let EvaluationInput::Prepared(prepared) = input else {
+        return Arc::new(JobResult::Finished(Err(Error::Unsupported(
+            "cooperative prefill requires upfront preparation".into(),
+        ))));
+    };
+    let mut cursor = match engine.begin_resumable_evaluation(prepared) {
+        Ok(cursor) => cursor,
+        Err(error) => return Arc::new(JobResult::Finished(Err(error))),
+    };
+    let identity = Arc::new(());
+    loop {
+        let waiting = GaugeGuard::new(&metrics.requests_waiting);
+        let queued = Instant::now();
+        let execution = match engine.pool.acquire().await {
+            Ok(execution) => execution,
+            Err(_) => return Arc::new(JobResult::Unavailable),
+        };
+        metrics
+            .queue_wait
+            .with_label_values(&[&model])
+            .observe(queued.elapsed().as_secs_f64());
+        drop(waiting);
+        drop(preparation_slot.take());
+        drop(prepared_waiting.take());
+        let job_metrics = metrics.clone();
+        let job_model = model.clone();
+        let last_prefill = engine.last_prefill.clone();
+        let job_identity = identity.clone();
+        // A canceled HTTP future abandons the returned cursor. The current
+        // native call still owns every permit; its cursor is dropped only
+        // after the kernel completes, releasing partial cache state safely.
+        let step = tokio::task::spawn_blocking(move || {
+            let started = Instant::now();
+            let mut stats = EvalStats::default();
+            let result = execution.advance_resumable_evaluation(&mut cursor, &mut stats);
+            if stats.prefill_calls > 0 {
+                if let Ok(mut last) = last_prefill.lock() {
+                    if last.as_ref().is_some_and(|(previous, pending)| {
+                        *pending
+                            && previous
+                                .upgrade()
+                                .is_some_and(|previous| !Arc::ptr_eq(&previous, &job_identity))
+                    }) {
+                        stats.prefill_interleaves += 1;
+                    }
+                    *last = Some((Arc::downgrade(&job_identity), stats.prefill_yields > 0));
+                }
+            }
+            record_execution(&job_metrics, &job_model, &stats);
+            job_metrics
+                .evaluation_latency
+                .with_label_values(&[&job_model])
+                .observe(started.elapsed().as_secs_f64());
+            // Explicitly release this step's execution lease before returning.
+            // FIFO semaphore waiters can run before this request's next chunk.
+            drop(execution);
+            (cursor, result, admission, admitted)
+        })
+        .await;
+        match step {
+            Ok((next, Ok(None), permit, gauge)) => {
+                cursor = next;
+                admission = permit;
+                admitted = gauge;
+            }
+            Ok((_, result, _, _)) => {
+                return Arc::new(JobResult::Finished(
+                    result.map(|response| response.unwrap()),
+                ))
+            }
+            Err(_) => return Arc::new(JobResult::WorkerFailed),
+        }
+    }
+}
+
+fn record_execution(metrics: &Metrics, model: &str, stats: &EvalStats) {
+    metrics.tokens_prefilled.inc_by(stats.processed_tokens);
+    metrics.prefill_calls.inc_by(stats.prefill_calls);
+    metrics.chunked_prefills.inc_by(stats.chunked_prefills);
+    metrics.prefill_yields.inc_by(stats.prefill_yields);
+    metrics
+        .prefill_interleaves
+        .inc_by(stats.prefill_interleaves);
+    metrics
+        .model_tokens
+        .with_label_values(&[model])
+        .inc_by(stats.processed_tokens);
+    metrics.fork_count.inc_by(stats.cache_forks);
+    metrics
+        .persistent_prefix_hits
+        .inc_by(stats.persistent_prefix_hits);
+    metrics.batch_count.inc_by(stats.batch_calls);
+    metrics
+        .reused_prefix_tokens
+        .inc_by(stats.reused_prefix_tokens);
 }
 
 // Jobs consume their inputs once. Keeping the owned packet inline avoids a

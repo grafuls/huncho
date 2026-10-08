@@ -592,6 +592,53 @@ logical usage, verifies lower physical token work and rejects a vacuous
 4,096-token chunk profile. Released-model chunk acceptance and actual peak RSS
 or latency measurements remain outstanding; no GPU checks are performed.
 
+## Resumable CPU prefill scheduling (2026-10-08)
+
+O25 now has an opt-in HTTP scheduler, beyond the earlier memory-only chunks.
+`--cooperative-prefill --prefix-cache` (or `HUNCHO_COOPERATIVE_PREFILL=1`)
+requires CPU Kev and a positive `HUNCHO_PREFILL_CHUNK_TOKENS`. An owned engine
+cursor executes one prefix chunk or one complete question per step. The
+backend mutex and serving execution lease are released between steps. FIFO
+execution waiters can run before the long request's next chunk. This is useful
+for head-of-line blocking; it adds scheduling overhead and is not a measured
+isolated-request speedup or continuous tensor batch.
+
+Partial KV/recurrent/conv caches remain private to their exact execution
+context. Partial handles cannot be forked or read out. A chunk commits cache
+state only after native success; immutable prefix snapshots are retained only
+after the complete prefix. Dropping a cursor releases partial/completed state.
+HTTP cancellation preserves admission and execution capacity until the current
+kernel finishes, then submits no further chunks. Coalesced jobs continue for
+remaining callers and cancel when all callers disconnect. Failed native
+attempts remain in physical-work metrics.
+
+The initial scheduler supports one CPU context, no tensor collation, and at
+most 62 queued requests: 63 parents plus one question branch fit the existing
+64-handle bound. Prepared packets/native state are bounded by admitted request
+count and model context, not an exact live-cache byte budget. Dense question
+suffixes execute as one call; arbitrary bidirectional F1 or joint F5 chunking,
+cached-branch batching, paging and GPU execution remain open.
+
+`huncho conform --prefix-cache --cooperative-prefill` actually alternates
+prefix steps from distinct golden requests, bypasses response/prompt retention,
+then checks the unchanged external vectors, independent-forward probability
+delta/argmax, and observed-outcome ECE/Brier. A single request or chunk size
+that never splits a prefix cannot qualify. Serving performs that same fresh
+labeled gate before binding. Receipts bind the scheduling option and coverage.
+The `prefill_yields` and `prefill_interleaves` counters distinguish actual
+progress/switches; evaluation/queue histograms record each scheduling step in
+this mode. Logical usage, candidate order, trained heads and temperatures
+remain unchanged.
+
+CPU tests verify bit-identical raw logits against ordinary chunked prefill in
+FP32/FP16, unchanged frozen fixture probabilities, actual round-robin coverage,
+retained snapshot hits, context ownership, cache capacity, repeated partial
+drop, single-worker health/fairness, overload, queued/running cancellation,
+coalesced cancellation and failure cleanup. Process tests exercise the real
+native CLI and reject vacuous startup qualification. Released Kev-4B CPU
+qualification remains rejected/pending as recorded elsewhere; this scheduler
+is default-disabled and no new GPU checks occurred.
+
 ## Explicit compiled CPU kernels (2026-10-08)
 
 O03 now records optional compiled vector arithmetic across native Candle

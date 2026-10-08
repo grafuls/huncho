@@ -206,5 +206,183 @@ fn engine_qualification_requires_actual_chunking_and_keeps_original_goldens_and_
         assert_eq!(baseline.usage.input_tokens, optimized.usage.input_tokens);
         assert!(optimized_work.processed_tokens < base_work.processed_tokens);
         assert!(optimized_work.chunked_prefills > 0);
+
+        let cooperative = EvalOptions {
+            prefix_cache: true,
+            cooperative_prefill: true,
+            prepare_all: true,
+            extensions: true,
+            ..Default::default()
+        };
+        let report = huncho_core::conformance::run_suite_with_options(
+            &engine,
+            &suite,
+            &Default::default(),
+            &cooperative,
+        )
+        .unwrap();
+        assert!(report.passed, "{report:?}");
+        assert!(report.cooperative_prefill);
+        assert!(report.work.prefill_yields > 0);
+        assert!(report.work.prefill_interleaves > 0);
+        assert!(report.optimization_parity.unwrap().max_prob_delta <= 1e-4);
+        let retained_options = EvalOptions {
+            persistent_prefix_bytes: 1 << 20,
+            ..cooperative.clone()
+        };
+        let retained_report = huncho_core::conformance::run_suite_with_options(
+            &engine,
+            &suite,
+            &Default::default(),
+            &retained_options,
+        )
+        .unwrap();
+        assert!(retained_report.passed, "{retained_report:?}");
+        assert!(retained_report.work.persistent_prefix_hits > 0);
+        let mut singleton = suite.clone();
+        singleton.cases.truncate(1);
+        assert!(huncho_core::conformance::run_suite_with_options(
+            &engine,
+            &singleton,
+            &Default::default(),
+            &cooperative
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("interleaved"));
+        let mut ordinary = cooperative.clone();
+        ordinary.cooperative_prefill = false;
+        let serial = engine.eval(request, &ordinary).unwrap();
+        let mut work = EvalStats::default();
+        let resumed = engine
+            .eval_with_stats(request, &cooperative, &mut work)
+            .unwrap();
+        assert_eq!(
+            serde_json::to_vec(&serial).unwrap(),
+            serde_json::to_vec(&resumed).unwrap()
+        );
+        assert!(work.prefill_yields > 0);
+        let replica = engine.replica().unwrap();
+        for _ in 0..67 {
+            let prepared = engine
+                .prepare_eval_uncached_with_stats(
+                    request.clone(),
+                    cooperative.clone(),
+                    &mut Default::default(),
+                )
+                .unwrap();
+            let mut cursor = engine.begin_resumable_evaluation(prepared).unwrap();
+            assert!(replica
+                .advance_resumable_evaluation(&mut cursor, &mut Default::default())
+                .is_err());
+            assert!(engine
+                .advance_resumable_evaluation(&mut cursor, &mut Default::default())
+                .unwrap()
+                .is_none());
+            // Drop an incomplete prefix repeatedly; no handles may leak.
+            drop(cursor);
+        }
+        assert_eq!(
+            serde_json::to_vec(&serial).unwrap(),
+            serde_json::to_vec(&engine.eval(request, &cooperative).unwrap()).unwrap()
+        );
+    }
+}
+
+#[test]
+fn resumable_native_prefixes_interleave_without_changing_chunk_arithmetic() {
+    let root = Path::new("tests/fixtures/tiny_kev");
+    for dtype in ["fp32", "fp16"] {
+        let load = || {
+            Qwen3_5Backend::load_kev(root, root, &root.join("head.pt"), 512, dtype)
+                .unwrap()
+                .with_prefill_chunk_tokens(2)
+                .unwrap()
+        };
+        let mut serial = load();
+        let mut resumed = load();
+        let prefixes = [vec![1, 2, 3, 4, 5], vec![5, 4, 3, 2, 1]];
+        let handles: Vec<_> = prefixes
+            .iter()
+            .map(|tokens| {
+                resumed
+                    .begin_resumable_prefill(tokens, 1 << 20)
+                    .unwrap()
+                    .handle
+            })
+            .collect();
+        let mut replica = resumed.replica().unwrap();
+        let mut invalid = PrefillWork::default();
+        assert!(replica
+            .advance_resumable_prefill(handles[0], &mut invalid)
+            .is_err());
+        assert_eq!(invalid.forward_calls, 0);
+        for handle in &handles {
+            assert!(resumed.fork(*handle).is_err());
+            let mut readout = ForwardInput::new(vec![1], vec![0]);
+            readout.fork_from = Some(*handle);
+            assert!(resumed.forward(readout).is_err());
+        }
+        let mut work = PrefillWork::default();
+        for round in 0..3 {
+            for handle in &handles {
+                assert_eq!(
+                    resumed
+                        .advance_resumable_prefill(*handle, &mut work)
+                        .unwrap(),
+                    round == 2
+                );
+            }
+        }
+        assert_eq!(work.forward_calls, 6);
+        assert_eq!(work.processed_tokens, 10);
+        assert_eq!(work.chunked_prefills, 2);
+        for (tokens, handle) in prefixes.iter().zip(handles) {
+            let original = serial.prefill(tokens).unwrap();
+            let mut input = ForwardInput::new(vec![3, 4], vec![0, 1]);
+            input.fork_from = Some(original);
+            let expected = serial.forward(input.clone()).unwrap();
+            input.fork_from = Some(handle);
+            let actual = resumed.forward(input).unwrap();
+            assert_eq!(
+                actual
+                    .values()
+                    .data()
+                    .iter()
+                    .map(|x| x.to_bits())
+                    .collect::<Vec<_>>(),
+                expected
+                    .values()
+                    .data()
+                    .iter()
+                    .map(|x| x.to_bits())
+                    .collect::<Vec<_>>()
+            );
+            resumed.release_cache(handle).unwrap();
+            serial.release_cache(original).unwrap();
+            let hit = resumed.begin_resumable_prefill(tokens, 1 << 20).unwrap();
+            assert!(hit.hit);
+            assert!(resumed
+                .advance_resumable_prefill(hit.handle, &mut PrefillWork::default())
+                .is_err());
+            resumed.release_cache(hit.handle).unwrap();
+        }
+        let mut parents = Vec::new();
+        for _ in 0..64 {
+            parents.push(
+                resumed
+                    .begin_resumable_prefill(&[1, 2, 3], 0)
+                    .unwrap()
+                    .handle,
+            );
+        }
+        assert!(resumed.begin_resumable_prefill(&[1], 0).is_err());
+        for parent in parents {
+            resumed.release_cache(parent).unwrap();
+        }
+        assert!(resumed.begin_resumable_prefill(&[], 0).is_err());
+        assert!(resumed.begin_resumable_prefill(&[u32::MAX], 0).is_err());
+        let parent = resumed.begin_resumable_prefill(&[1], 0).unwrap();
+        resumed.release_cache(parent.handle).unwrap();
     }
 }

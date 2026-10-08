@@ -24,6 +24,9 @@ pub struct ServerConfig {
     pub coalesce_bytes: usize,
     /// Enable native Kev request-local prefix reuse for qualified models/devices.
     pub prefix_cache: bool,
+    /// Opt-in CPU Kev scheduling at prefix-chunk and question boundaries.
+    /// Requires one context, prefix reuse and configured native chunking.
+    pub cooperative_prefill: bool,
     /// Optional exact native prefix snapshots under a charged-byte budget.
     /// Zero disables retention; requires prefix_cache and separate qualification.
     pub persistent_prefix_bytes: usize,
@@ -50,6 +53,7 @@ impl Default for ServerConfig {
             max_prepared_per_model: 0,
             coalesce_bytes: 0,
             prefix_cache: false,
+            cooperative_prefill: false,
             persistent_prefix_bytes: 0,
             max_batch_tokens: None,
             batch_max_requests: None,

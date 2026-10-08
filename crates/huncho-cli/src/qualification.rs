@@ -496,6 +496,7 @@ impl QualificationRecord {
             || self.report.persistent_prefix_bytes != options.persistent_prefix_bytes
             || self.report.max_batch_tokens != options.max_batch_tokens
             || self.report.prepare_all != options.prepare_all
+            || self.report.cooperative_prefill != options.cooperative_prefill
             || (engine.family() == Family::F3
                 && self.report.reference_readout != options.reference_readout)
             || (options.prefix_cache && self.report.work.cache_forks == 0)
@@ -505,6 +506,9 @@ impl QualificationRecord {
             || (options.persistent_prefix_bytes > 0 && self.report.work.persistent_prefix_hits == 0)
             || (options.max_batch_tokens.is_some() && self.report.work.batch_calls == 0)
             || (options.prepare_all && self.report.work.prepared_questions == 0)
+            || (options.cooperative_prefill
+                && (self.report.work.prefill_yields == 0
+                    || self.report.work.prefill_interleaves == 0))
             || (cross.is_some() && self.report.work.cross_request_batches == 0)
             || (require_outcomes
                 && (!self.outcome_gates_passed || !strict_pass(&self.report, self.question_count)))

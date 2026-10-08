@@ -86,6 +86,16 @@ pub struct ServeArgs {
     #[arg(long, default_value_t = false, env = "HUNCHO_PREFIX_CACHE")]
     pub prefix_cache: bool,
 
+    /// Yield CPU Kev execution after each prefix chunk/question (one context).
+    /// Requires HUNCHO_PREFILL_CHUNK_TOKENS and interleaved startup conformance.
+    #[arg(
+        long,
+        default_value_t = false,
+        env = "HUNCHO_COOPERATIVE_PREFILL",
+        requires = "prefix_cache"
+    )]
+    pub cooperative_prefill: bool,
+
     /// Charged budget for exact retained native prefixes (0 disables).
     #[arg(long, default_value = "0", env = "HUNCHO_PERSISTENT_PREFIX_BYTES")]
     pub persistent_prefix_bytes: usize,
@@ -128,6 +138,8 @@ pub struct ServeArgs {
 }
 
 fn load_models(args: &ServeArgs) -> anyhow::Result<ModelRegistry> {
+    anyhow::ensure!(!args.cooperative_prefill || (args.replicas == 1 && args.max_queued_per_model <= 62),
+        "cooperative prefill requires one context and at most 62 queued requests (64 native cache handles)");
     anyhow::ensure!(
         args.replicas <= 1 || args.batch_max_requests.is_none(),
         "replicas and cross-request collation cannot be combined yet"
@@ -269,6 +281,7 @@ fn evaluation_options(
 ) -> huncho_core::engine::EvalOptions {
     huncho_core::engine::EvalOptions {
         prefix_cache: args.prefix_cache && engine.supports_prefix_cache(),
+        cooperative_prefill: args.cooperative_prefill,
         persistent_prefix_bytes: if args.prefix_cache && engine.supports_prefix_cache() {
             args.persistent_prefix_bytes / usize::from(args.replicas)
         } else {
@@ -276,7 +289,8 @@ fn evaluation_options(
         },
         max_batch_tokens: args.max_batch_tokens.filter(|_| engine.supports_batch()),
         reference_readout: !args.candidate_readout,
-        prepare_all: (args.max_prepared_per_model > 0
+        prepare_all: (args.cooperative_prefill
+            || args.max_prepared_per_model > 0
             || (args.batch_max_requests.is_some() && engine.supports_batch()))
             && engine.family() != Family::F5,
         ..Default::default()
@@ -453,6 +467,8 @@ fn qualify_optimizations(registry: &ModelRegistry, args: &ServeArgs) -> anyhow::
         let replicas = engine.replica_engines();
         let replicated = replicas.len() > 1;
         let opts = evaluation_options(engine, args);
+        anyhow::ensure!(!args.cooperative_prefill || engine.supports_resumable_prefill(),
+            "cooperative prefill requires CPU Kev with HUNCHO_PREFILL_CHUNK_TOKENS configured for every model");
         anyhow::ensure!(!engine.execution_metadata().contains_key("prefill_chunk_tokens") || opts.prefix_cache,
             "chunked prefill serving for `{name}` requires --prefix-cache and an actual split-prefix qualification");
         let readout_storage_profile = [
@@ -535,6 +551,7 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
         max_prepared_per_model: args.max_prepared_per_model,
         coalesce_bytes: args.coalesce_bytes,
         prefix_cache: args.prefix_cache,
+        cooperative_prefill: args.cooperative_prefill,
         persistent_prefix_bytes: args.persistent_prefix_bytes,
         max_batch_tokens: args.max_batch_tokens,
         batch_max_requests: args.batch_max_requests,

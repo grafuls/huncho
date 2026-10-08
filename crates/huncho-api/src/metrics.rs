@@ -43,6 +43,8 @@ pub struct Metrics {
     pub tokens_prefilled: IntCounter,
     pub prefill_calls: IntCounter,
     pub chunked_prefills: IntCounter,
+    pub prefill_yields: IntCounter,
+    pub prefill_interleaves: IntCounter,
     /// Number of KV forks performed.
     pub fork_count: IntCounter,
     pub reused_prefix_tokens: IntCounter,
@@ -99,6 +101,16 @@ impl Metrics {
         let batch_count = IntCounter::new(
             "huncho_batch_count",
             "Native backbone calls containing multiple independent sequences.",
+        )
+        .unwrap();
+        let prefill_yields = IntCounter::new(
+            "huncho_prefill_yields",
+            "Completed prefix chunks leaving work for a later scheduling step.",
+        )
+        .unwrap();
+        let prefill_interleaves = IntCounter::new(
+            "huncho_prefill_interleaves",
+            "Native prefix calls switched away from another live incomplete prefix job.",
         )
         .unwrap();
         let cross_request_batch_count = IntCounter::new(
@@ -237,6 +249,10 @@ impl Metrics {
         registry
             .register(Box::new(chunked_prefills.clone()))
             .unwrap();
+        registry.register(Box::new(prefill_yields.clone())).unwrap();
+        registry
+            .register(Box::new(prefill_interleaves.clone()))
+            .unwrap();
         registry.register(Box::new(batch_count.clone())).unwrap();
         registry
             .register(Box::new(cross_request_batch_count.clone()))
@@ -277,6 +293,8 @@ impl Metrics {
             tokens_prefilled,
             prefill_calls,
             chunked_prefills,
+            prefill_yields,
+            prefill_interleaves,
             fork_count,
             reused_prefix_tokens,
             batch_count,

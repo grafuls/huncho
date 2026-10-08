@@ -244,6 +244,38 @@ pub trait Backend: Send + Sync {
         result
     }
 
+    /// Whether a caller can pause an F2 prefix between bounded native calls.
+    /// A partial handle must never be forked or used for question readouts.
+    fn supports_resumable_prefill(&self) -> bool {
+        false
+    }
+
+    /// Validate a complete prefix and allocate an empty private cache, or clone
+    /// an exact retained snapshot. This submits no model work. The caller owns
+    /// the handle immediately and must release it on cancellation or failure.
+    fn begin_resumable_prefill(
+        &mut self,
+        _tokens: &[u32],
+        _max_bytes: usize,
+    ) -> Result<CachedPrefill> {
+        Err(crate::error::Error::Unsupported(
+            "backend does not expose resumable prefill".into(),
+        ))
+    }
+
+    /// Submit at most one configured prefix chunk. Return true only once the
+    /// complete prefix is usable. Work includes native attempts that fail;
+    /// cache state must commit atomically after a successful chunk.
+    fn advance_resumable_prefill(
+        &mut self,
+        _handle: CacheHandle,
+        _work: &mut PrefillWork,
+    ) -> Result<bool> {
+        Err(crate::error::Error::Unsupported(
+            "backend does not expose resumable prefill".into(),
+        ))
+    }
+
     /// Clear retained snapshots without invalidating active caller-owned forks.
     fn clear_prefix_cache(&mut self) -> Result<()> {
         Ok(())

@@ -18,6 +18,9 @@ use crate::response_cache::ResponseCache;
 use crate::tensor::Tensor;
 use crate::tokenizer::Tokenizer;
 
+mod resumable;
+pub use resumable::ResumableEvaluation;
+
 /// Options controlling a single evaluation.
 #[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct EvalOptions {
@@ -40,6 +43,9 @@ pub struct EvalOptions {
     /// Prepare all F1–F4 prompts before submitting model work. This changes
     /// scheduling only; serving can prepare while another request executes.
     pub prepare_all: bool,
+    /// CPU Kev only: release execution capacity after each prefix chunk and
+    /// question. Requires prefix reuse and a configured backend chunk size.
+    pub cooperative_prefill: bool,
 }
 
 /// Physical work submitted to the backend, separate from logical wire usage.
@@ -63,6 +69,10 @@ pub struct EvalStats {
     pub prompt_cache_hits: u64,
     /// Questions prepared ahead of execution, excluding retained whole results.
     pub prepared_questions: u64,
+    /// Completed prefix chunks that leave more prefix work for a later step.
+    pub prefill_yields: u64,
+    /// Qualification/serving switches between distinct active prefix jobs.
+    pub prefill_interleaves: u64,
 }
 
 impl EvalStats {
@@ -79,6 +89,8 @@ impl EvalStats {
         self.result_cache_hits += work.result_cache_hits;
         self.prompt_cache_hits += work.prompt_cache_hits;
         self.prepared_questions += work.prepared_questions;
+        self.prefill_yields += work.prefill_yields;
+        self.prefill_interleaves += work.prefill_interleaves;
     }
 }
 
@@ -119,7 +131,7 @@ pub struct Engine {
     /// The backend. Wrapped in a [`Mutex`] so a shared [`Engine`] can drive it
     /// through `&self`; this is the synchronization point for the (v1) in-process
     /// scheduler, which serializes forwards per model.
-    backend: Mutex<Box<dyn Backend>>,
+    backend: Arc<Mutex<Box<dyn Backend>>>,
     tokenizer: Arc<dyn Tokenizer>,
     formatter: Arc<dyn PromptFormatter>,
     head: Arc<HeadParams>,
@@ -133,6 +145,7 @@ pub struct Engine {
     calibration: CalibrationEntry,
     supports_fork: bool,
     supports_batch: bool,
+    supports_resumable_prefill: bool,
     response_cache: Option<Arc<Mutex<ResponseCache>>>,
     prompt_cache: Option<Arc<Mutex<PromptCache>>>,
     preparation_identity: Arc<()>,
@@ -155,6 +168,7 @@ impl Engine {
         let mut capabilities = backend.capabilities();
         let supports_fork = capabilities.supports_fork;
         let supports_batch = backend.supports_batch();
+        let supports_resumable_prefill = backend.supports_resumable_prefill();
         let device = capabilities
             .extra
             .remove("device")
@@ -162,7 +176,7 @@ impl Engine {
         Ok(Engine {
             formatter: formatter_for(&manifest).into(),
             manifest: Arc::new(manifest),
-            backend: Mutex::new(backend),
+            backend: Arc::new(Mutex::new(backend)),
             tokenizer: tokenizer.into(),
             head: Arc::new(head),
             backend_id,
@@ -172,6 +186,7 @@ impl Engine {
             calibration,
             supports_fork,
             supports_batch,
+            supports_resumable_prefill,
             response_cache: None,
             prompt_cache: None,
             preparation_identity: Arc::new(()),
@@ -199,6 +214,7 @@ impl Engine {
             || actual.supports_fork != expected.supports_fork
             || actual.supports_lora != expected.supports_lora
             || backend.supports_batch() != original.supports_batch()
+            || backend.supports_resumable_prefill() != original.supports_resumable_prefill()
         {
             return Err(Error::Backend(
                 "replica changed the model execution identity".into(),
@@ -206,7 +222,7 @@ impl Engine {
         }
         Ok(Self {
             manifest: self.manifest.clone(),
-            backend: Mutex::new(backend),
+            backend: Arc::new(Mutex::new(backend)),
             tokenizer: self.tokenizer.clone(),
             formatter: self.formatter.clone(),
             head: self.head.clone(),
@@ -217,6 +233,7 @@ impl Engine {
             calibration: self.calibration.clone(),
             supports_fork: self.supports_fork,
             supports_batch: self.supports_batch,
+            supports_resumable_prefill: self.supports_resumable_prefill,
             response_cache: self.response_cache.clone(),
             prompt_cache: self.prompt_cache.clone(),
             preparation_identity: self.preparation_identity.clone(),
@@ -298,6 +315,10 @@ impl Engine {
 
     pub fn supports_batch(&self) -> bool {
         self.family() != Family::F5 && self.supports_batch
+    }
+
+    pub fn supports_resumable_prefill(&self) -> bool {
+        self.supports_prefix_cache() && self.supports_resumable_prefill && self.device == "CPU"
     }
 
     /// Qualification starts retained-prefix tests from fresh model state.
@@ -383,6 +404,19 @@ impl Engine {
         stats: &mut EvalStats,
     ) -> Result<SystemOneResponse> {
         *stats = EvalStats::default();
+        if prepared.options.cooperative_prefill {
+            let preparation = prepared.stats.clone();
+            let mut cursor = self.begin_resumable_evaluation(prepared)?;
+            stats.accumulate(&preparation);
+            loop {
+                let mut step = EvalStats::default();
+                let result = self.advance_resumable_evaluation(&mut cursor, &mut step);
+                stats.accumulate(&step);
+                if let Some(response) = result? {
+                    return Ok(response);
+                }
+            }
+        }
         if !Arc::ptr_eq(&self.preparation_identity, &prepared.owner) {
             return Err(Error::Request(
                 "prepared evaluation belongs to a different engine".into(),
@@ -609,6 +643,10 @@ impl Engine {
         reuse_prompts: bool,
     ) -> Result<SystemOneResponse> {
         *stats = EvalStats::default();
+        if opts.cooperative_prefill {
+            let prepared = self.prepare_eval(req.clone(), opts.clone(), stats, reuse_prompts)?;
+            return self.eval_prepared_with_stats(prepared, stats);
+        }
         let prompts = if opts.prepare_all && self.family() != Family::F5 {
             req.validate()?;
             Self::validate_options(opts)?;
@@ -623,6 +661,7 @@ impl Engine {
         if (opts.persistent_prefix_bytes > 0 && !opts.prefix_cache)
             || opts.max_batch_tokens == Some(0)
             || (opts.prefix_cache && opts.max_batch_tokens.is_some())
+            || (opts.cooperative_prefill && !opts.prefix_cache)
         {
             return Err(Error::Request(
                 "batch token budget must be positive, batching cannot combine with prefix reuse, and persistent prefixes require prefix reuse"
