@@ -54,6 +54,12 @@ scores all questions together. See [Clef setup](clef.md).
 | `Qwen3_5Backend` | `huncho-backend` | ⚙️ feature-gated | Kev F2 pointers and F3 candidate logits over Qwen3.5/merged LoRA. CPU, optional CUDA; F3 GPU selection is explicit and requires labeled qualification. |
 | `LlamaCppBackend` | `huncho-backend` | `llamacpp` | Pinned CPU Qwen3.5 GGUF; trained Kev F2 pointers and F3 raw candidate logits. Shared-weight replicas and bounded full-state F2 prefix forks/retention; fresh labeled qualification required. See [workflow and limits](llamacpp.md). |
 
+The separate [browser package](../browser/README.md) executes F1 FP32 integrated
+scalar-head ONNX graphs through CPU WASM with shared Rust prompt/calibration
+and fixed labeled conformance. This asynchronous SDK is not a new native
+`BackendId` or CLI runtime. Generic encoder exports and released-model/browser
+acceptance are not supplied. WebGPU and actual GPU checks remain deferred.
+
 `MockBackend` emits a `Features` (hidden-state) output so the engine's
 feature-projection heads (F1/F2/F4) and the mean-fallback projection are all
 exercised without real weights. Each position's hidden vector is a sparse,

@@ -946,3 +946,15 @@ and qualification receipts bind `cpu-grouped-queries-v1`; the CPU runner uses
 `--grouped-gqa` and clears unrequested ambient settings. Matrix shapes change,
 so complete fresh observed-label serving conformance remains mandatory. No
 released speed, peak RSS or calibration acceptance follows from fixture parity.
+
+## Optional CPU browser deployment
+
+The [separate browser SDK](../browser/README.md) supports F1 FP32 ONNX graphs
+with integrated scalar option heads. Packaging pins asset bytes and requires a
+new destination; every actual browser session reruns complete labeled shared
+conformance before public evaluation. It preserves Rust prompts/calibration
+and Jev answers without a decode loop. Native default builds remain unchanged.
+Artifact/context/queue limits, copies, application trust, single-thread CPU
+execution and unsigned report limitations are explicit. Released exports and
+calibration remain qualification work. Apple is skipped and WebGPU/actual GPU
+checks remain deferred.

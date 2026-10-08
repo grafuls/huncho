@@ -605,6 +605,62 @@ fn brier(probabilities: &BTreeMap<String, f32>, target: &str) -> f64 {
         .sum()
 }
 
+/// Check fresh external F1 graph results at the fixed serving thresholds.
+/// The async caller owns inference provenance; this function never invents a
+/// backend forward or permits unlabeled vectors to authorize serving.
+#[cfg(feature = "external-scores")]
+pub fn run_external_marker_suite(
+    engine: &Engine,
+    suite: &GoldenSuite,
+    responses: &[crate::contract::SystemOneResponse],
+    work: crate::engine::EvalStats,
+) -> Result<ConformanceReport> {
+    let questions = suite
+        .cases
+        .iter()
+        .map(|case| case.request.questions.len() as u64)
+        .sum::<u64>();
+    let tokens = responses
+        .iter()
+        .map(|response| response.usage.input_tokens)
+        .sum::<u64>();
+    if engine.family() != crate::manifest::Family::F1
+        || suite.schema_version != "1.0"
+        || responses.len() != suite.cases.len()
+        || questions == 0
+        || work.forward_calls != questions
+        || work.prepared_questions != questions
+        || work.processed_tokens == 0
+        || work.processed_tokens != tokens
+        || work.result_cache_hits != 0
+        || work.prompt_cache_hits != 0
+        || !suite.cases.iter().any(|case| !case.targets.is_empty())
+        || suite.cases.iter().zip(responses).any(|(case, response)| {
+            case.request.model != engine.manifest().name
+                || response.model != engine.manifest().name
+                || response.answers.len() != case.request.questions.len()
+                || case
+                    .request
+                    .questions
+                    .keys()
+                    .any(|id| !response.answers.contains_key(id))
+                || response.usage.output_tokens != 0
+        })
+    {
+        return Err(Error::Conformance(format!(
+            "external marker serving requires complete observed vectors and fresh per-question execution results (questions={questions}, responses={}, forwards={}, prepared={}, submitted_tokens={}, usage_tokens={tokens})",
+            responses.len(), work.forward_calls, work.prepared_questions, work.processed_tokens,
+        )));
+    }
+    run_suite_impl(
+        engine,
+        suite,
+        &ConformanceThresholds::default(),
+        &EvalOptions::default(),
+        Some((responses, work)),
+    )
+}
+
 /// Load a golden suite from a JSON file.
 pub fn load_suite(path: impl AsRef<std::path::Path>) -> Result<GoldenSuite> {
     let bytes = std::fs::read(path.as_ref())?;

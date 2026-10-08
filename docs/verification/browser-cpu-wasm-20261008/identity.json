@@ -1,0 +1,25 @@
+{
+  "qualified": false,
+  "gpu_checks": false,
+  "source_sha256": {
+    "browser/src/index.mjs": "9bcdf429419d0e630e91adcbb4fabfc45f3bdc963807c1c264d49b76ff9282a2",
+    "browser/scripts/build.sh": "1a3baed5059ab3df0e6429d90dce4fea441b1c760cfb37eef8d5f0c0cadbd8e5",
+    "browser/scripts/package.mjs": "6c2c26c9a97a39c6a455b0dad05ca138d4d4aa097c86f46c64f3ebb102d03eb0",
+    "browser/tests/browser.mjs": "aa47005ce5d3963dfbb1955820b2d3b4ddc1db652164c86ecc3d01b8c366e8eb",
+    "browser/tests/generate_fixture.py": "61be43a3579e24b1d27e482d171cc1542299b9928bb1f5885413b13921361398",
+    "browser/wasm/src/lib.rs": "5d998e78fd2bbfcd87055b376b0fba345ead426d4ddeba6198a82960afa794d1",
+    "browser/wasm/examples/reference.rs": "bb1443d9df59aecda759e4c28f00a2e9c792620829985a8caef0e77602c9fa3c",
+    "browser/wasm/Cargo.lock": "82b74d0eb0f7aa4785e97c62b050cc25d1b12dfa9ef70e44b2471b9f2447a518",
+    "browser/package-lock.json": "6f2d62688721aefd07c5f8ef90547cc16df2e09922b322c3f2401ec5bc7054ae",
+    "crates/huncho-core/src/engine/external_scores.rs": "988264b10e0fbc507639e88860aafb292e9501f3f2bbcad0b63ead2b4be01ed0",
+    "crates/huncho-core/src/conformance.rs": "8babd2ed492ecf97f57542aee6b94787a8c2fa482a064241904f24276d358f83",
+    "crates/huncho-core/src/tokenizer.rs": "0d759996fc80fa498e9519c870fc401e74dbe9e51aa492b677e02915b89386ba"
+  },
+  "checks": {
+    "wasm_build": "passed: official Rust 1.97.1, wasm32-unknown-unknown, wasm-bindgen 0.2.129",
+    "native_core": "74 passed with external-scores,tokenizers",
+    "default_workspace": "passed",
+    "browser": "actual CPU Chrome / ONNX Runtime Web WASM; synthetic fixtures only"
+  },
+  "note": "No released-model fit/held-out acceptance, isolated speed or memory claim."
+}

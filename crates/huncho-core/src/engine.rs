@@ -20,6 +20,10 @@ use crate::tokenizer::Tokenizer;
 
 mod batching;
 mod resumable;
+#[cfg(feature = "external-scores")]
+mod external_scores;
+#[cfg(feature = "external-scores")]
+pub use external_scores::{ExternalEvaluation, MarkerReadout};
 use batching::padded_groups;
 pub use resumable::ResumableEvaluation;
 

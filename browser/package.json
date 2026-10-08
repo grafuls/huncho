@@ -1,0 +1,10 @@
+{
+  "name": "@huncho/browser",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "dependencies": { "onnxruntime-web": "1.30.0" },
+  "devDependencies": { "puppeteer-core": "25.13.0" },
+  "scripts": { "test": "node tests/browser.mjs" }
+}

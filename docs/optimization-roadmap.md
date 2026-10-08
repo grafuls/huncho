@@ -38,9 +38,45 @@ also show drift. Packed CPU fitting/held-out evaluation is still running.
 | O24 distributed/sharded inference | Open | Implementation; actual multi-GPU qualification deferred |
 | O25 prefill scheduling | Resumable CPU prefix/question scheduling available | Released labeled qualification and latency; tensor/device scheduling open |
 | O26 MLX | Skipped by user | Apple work deferred |
-| O27 browser WASM/WebGPU | Open | Separate actual browser runtime, packaging and gates |
+| O27 browser WASM/WebGPU | Separate CPU WASM F1 integrated-head SDK, packaging and fresh labeled gates available | Released exports/calibration, other families and browser scheduling; WebGPU deferred |
 
 ## Implemented increments
+
+### Actual CPU browser execution with shared Rust calibration
+
+O27 now has a separate WASM core and ONNX Runtime Web 1.30.0 CPU SDK. The actual
+graph includes the scalar F1 head; the core owns immutable prompts, candidate
+mapping, temperatures, typed answers, usage and conformance. External-score
+plans are single-use and engine-bound. Native backend forwards cannot silently
+stand in for browser execution. WASM selects an explicit tokenizer regex
+profile while native dependencies retain their original settings. Default
+native builds gain no active browser runtime dependency.
+
+Fresh loading verifies asset bytes/hashes and strict dynamic graph signatures,
+then executes every complete labeled golden question through a new actual CPU
+session. Shared unchanged delta/argmax/ECE gates must pass before public eval,
+even for fitted calibration. Default fallback cannot authorize this runtime.
+Metadata binds core, ORT JS/loader/WASM, model, tokenizer, manifest/golden and
+browser/thread profile. Bundled loading additionally checks its descriptor and
+executing SDK source. Unsigned reports cannot attest dataset provenance.
+
+CPU Chrome tests compare native/WASM tokenizer inputs exactly and all typed
+answers/raw scores to independent native synthetic arithmetic. They exercise
+incomplete/unlabeled/drifted/pending/nonfinite/substituted/signature refusal,
+bounded queues, input snapshots, error cleanup, disposal and self-contained
+packaging with fresh qualification. Synthetic labels test gate plumbing only;
+recorded evidence stays `qualified=false`. Artifact/queue/context limits and
+JS/WASM copy costs are explicit. Released Laya/Kev exports/calibration, other
+families, worker/multithread scheduling, quantization and browser prefix/batch
+execution remain open. WebGPU and actual GPU checks are deferred; Apple work
+is skipped. See [operation and limits](../browser/README.md).
+
+[Retained CPU browser report](verification/browser-cpu-wasm-20261008/summary.json)
+records Chrome 151, twelve actual qualification forwards, zero fixture delta
+and a separately qualified bundled session. The
+[source/check identity](verification/browser-cpu-wasm-20261008/identity.json)
+also records the passing WASM build, 74 native core tests and default workspace.
+Both artifacts explicitly deny released-model qualification.
 
 ### CPU grouped-query attention without repeated K/V
 

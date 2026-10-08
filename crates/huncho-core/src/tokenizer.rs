@@ -265,6 +265,19 @@ pub struct HfTokenizer {
 
 #[cfg(feature = "tokenizers")]
 impl HfTokenizer {
+    /// Parse bundled tokenizer bytes without filesystem access. Preserve the
+    /// same tokenizer settings as `from_file`; callers must qualify WASM regex.
+    pub fn from_json(bytes: &[u8]) -> Result<HfTokenizer> {
+        #[cfg(target_arch = "wasm32")]
+        tokenizers::utils::parallelism::set_parallelism(false);
+        let tokenizer = tokenizers::Tokenizer::from_bytes(bytes)
+            .map_err(|e| crate::error::Error::Package(format!("failed to load tokenizer: {e}")))?;
+        Ok(HfTokenizer {
+            tokenizer,
+            token_ids: Default::default(),
+        })
+    }
+
     /// Joint-schema encoders enforce their own total budget. Disable tokenizer
     /// padding/truncation so individual schema fragments cannot be shortened.
     pub fn from_file_unbounded(path: impl AsRef<std::path::Path>) -> Result<HfTokenizer> {
@@ -538,6 +551,26 @@ mod tests {
         tk.id_for(&large);
         assert!(!tk.token_ids.read().unwrap().contains_key(&large));
         assert_eq!(tk.encode("hello world", true).unwrap(), vec![1, 7, 8, 2]);
+    }
+
+    #[cfg(feature = "tokenizers")]
+    #[test]
+    fn tokenizer_bytes_preserve_file_encodings_and_special_ids() {
+        let path = "tests/fixtures/minimal_tokenizer.json";
+        let file = HfTokenizer::from_file(path).unwrap();
+        let bytes = HfTokenizer::from_json(&std::fs::read(path).unwrap()).unwrap();
+        for text in ["hello world", "<option:0> refund", "", "unknown café 🚀"] {
+            for special in [false, true] {
+                assert_eq!(
+                    bytes.encode(text, special).unwrap(),
+                    file.encode(text, special).unwrap()
+                );
+            }
+        }
+        for text in ["<s>", "</s>", "<option:0>", "hello", "hello world"] {
+            assert_eq!(bytes.id_for(text), file.id_for(text));
+        }
+        assert!(HfTokenizer::from_json(b"not JSON").is_err());
     }
 
     #[cfg(feature = "tokenizers")]
