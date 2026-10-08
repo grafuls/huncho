@@ -107,7 +107,7 @@ pub struct ServeArgs {
     #[arg(long, env = "HUNCHO_MAX_BATCH_TOKENS", conflicts_with = "prefix_cache")]
     pub max_batch_tokens: Option<usize>,
 
-    /// Allow CPU Qwen mixed lengths with at most this percent padding (0..100).
+    /// Allow supported CPU mixed lengths with at most this percent padding (0..100).
     #[arg(long, default_value_t = 0, requires = "max_batch_tokens")]
     pub max_batch_padding_percent: usize,
 
@@ -507,7 +507,7 @@ fn qualify_optimizations(registry: &ModelRegistry, args: &ServeArgs) -> anyhow::
         let replicated = replicas.len() > 1;
         let opts = evaluation_options(engine, args);
         anyhow::ensure!(args.max_batch_padding_percent <= 100 && (args.max_batch_padding_percent == 0 || (opts.max_batch_tokens.is_some() && engine.supports_padded_batch())),
-            "padded serving requires CPU Qwen F2/F3, a batch token budget and padding percent in 1..100 for every model");
+            "padded serving requires CPU ModernBERT F1 or Qwen F2/F3, a batch token budget and padding percent in 1..100 for every model");
         anyhow::ensure!(!args.cooperative_prefill || engine.supports_resumable_prefill(),
             "cooperative prefill requires CPU Kev with HUNCHO_PREFILL_CHUNK_TOKENS configured for every model");
         anyhow::ensure!(!engine.execution_metadata().contains_key("prefill_chunk_tokens") || opts.prefix_cache,

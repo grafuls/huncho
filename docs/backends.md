@@ -60,6 +60,12 @@ and fixed labeled conformance. This asynchronous SDK is not a new native
 `BackendId` or CLI runtime. Generic encoder exports and released-model/browser
 acceptance are not supplied. WebGPU and actual GPU checks remain deferred.
 
+Native CPU ModernBERT F1 supports opt-in mixed-length batches through the shared
+token/padding budget. Backbone masks exclude padded keys; original sequence
+lengths are restored before typed Laya heads. Selected marker queries and CPU
+replicas compose with it. Every context needs fresh complete labeled conformance;
+fixture parity does not release a checkpoint. See [batch operation](operations.md).
+
 `MockBackend` emits a `Features` (hidden-state) output so the engine's
 feature-projection heads (F1/F2/F4) and the mean-fallback projection are all
 exercised without real weights. Each position's hidden vector is a sparse,

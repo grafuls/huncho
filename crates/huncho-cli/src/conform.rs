@@ -79,7 +79,7 @@ pub struct ConformArgs {
     #[arg(long, conflicts_with = "prefix_cache")]
     pub max_batch_tokens: Option<usize>,
 
-    /// Allow CPU Qwen mixed lengths with at most this percent padding (0..100).
+    /// Allow supported CPU mixed lengths with at most this percent padding (0..100).
     #[arg(long, default_value_t = 0, requires = "max_batch_tokens")]
     pub max_batch_padding_percent: usize,
 

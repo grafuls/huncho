@@ -1,6 +1,6 @@
 # Operations
 
-CPU Qwen batching can optionally merge different prompt lengths:
+CPU ModernBERT F1 and Qwen F2/F3 batching can merge different prompt lengths:
 
 ```sh
 huncho conform --model /path/to/kev-package --golden /path/to/pinned-heldout.json \
@@ -12,12 +12,25 @@ huncho serve --model /path/to/kev-package --max-batch-tokens 2048 \
 
 Zero padding percent keeps exact lengths. The limit counts padded positions
 within the complete physical tensor; logical wire usage excludes padding.
-Every served model must support CPU Qwen F2/F3 padding. Prefix reuse cannot
+Every served model must support CPU ModernBERT F1 or Qwen F2/F3 padding. Prefix reuse cannot
 combine with these batches. Cross-request collation uses the same policy and
 existing request/wait bounds. Qualification needs actual mixed lengths as well
 as unchanged numerical/paired and complete observed-label gates.
 `huncho_padded_batch_count` and `huncho_padded_tokens` expose extra physical
 work; native/device-resident ragged attention remains future work.
+
+For F1, the backbone receives a real row-specific attention mask. Padded rows
+are removed before the trained Laya bidirectional head; masking only the
+backbone would change head scores. This composes with final-layer marker-query
+selection and CPU shared-weight replicas. The original head tokens, qtype,
+readout order and temperatures remain. Equal-length batches retain their
+original execution. `padded_batch_execution=cpu-right-mask-unpad-head-v1`
+records the available CPU algorithm; requested options and actual padded work
+are required in conformance evidence. Every native serving context still needs
+fresh complete observed labels and unchanged external/independent gates.
+Padding adds physical work and may increase attention memory; throughput and
+released Laya calibration need workload qualification. ONNX/F5 padding and
+actual device checks remain open/deferred.
 
 CPU Kev can opt into fair scheduling between prefix chunks with
 `HUNCHO_PREFILL_CHUNK_TOKENS=64 huncho serve ... --prefix-cache --cooperative-prefill`.

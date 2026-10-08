@@ -23,7 +23,7 @@ also show drift. Packed CPU fitting/held-out evaluation is still running.
 | O09 fused/bounded compute | CPU SiLU/multiply, causal query blocks and unexpanded grouped K/V available | FlashAttention and further fused native/device kernels |
 | O10 precision/calibration gates | Every real serving runtime requires fresh labeled conformance | Released CPU acceptance remains rejected/pending; no GPU checks |
 | O11 native Kev prefix forks | Available | Released CPU paired/labeled acceptance |
-| O12 dynamic batching | Equal-length collation and bounded CPU Qwen right-padding available | F1/F5 masked padding, device qualification and cached-branch batching |
+| O12 dynamic batching | Equal-length collation and bounded CPU Qwen/ModernBERT right-padding available | F5/ONNX masked padding, device qualification and cached-branch batching |
 | O13 family head work | CPU Clef vectorized heads/grouped spans and optional Laya final marker queries available | Released Clef/Laya labeled qualification |
 | O14 concurrent execution contexts | CPU shared-weight replicas, including optional ONNX initializers, available | Released concurrent workloads, memory and affinity measurements |
 | O15 device buffers/graph replay | Open | CUDA implementation and later device qualification |
@@ -41,6 +41,29 @@ also show drift. Packed CPU fitting/held-out evaluation is still running.
 | O27 browser WASM/WebGPU | Separate CPU WASM F1 integrated-head SDK, packaging and fresh labeled gates available | Released exports/calibration, other families and browser scheduling; WebGPU deferred |
 
 ## Implemented increments
+
+### Masked CPU ModernBERT batches with original-length Laya heads
+
+O12 now also accepts mixed-length native F1 CPU inputs through the existing
+bounded per-/cross-request scheduler. Row-specific backbone masks exclude
+padding from valid attention. Each row is restored to its original length
+before the typed bidirectional Laya head, including final marker-query
+selection. No head padding, criterion truncation, prefix reuse or alternate
+temperature is introduced. Equal-length native execution stays unchanged.
+
+CPU capabilities record `cpu-right-mask-unpad-head-v1`; existing options,
+token/padding budgets, fresh numerical/independent parity and complete labeled
+startup gates remain mandatory. Native tests include real token zero, lengths
+1..128, repeated/out-of-order readouts, global/local/global backbone layers,
+bare and two-layer typed heads, selected marker queries, multiple unchanged
+temperatures, empty readouts, replicas and invalid token/context/cache inputs.
+Whole-engine tests preserve typed usage, count real padded rectangles and
+exercise cross-request work; incomplete or drifted fixture suites fail.
+CLI processes bind the profile/work and refuse missing/unlabeled serving.
+Synthetic heads/labels and bare mean-head fixtures are implementation evidence
+only. Padding can cost additional arithmetic/workspace; released Laya acceptance
+and controlled throughput/RSS remain open. F5/ONNX padding and cached-branch
+collation remain later increments. No actual GPU or Apple check runs.
 
 ### Actual CPU browser execution with shared Rust calibration
 

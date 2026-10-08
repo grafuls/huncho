@@ -275,6 +275,12 @@ impl Backend for CandleBackend {
             ("native_execution".into(), "candle-modernbert-v1".into()),
         ]);
         crate::cpu_profile::record(&mut extra);
+        if self.device.is_cpu() {
+            extra.insert(
+                "padded_batch_execution".into(),
+                "cpu-right-mask-unpad-head-v1".into(),
+            );
+        }
         if self.selected_laya_head {
             extra.insert(
                 "laya_head_execution".into(),
@@ -344,6 +350,66 @@ impl Backend for CandleBackend {
                 let hidden = hidden
                     .narrow(0, row, 1)
                     .map_err(|e| Error::Backend(e.to_string()))?;
+                self.readout(&hidden, input)
+            })
+            .collect()
+    }
+
+    fn supports_padded_batch(&self) -> bool {
+        self.device.is_cpu()
+    }
+
+    fn forward_padded_batch(&mut self, inputs: Vec<ForwardInput>) -> Result<Vec<ForwardOutput>> {
+        if !self.device.is_cpu() {
+            return Err(Error::Unsupported(
+                "ModernBERT padded batches currently support CPU only".into(),
+            ));
+        }
+        if inputs.is_empty() || inputs.len() > 64 || inputs.iter().any(|row| row.tokens.is_empty())
+        {
+            return Err(Error::Backend(
+                "ModernBERT padded batch requires 1..=64 nonempty independent rows".into(),
+            ));
+        }
+        for input in &inputs {
+            self.validate_input(input)?;
+        }
+        let seq = inputs.iter().map(|row| row.tokens.len()).max().unwrap();
+        if inputs.iter().all(|row| row.tokens.len() == seq) {
+            return self.forward_batch(inputs);
+        }
+        let count = seq
+            .checked_mul(inputs.len())
+            .ok_or_else(|| Error::Backend("ModernBERT padded shape overflow".into()))?;
+        // Any in-vocabulary token is safe for masked padding. Token zero's
+        // embedding is never a key/value contribution to a valid query.
+        let mut tokens = vec![0u32; count];
+        let mut masks = vec![0u32; count];
+        for (row, input) in inputs.iter().enumerate() {
+            let begin = row * seq;
+            let end = begin + input.tokens.len();
+            tokens[begin..end].copy_from_slice(&input.tokens);
+            masks[begin..end].fill(1);
+        }
+        let candle = |error: candle::Error| {
+            Error::Backend(CandleError::Inference(error.to_string()).to_string())
+        };
+        let shape = (inputs.len(), seq);
+        let ids = Tensor::from_vec(tokens, shape, &self.device).map_err(&candle)?;
+        let mask = Tensor::from_vec(masks, shape, &self.device).map_err(&candle)?;
+        let hidden = self.model.forward(&ids, &mask).map_err(&candle)?;
+        inputs
+            .into_iter()
+            .enumerate()
+            .map(|(row, input)| {
+                // Laya's bidirectional transformer head must see ONLY its original
+                // tokens. Passing padded encoder outputs into that unmasked head
+                // changes probabilities, even when the backbone mask is correct.
+                let hidden = hidden
+                    .narrow(0, row, 1)
+                    .map_err(&candle)?
+                    .narrow(1, 0, input.tokens.len())
+                    .map_err(&candle)?;
                 self.readout(&hidden, input)
             })
             .collect()
