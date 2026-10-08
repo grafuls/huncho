@@ -49,6 +49,8 @@ pub struct EvalStats {
     pub reused_prefix_tokens: u64,
     pub cache_forks: u64,
     pub batch_calls: u64,
+    /// Native batches containing sequences from more than one request.
+    pub cross_request_batches: u64,
     /// Exact successful responses reused; a hit submits no physical work.
     pub result_cache_hits: u64,
     /// Prepared F1–F4 prompts reused; model forwards still execute normally.
@@ -65,6 +67,7 @@ impl EvalStats {
         self.reused_prefix_tokens += work.reused_prefix_tokens;
         self.cache_forks += work.cache_forks;
         self.batch_calls += work.batch_calls;
+        self.cross_request_batches += work.cross_request_batches;
         self.result_cache_hits += work.result_cache_hits;
         self.prompt_cache_hits += work.prompt_cache_hits;
         self.prepared_questions += work.prepared_questions;
@@ -257,12 +260,33 @@ impl Engine {
         options: EvalOptions,
         stats: &mut EvalStats,
     ) -> Result<PreparedEvaluation> {
+        self.prepare_eval(request, options, stats, true)
+    }
+
+    /// Fresh owned preparation for qualification, bypassing all retention.
+    pub fn prepare_eval_uncached_with_stats(
+        &self,
+        request: SystemOneRequest,
+        options: EvalOptions,
+        stats: &mut EvalStats,
+    ) -> Result<PreparedEvaluation> {
+        self.prepare_eval(request, options, stats, false)
+    }
+
+    fn prepare_eval(
+        &self,
+        request: SystemOneRequest,
+        options: EvalOptions,
+        stats: &mut EvalStats,
+        reuse: bool,
+    ) -> Result<PreparedEvaluation> {
         *stats = EvalStats::default();
         request.validate()?;
         Self::validate_options(&options)?;
         let key = self
             .response_cache
             .as_ref()
+            .filter(|_| reuse)
             .map(|_| cache_key::request(&request, &options))
             .transpose()?;
         let cached = if let (Some(cache), Some(key)) = (&self.response_cache, &key) {
@@ -276,7 +300,7 @@ impl Engine {
         } else if self.family() == Family::F5 {
             PreparedKind::Joint
         } else {
-            PreparedKind::Prompts(self.prepare_prompts(&request, &options, stats, true)?)
+            PreparedKind::Prompts(self.prepare_prompts(&request, &options, stats, reuse)?)
         };
         Ok(PreparedEvaluation {
             owner: self.preparation_identity.clone(),
@@ -320,6 +344,155 @@ impl Engine {
             }
         }
         Ok(response)
+    }
+
+    /// Collate opaque F1–F4 preparations from this engine into bounded,
+    /// equal-length native batches. Each request keeps its own IDs, usage and
+    /// extensions; prompt boundaries and trained heads remain unchanged.
+    /// A backend failure fails this entire collated group. F5 is never collated.
+    pub fn eval_prepared_batch_with_stats(
+        &self,
+        packets: Vec<PreparedEvaluation>,
+        budget: usize,
+        stats: &mut EvalStats,
+    ) -> Result<Vec<SystemOneResponse>> {
+        *stats = EvalStats::default();
+        if packets.is_empty() || packets.len() > 64 || budget == 0 {
+            return Err(Error::Request(
+                "collation requires 1–64 requests and a positive token budget".into(),
+            ));
+        }
+        // Check the complete group before any work or retained responses escape.
+        let mut options = packets[0].options.clone();
+        options.extensions = false;
+        for packet in &packets {
+            if !Arc::ptr_eq(&self.preparation_identity, &packet.owner) {
+                return Err(Error::Request(
+                    "prepared evaluation belongs to a different engine".into(),
+                ));
+            }
+            let mut other = packet.options.clone();
+            other.extensions = false;
+            if serde_json::to_vec(&other)? != serde_json::to_vec(&options)?
+                || other.prefix_cache
+                || other.max_batch_tokens != Some(budget)
+            {
+                return Err(Error::Request(
+                    "collated requests require identical execution options and token budgets without prefix reuse".into(),
+                ));
+            }
+        }
+        if !self.supports_batch() {
+            let mut responses = Vec::with_capacity(packets.len());
+            for packet in packets {
+                let mut work = EvalStats::default();
+                let result = self.eval_prepared_with_stats(packet, &mut work);
+                stats.accumulate(&work);
+                responses.push(result?);
+            }
+            return Ok(responses);
+        }
+        struct Scatter {
+            index: usize,
+            model: String,
+            keys: Vec<(String, String)>,
+            tokens: u64,
+            extensions: bool,
+            result_key: Option<Vec<u8>>,
+        }
+        let mut responses: Vec<Option<SystemOneResponse>> = vec![None; packets.len()];
+        let mut scatter = Vec::new();
+        let mut prompts = Vec::new();
+        let mut origins = Vec::new();
+        // Prepared prompts already contain each original state's tokens. The
+        // synthetic IDs only address the internal scatter map, never a prompt.
+        let mut combined = SystemOneRequest {
+            state: StateValue::from("prepared requests"),
+            model: self.manifest.name.clone(),
+            questions: Default::default(),
+        };
+        for (index, packet) in packets.into_iter().enumerate() {
+            stats.accumulate(&packet.stats);
+            match packet.kind {
+                PreparedKind::Cached(response) => responses[index] = Some(response),
+                PreparedKind::Joint => unreachable!("F5 does not support collation"),
+                PreparedKind::Prompts(prepared) => {
+                    let tokens = prepared.iter().map(|p| p.token_len() as u64).sum();
+                    let mut keys = Vec::with_capacity(prepared.len());
+                    for (question_index, (id, question)) in
+                        packet.request.questions.into_iter().enumerate()
+                    {
+                        let key = format!("{index}:{question_index}");
+                        combined.questions.insert(key.clone(), question);
+                        keys.push((key, id));
+                        origins.push(index);
+                    }
+                    prompts.extend(prepared);
+                    options.extensions |= packet.options.extensions;
+                    scatter.push(Scatter {
+                        index,
+                        model: packet.request.model,
+                        keys,
+                        tokens,
+                        extensions: packet.options.extensions,
+                        result_key: packet.result_key,
+                    });
+                }
+            }
+        }
+        if !scatter.is_empty() {
+            let mut combined_response = self.eval_batched(
+                &combined,
+                &options,
+                stats,
+                budget,
+                false,
+                Some((prompts, Some(&origins))),
+            )?;
+            let mut logits = combined_response
+                .extensions
+                .take()
+                .and_then(|extensions| extensions.raw_logits)
+                .unwrap_or_default();
+            for request in scatter {
+                let mut answers = BTreeMap::new();
+                let mut raw = BTreeMap::new();
+                for (key, original) in request.keys {
+                    answers.insert(
+                        original.clone(),
+                        combined_response
+                            .answers
+                            .remove(&key)
+                            .ok_or_else(|| Error::Backend("collation omitted a question".into()))?,
+                    );
+                    if request.extensions {
+                        raw.insert(
+                            original,
+                            logits.remove(&key).ok_or_else(|| {
+                                Error::Backend("collation omitted raw logits".into())
+                            })?,
+                        );
+                    }
+                }
+                let mut response =
+                    SystemOneResponse::new(request.model, answers, Usage::new(request.tokens));
+                if request.extensions {
+                    response.extensions = Some(self.extensions(raw));
+                }
+                if let (Some(key), Some(cache)) = (request.result_key, &self.response_cache) {
+                    if let Ok(mut cache) = cache.lock() {
+                        cache.insert(key, &response);
+                    }
+                }
+                responses[request.index] = Some(response);
+            }
+        }
+        responses
+            .into_iter()
+            .map(|response| {
+                response.ok_or_else(|| Error::Backend("collation omitted a request".into()))
+            })
+            .collect()
     }
 
     pub fn eval_with_stats(
@@ -436,7 +609,14 @@ impl Engine {
             return self.eval_joint(req, opts, stats);
         }
         if let Some(budget) = opts.max_batch_tokens.filter(|_| self.supports_batch) {
-            return self.eval_batched(req, opts, stats, budget, reuse_prompts, prepared);
+            return self.eval_batched(
+                req,
+                opts,
+                stats,
+                budget,
+                reuse_prompts,
+                prepared.map(|prompts| (prompts, None)),
+            );
         }
 
         let max_context = opts
@@ -569,8 +749,12 @@ impl Engine {
         stats: &mut EvalStats,
         budget: usize,
         reuse_prompts: bool,
-        prepared: Option<Vec<BuiltPrompt>>,
+        preparation: Option<(Vec<BuiltPrompt>, Option<&[usize]>)>,
     ) -> Result<SystemOneResponse> {
+        let (prepared, origins) = match preparation {
+            Some((prompts, origins)) => (Some(prompts), origins),
+            None => (None, None),
+        };
         let max_context = opts
             .max_context
             .unwrap_or(self.manifest.backbone.max_context);
@@ -616,6 +800,11 @@ impl Engine {
                 if group.is_empty() {
                     break;
                 }
+                let cross_request = origins.is_some_and(|origins| {
+                    group
+                        .iter()
+                        .any(|(index, _)| origins[*index] != origins[group[0].0])
+                });
                 let (indices, inputs): (Vec<_>, Vec<_>) = group.into_iter().unzip();
                 let count = inputs.len();
                 stats.forward_calls += 1;
@@ -628,6 +817,7 @@ impl Engine {
                     vec![backend.forward(inputs.into_iter().next().unwrap())?]
                 } else {
                     stats.batch_calls += 1;
+                    stats.cross_request_batches += u64::from(cross_request);
                     backend.forward_batch(inputs)?
                 };
                 if results.len() != count {
@@ -1773,6 +1963,131 @@ mod tests {
         assert_eq!(stats.prompt_cache_hits, 12);
         assert_eq!(stats.prepared_questions, 15);
         drop(observed);
+        // Distinct states with colliding question IDs and mixed extensions
+        // must scatter to exactly the independently calibrated response.
+        let requests: Vec<_> = (0..6)
+            .map(|index| {
+                let mut request = req();
+                request.state = StateValue::from(format!("distinct input {index}"));
+                request.model = format!("alias-{index}");
+                request
+            })
+            .collect();
+        let options: Vec<_> = (0..6)
+            .map(|index| EvalOptions {
+                extensions: index % 2 == 0,
+                ..opts.clone()
+            })
+            .collect();
+        let expected: Vec<_> = requests
+            .iter()
+            .zip(&options)
+            .map(|(request, options)| {
+                engine
+                    .eval_uncached_with_stats(
+                        request,
+                        &EvalOptions {
+                            max_batch_tokens: None,
+                            ..options.clone()
+                        },
+                        &mut Default::default(),
+                    )
+                    .unwrap()
+            })
+            .collect();
+        let packets = requests
+            .iter()
+            .zip(&options)
+            .map(|(request, options)| {
+                engine
+                    .prepare_eval_uncached_with_stats(
+                        request.clone(),
+                        options.clone(),
+                        &mut Default::default(),
+                    )
+                    .unwrap()
+            })
+            .collect();
+        groups.lock().unwrap().clear();
+        let collated = engine
+            .eval_prepared_batch_with_stats(packets, budget, &mut stats)
+            .unwrap();
+        assert_eq!(
+            serde_json::to_vec(&collated).unwrap(),
+            serde_json::to_vec(&expected).unwrap()
+        );
+        assert!(stats.cross_request_batches > 0);
+        assert_eq!(
+            stats.processed_tokens,
+            expected.iter().map(|r| r.usage.input_tokens).sum::<u64>()
+        );
+        assert_eq!(stats.result_cache_hits, 0);
+        assert_eq!(stats.prompt_cache_hits, 0);
+        assert_eq!(stats.prepared_questions, 18);
+        assert!(groups
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|(rows, length)| rows * length <= budget || *rows == 1));
+        let foreign = make_engine(false)
+            .prepare_eval_with_stats(req(), opts.clone(), &mut Default::default())
+            .unwrap();
+        groups.lock().unwrap().clear();
+        assert!(engine
+            .eval_prepared_batch_with_stats(vec![foreign], budget, &mut stats)
+            .is_err());
+        assert!(groups.lock().unwrap().is_empty());
+
+        let suite = crate::conformance::GoldenSuite {
+            schema_version: "1.0".into(),
+            family: "F1".into(),
+            hash: None,
+            cases: requests
+                .iter()
+                .zip(&expected)
+                .enumerate()
+                .map(
+                    |(index, (request, response))| crate::conformance::GoldenCase {
+                        id: index.to_string(),
+                        request: request.clone(),
+                        targets: Default::default(),
+                        expected: response
+                            .answers
+                            .iter()
+                            .map(|(id, answer)| {
+                                (
+                                    id.clone(),
+                                    crate::conformance::answer_probabilities(answer).unwrap(),
+                                )
+                            })
+                            .collect(),
+                    },
+                )
+                .collect(),
+        };
+        let report = crate::conformance::run_suite_with_cross_request_batches(
+            &engine,
+            &suite,
+            &Default::default(),
+            &opts,
+            6,
+        )
+        .unwrap();
+        assert!(report.passed);
+        assert!(report.work.cross_request_batches > 0);
+        assert_eq!(report.cross_request_max_requests, Some(6));
+        let tiny = EvalOptions {
+            max_batch_tokens: Some(1),
+            ..opts.clone()
+        };
+        assert!(crate::conformance::run_suite_with_cross_request_batches(
+            &engine,
+            &suite,
+            &Default::default(),
+            &tiny,
+            6,
+        )
+        .is_err());
         let repeated = engine.eval_with_stats(&request, &opts, &mut stats).unwrap();
         assert_eq!(
             serde_json::to_vec(&repeated).unwrap(),

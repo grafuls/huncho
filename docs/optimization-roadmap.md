@@ -157,3 +157,52 @@ Fitting data retains the existing rows/targets format. Add aligned types to fit 
 ```
 
 In each golden case, optional `targets` maps every question ID to its observed candidate label. Once any case is labeled, every question in the suite must be labeled. Use score-level labels and the existing `yes`/`no` conformance labels for noul. Keep fitting and final evaluation sets separate. A scalar-only refit clears inherited type/bucket overrides; absent strata use that variant's fitted scalar, not a stale DEFAULT override. `Refit` still means fitted, not a persisted release qualification.
+
+## Cross-request scheduling (2026-10-08)
+
+O12 now includes opt-in cross-request collation: `--batch-max-requests 2..64`,
+`--batch-wait-ms` (default 2), and a required `--max-batch-tokens` budget. One
+worker per immutable engine collects bounded prepared requests, buckets their
+questions by exact length, and invokes the existing native tensor batches. No
+padding, prompt concatenation, head replacement or temperature change occurs.
+Original question IDs, option order, typed answers, extensions and logical usage
+are scattered back to each caller. F5 stays whole-request inference; prefix
+reuse remains mutually exclusive. Unsupported models retain independent serving.
+
+Admission still bounds active plus waiting callers. Preparation has at least as
+many slots as the requested collation size, subject to admission capacity. The
+collection deadline starts when the first ready packet is enqueued, so draining
+an older queue does not add another complete wait window. This deadline bounds
+collection delay, not total queue latency or RSS. A batch may contain up to 64
+rows, with an oversized singleton executed independently. A backend error fails
+the affected collated group. Running cancellation keeps admission until physical
+work ends; canceled queued packets are discarded. Model removal closes the
+worker's queue without retaining a sender/engine reference cycle.
+
+`huncho conform --batch-max-requests N --max-batch-tokens B` now measures this
+actual path against both unchanged goldens and independent forwards. It bypasses
+all retention and requires a tensor batch containing rows from multiple requests.
+`huncho serve` requires this separate, nonvacuous startup gate when collation is
+enabled. `huncho_cross_request_batch_count` reports physical mixed batches; token
+counters count their positions once. Library callers can use opaque preparations
+through `Engine::eval_prepared_batch_with_stats` and must run the same gate.
+
+CPU fp32/fp16 tiny-Kev upstream vectors pass external and paired probability
+checks with request isolation. Serving tests cover distinct states, duplicate
+question IDs, mixed extension settings, singleton deadlines, auth, overload,
+single-worker health, queued cancellation and admission retention after running
+cancellation. Default and Clef-enabled workspace tests pass. This is fixture
+qualification; full Kev-4B cross-request acceptance and production throughput
+are still unmeasured. No actual GPU checks were run for this increment.
+
+```sh
+huncho conform --model /path/to/package --golden /path/to/pinned-golden.json \
+  --batch-max-requests 8 --max-batch-tokens 4096 --json
+huncho serve --model /path/to/package --batch-max-requests 8 \
+  --batch-wait-ms 2 --max-batch-tokens 4096 \
+  --qualification-golden 'REGISTERED_MODEL_NAME=/path/to/pinned-golden.json'
+```
+
+Padding, mixed-length tensor masks, persistent cached-branch collation and chunk
+admission remain separate increments. This implements decision-forward dynamic
+batching; there is no generation/decode scheduler.

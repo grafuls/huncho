@@ -86,8 +86,8 @@ impl RequestFlights {
 }
 
 impl FlightOwner {
-    pub(crate) fn complete(self, result: JobResult) {
-        self.sender.send_replace(Some(Arc::new(result)));
+    pub(crate) fn complete(self, result: Arc<JobResult>) {
+        self.sender.send_replace(Some(result));
         // Drop removes this registration. Existing callers own their result;
         // later requests must evaluate again unless result caching is enabled.
     }

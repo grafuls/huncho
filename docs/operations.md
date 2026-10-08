@@ -486,3 +486,22 @@ HUNCHO_DEVICE=cpu RAYON_NUM_THREADS=16 CANDLE_NUM_THREADS=16 \
 
 Repeat with representative question counts, state lengths and concurrency;
 keep package, temperature, device/dtype and numerical gates fixed while tuning.
+
+### Cross-request batches
+
+`--batch-max-requests` enables bounded collation across callers on native batch
+backends (2–64 requests, default disabled). It requires `--max-batch-tokens` and
+cannot be combined with prefix reuse. `--batch-wait-ms` bounds collection time
+from the first ready request (default 2 ms); waiting behind earlier inference is
+additional. Environment equivalents are `HUNCHO_BATCH_MAX_REQUESTS` and
+`HUNCHO_BATCH_WAIT_MS`. Preparation capacity is raised to the collation size,
+while the existing admission limit still bounds all active/waiting callers.
+
+Startup requires a pinned suite that actually combines rows from multiple
+requests and passes independent probability parity. Qualify with
+`huncho conform --batch-max-requests N --max-batch-tokens B ...`. Equal-length
+questions share tensors without padding; F5 remains whole-request execution.
+`huncho_cross_request_batch_count` counts actual mixed batches. Group failures
+reach every affected caller; disconnected queued callers submit no work, while
+running jobs retain admission until completion. CPU fixture success does not
+qualify full released checkpoints or GPU paths.

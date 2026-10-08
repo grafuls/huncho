@@ -24,8 +24,13 @@ pub struct ServerConfig {
     pub coalesce_bytes: usize,
     /// Enable native Kev request-local prefix reuse for qualified models/devices.
     pub prefix_cache: bool,
-    /// Opt-in native per-request question batching. No cross-request batching yet.
+    /// Opt-in native equal-length question batching token budget.
     pub max_batch_tokens: Option<usize>,
+    /// Optional cross-request collation (2–64 requests). Requires native batch
+    /// support and max_batch_tokens; F5 remains whole-request inference.
+    pub batch_max_requests: Option<u16>,
+    /// Maximum collation wait after the first prepared request, in milliseconds.
+    pub batch_wait_ms: u16,
     /// Enable qualified F3 candidate-only projection. Otherwise serving uses
     /// the legacy duplicated-position/full-vocabulary reference readout.
     pub candidate_readout: bool,
@@ -43,6 +48,8 @@ impl Default for ServerConfig {
             coalesce_bytes: 0,
             prefix_cache: false,
             max_batch_tokens: None,
+            batch_max_requests: None,
+            batch_wait_ms: 2,
             candidate_readout: false,
         }
     }

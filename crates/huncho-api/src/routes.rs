@@ -132,7 +132,7 @@ async fn systemone(
             });
             coalesce::wait(receiver).await
         }
-        None => Arc::new(
+        None => {
             evaluate(
                 engine,
                 req,
@@ -141,8 +141,8 @@ async fn systemone(
                 admission,
                 admitted,
             )
-            .await,
-        ),
+            .await
+        }
     };
 
     state
@@ -180,13 +180,13 @@ async fn evaluate(
     metrics: Arc<Metrics>,
     admission: tokio::sync::OwnedSemaphorePermit,
     admitted: GaugeGuard,
-) -> JobResult {
+) -> Arc<JobResult> {
     let model = req.model.clone();
     let (input, preparation_slot, admission, admitted) = if let Some(slots) = &engine.preparation {
         let start = Instant::now();
         let slot = match slots.clone().acquire_owned().await {
             Ok(slot) => slot,
-            Err(_) => return JobResult::Unavailable,
+            Err(_) => return Arc::new(JobResult::Unavailable),
         };
         metrics
             .preparation_wait
@@ -217,8 +217,8 @@ async fn evaluate(
                 admission,
                 admitted,
             ),
-            Ok((Err(error), _, _, _)) => return JobResult::Finished(Err(error)),
-            Err(_) => return JobResult::WorkerFailed,
+            Ok((Err(error), _, _, _)) => return Arc::new(JobResult::Finished(Err(error))),
+            Err(_) => return Arc::new(JobResult::WorkerFailed),
         }
     } else {
         (EvaluationInput::Raw(req, opts), None, admission, admitted)
@@ -228,10 +228,32 @@ async fn evaluate(
         .map(|_| GaugeGuard::new(&metrics.prepared_waiting));
     let waiting = GaugeGuard::new(&metrics.requests_waiting);
     let queue_start = Instant::now();
+    if let Some(queue) = &engine.batch {
+        let EvaluationInput::Prepared(prepared) = input else {
+            return Arc::new(JobResult::WorkerFailed);
+        };
+        return queue
+            .submit(
+                crate::batch::BatchJob {
+                    prepared,
+                    model,
+                    admission,
+                    admitted,
+                    waiting,
+                    prepared_waiting,
+                    preparation_slot,
+                    queued: queue_start,
+                },
+                engine.engine.clone(),
+                engine.execution.clone(),
+                metrics,
+            )
+            .await;
+    }
     let execution = match engine.execution.clone().acquire_owned().await {
         Ok(permit) => permit,
         Err(_) => {
-            return JobResult::Unavailable;
+            return Arc::new(JobResult::Unavailable);
         }
     };
     metrics
@@ -278,10 +300,10 @@ async fn evaluate(
     })
     .await;
 
-    match result {
+    Arc::new(match result {
         Ok(result) => JobResult::Finished(result),
         Err(_) => JobResult::WorkerFailed,
-    }
+    })
 }
 
 // Jobs consume their inputs once. Keeping the owned packet inline avoids a

@@ -114,6 +114,8 @@ fn state(auth_token: Option<&str>) -> Arc<AppState> {
         coalesce_bytes: 0,
         prefix_cache: false,
         max_batch_tokens: None,
+        batch_max_requests: None,
+        batch_wait_ms: 2,
         candidate_readout: false,
     };
     Arc::new(AppState::new(config, registry, Metrics::new()))
@@ -652,6 +654,256 @@ fn slow_state_with_config(
         receiver,
         ReleaseSlowJob(gate),
     )
+}
+
+fn batch_state(
+    config: ServerConfig,
+    slow: bool,
+) -> (
+    Arc<AppState>,
+    tokio::sync::oneshot::Receiver<()>,
+    ReleaseSlowJob,
+    Arc<std::sync::Mutex<Vec<usize>>>,
+) {
+    struct Batched {
+        inner: MockBackend,
+        rows: Arc<std::sync::Mutex<Vec<usize>>>,
+        gate: SlowGate,
+        started: Option<tokio::sync::oneshot::Sender<()>>,
+    }
+    impl Backend for Batched {
+        fn id(&self) -> BackendId {
+            self.inner.id()
+        }
+        fn capabilities(&self) -> huncho_core::backend::Capabilities {
+            self.inner.capabilities()
+        }
+        fn supports_batch(&self) -> bool {
+            true
+        }
+        fn fork(
+            &mut self,
+            h: huncho_core::backend::CacheHandle,
+        ) -> huncho_core::Result<huncho_core::backend::CacheHandle> {
+            self.inner.fork(h)
+        }
+        fn forward(
+            &mut self,
+            input: huncho_core::backend::ForwardInput,
+        ) -> huncho_core::Result<huncho_core::backend::ForwardOutput> {
+            self.forward_batch(vec![input])
+                .map(|mut outputs| outputs.remove(0))
+        }
+        fn forward_batch(
+            &mut self,
+            inputs: Vec<huncho_core::backend::ForwardInput>,
+        ) -> huncho_core::Result<Vec<huncho_core::backend::ForwardOutput>> {
+            self.rows.lock().unwrap().push(inputs.len());
+            if let Some(started) = self.started.take() {
+                let _ = started.send(());
+                let released = self.gate.0.lock().unwrap();
+                let _ = self
+                    .gate
+                    .1
+                    .wait_timeout_while(released, std::time::Duration::from_secs(2), |released| {
+                        !*released
+                    })
+                    .unwrap();
+            }
+            inputs
+                .into_iter()
+                .map(|input| self.inner.forward(input))
+                .collect()
+        }
+    }
+    let gate = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+    let rows = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (started, receiver) = tokio::sync::oneshot::channel();
+    let mut registry = ModelRegistry::new();
+    registry.insert(
+        "mock-laya",
+        engine_with_backend(
+            "mock-laya",
+            Box::new(Batched {
+                inner: MockBackend::with_vocab(4096),
+                rows: rows.clone(),
+                gate: gate.clone(),
+                started: slow.then_some(started),
+            }),
+        ),
+    );
+    (
+        Arc::new(AppState::new(config, registry, Metrics::new())),
+        receiver,
+        ReleaseSlowJob(gate),
+        rows,
+    )
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn cross_request_batches_preserve_distinct_answers_extensions_and_auth() {
+    let (batched, _, _, rows) = batch_state(
+        ServerConfig {
+            auth_token: Some("secret".into()),
+            max_batch_tokens: Some(4096),
+            batch_max_requests: Some(4),
+            batch_wait_ms: 100,
+            ..Default::default()
+        },
+        false,
+    );
+    let independent = state(Some("secret"));
+    let mut requests = Vec::new();
+    let mut expected = Vec::new();
+    for index in 0..4 {
+        let mut request = choice_request();
+        request["state"] = json!(format!("distinct state {index}"));
+        let response = send(
+            independent.clone(),
+            Method::POST,
+            "/v1/systemone",
+            Some(request.clone()),
+            Some("secret"),
+            index % 2 == 0,
+        )
+        .await;
+        expected.push(response);
+        requests.push(request);
+    }
+    let mut clients = Vec::new();
+    for (index, request) in requests.into_iter().enumerate() {
+        let state = batched.clone();
+        clients.push(tokio::spawn(async move {
+            send(
+                state,
+                Method::POST,
+                "/v1/systemone",
+                Some(request),
+                Some("secret"),
+                index % 2 == 0,
+            )
+            .await
+        }));
+    }
+    for (client, expected) in clients.into_iter().zip(expected) {
+        assert_eq!(client.await.unwrap(), expected);
+    }
+    assert_eq!(*rows.lock().unwrap(), vec![4]);
+    assert_eq!(batched.metrics.cross_request_batch_count.get(), 1);
+    assert_eq!(batched.metrics.batch_count.get(), 1);
+    assert_eq!(
+        batched.metrics.tokens_prefilled.get(),
+        independent.metrics.tokens_prefilled.get()
+    );
+    assert_eq!(batched.metrics.queue_depth.get(), 0);
+    assert_eq!(batched.metrics.prepared_waiting.get(), 0);
+    assert_eq!(
+        send(
+            batched.clone(),
+            Method::POST,
+            "/v1/systemone",
+            Some(choice_request()),
+            None,
+            false
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+    // A singleton eventually executes, without falsely reporting a mixed batch.
+    assert_eq!(
+        send(
+            batched.clone(),
+            Method::POST,
+            "/v1/systemone",
+            Some(choice_request()),
+            Some("secret"),
+            false
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(batched.metrics.cross_request_batch_count.get(), 1);
+    assert_eq!(*rows.lock().unwrap(), vec![4, 1]);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn cross_request_cancellation_retains_running_capacity_and_discards_queued_work() {
+    let (state, started, release, rows) = batch_state(
+        ServerConfig {
+            max_queued_per_model: 2,
+            max_batch_tokens: Some(4096),
+            batch_max_requests: Some(2),
+            batch_wait_ms: 100,
+            ..Default::default()
+        },
+        true,
+    );
+    let submit = |state: Arc<AppState>| {
+        tokio::spawn(async move {
+            send(
+                state,
+                Method::POST,
+                "/v1/systemone",
+                Some(choice_request()),
+                None,
+                false,
+            )
+            .await
+        })
+    };
+    let first = submit(state.clone());
+    let second = submit(state.clone());
+    tokio::time::timeout(std::time::Duration::from_secs(1), started)
+        .await
+        .unwrap()
+        .unwrap();
+    first.abort();
+    let _ = first.await;
+    let third = submit(state.clone());
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while state.metrics.prepared_waiting.get() != 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(state.metrics.queue_depth.get(), 3);
+    assert_eq!(
+        send(
+            state.clone(),
+            Method::POST,
+            "/v1/systemone",
+            Some(choice_request()),
+            None,
+            false
+        )
+        .await
+        .0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    assert_eq!(
+        send(state.clone(), Method::GET, "/health", None, None, false)
+            .await
+            .0,
+        StatusCode::OK
+    );
+    third.abort();
+    let _ = third.await;
+    drop(release);
+    assert_eq!(second.await.unwrap().0, StatusCode::OK);
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while state.metrics.queue_depth.get() != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(*rows.lock().unwrap(), vec![2]);
+    assert_eq!(state.metrics.cross_request_batch_count.get(), 1);
+    assert_eq!(state.metrics.requests_waiting.get(), 0);
+    assert_eq!(state.metrics.prepared_waiting.get(), 0);
 }
 
 #[tokio::test(flavor = "current_thread")]

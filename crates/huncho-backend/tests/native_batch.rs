@@ -89,6 +89,105 @@ fn qwen_pointer_batches_preserve_probabilities_and_reject_cache_branches() {
     assert_pointer_batch_parity(Device::Cpu);
 }
 
+#[cfg(feature = "clef")]
+#[test]
+fn kev_cpu_cross_request_collation_qualifies_unchanged_upstream_vectors() {
+    use huncho_core::conformance::{GoldenCase, GoldenSuite};
+    use huncho_core::engine::{Engine, EvalOptions};
+    use huncho_core::manifest::{BackendId, Family, HeadKind, ModelManifest};
+    use huncho_core::prompt::formatter_for;
+    use huncho_core::tokenizer::HfTokenizer;
+    let root = Path::new("tests/fixtures/tiny_kev");
+    let golden: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(root.join("golden.json")).unwrap()).unwrap();
+    for dtype in ["fp32", "fp16"] {
+        let mut manifest =
+            ModelManifest::load("../../examples/mock-model/huncho-model.json").unwrap();
+        manifest.family = Family::F2;
+        manifest.head.kind = HeadKind::Pointer;
+        manifest.prompt_contract.template = "kev-v1".into();
+        manifest.prompt_contract.state_budget = 512;
+        manifest.prompt_contract.head_budget = 512;
+        manifest.backbone.max_context = 512;
+        manifest.calibration.entries.clear();
+        manifest.calibration.default.temperature = 2.40605;
+        let tokenizer = HfTokenizer::from_file_unbounded(root.join("tokenizer.json")).unwrap();
+        let mut cases = Vec::new();
+        for (index, case) in golden["cases"].as_array().unwrap().iter().enumerate() {
+            let request: huncho_core::contract::SystemOneRequest =
+                serde_json::from_value(case["request"].clone()).unwrap();
+            let expected = request
+                .questions
+                .iter()
+                .zip(case["rows"].as_array().unwrap())
+                .map(|((id, question), row)| {
+                    let prompt = formatter_for(&manifest)
+                        .build(&request.state, question, &tokenizer)
+                        .unwrap();
+                    let probabilities: Vec<f32> =
+                        serde_json::from_value(row["probabilities"].clone()).unwrap();
+                    (
+                        id.clone(),
+                        prompt
+                            .candidates
+                            .into_iter()
+                            .zip(probabilities)
+                            .map(|(c, p)| (c.label, p))
+                            .collect(),
+                    )
+                })
+                .collect();
+            cases.push(GoldenCase {
+                id: index.to_string(),
+                request,
+                expected,
+                targets: Default::default(),
+            });
+        }
+        // Repeated requests still submit fresh model work; duplicate IDs must
+        // remain private to each request and caches cannot make the gate vacuous.
+        cases.extend(cases.clone());
+        let engine = Engine::new(
+            manifest,
+            Box::new(
+                Qwen3_5Backend::load_kev(root, root, &root.join("head.pt"), 512, dtype).unwrap(),
+            ),
+            Box::new(tokenizer),
+            Default::default(),
+            BackendId::Candle,
+            dtype,
+        )
+        .unwrap()
+        .with_result_cache(1024 * 1024)
+        .with_prompt_cache(1024 * 1024);
+        let suite = GoldenSuite {
+            schema_version: "1.0".into(),
+            family: "F2".into(),
+            hash: None,
+            cases,
+        };
+        let options = EvalOptions {
+            max_batch_tokens: Some(4096),
+            prepare_all: true,
+            ..Default::default()
+        };
+        let report = huncho_core::conformance::run_suite_with_cross_request_batches(
+            &engine,
+            &suite,
+            &Default::default(),
+            &options,
+            4,
+        )
+        .unwrap();
+        assert!(report.passed, "{dtype}: {report:?}");
+        assert!(report.work.cross_request_batches > 0);
+        assert_eq!(report.work.result_cache_hits, 0);
+        assert_eq!(report.work.prompt_cache_hits, 0);
+        assert_eq!(report.work.prepared_questions, 12);
+        assert!(report.optimization_parity.unwrap().max_prob_delta <= 1e-4);
+    }
+}
+
 #[test]
 fn execution_profiles_preserve_fixture_readouts_and_cache_semantics() {
     let root = Path::new("tests/fixtures/tiny_kev");

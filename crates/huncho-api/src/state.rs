@@ -6,6 +6,7 @@ use std::sync::Arc;
 use huncho_core::engine::Engine;
 use tokio::sync::{RwLock, Semaphore};
 
+use crate::batch::BatchQueue;
 use crate::coalesce::RequestFlights;
 use crate::config::ServerConfig;
 use crate::metrics::Metrics;
@@ -16,6 +17,7 @@ pub struct ModelRegistry {
     max_queued: u16,
     coalesce_bytes: usize,
     max_prepared: u16,
+    batch: Option<(u16, u16, usize)>,
 }
 
 /// Shareable model and bounded serving admission. Immutable model metadata can
@@ -27,10 +29,21 @@ pub struct ModelHandle {
     pub(crate) execution: Arc<Semaphore>,
     pub(crate) flights: Arc<RequestFlights>,
     pub(crate) preparation: Option<Arc<Semaphore>>,
+    pub(crate) batch: Option<Arc<BatchQueue>>,
 }
 
 impl ModelHandle {
-    fn new(engine: Arc<Engine>, max_queued: u16, coalesce_bytes: usize, max_prepared: u16) -> Self {
+    fn new(
+        engine: Arc<Engine>,
+        max_queued: u16,
+        coalesce_bytes: usize,
+        max_prepared: u16,
+        batch: Option<(u16, u16, usize)>,
+    ) -> Self {
+        let batch = batch.filter(|(rows, _, tokens)| {
+            (2..=64).contains(rows) && *tokens > 0 && engine.supports_batch()
+        });
+        let max_prepared = batch.map_or(max_prepared, |(rows, _, _)| max_prepared.max(rows));
         let preparation = (max_prepared > 0 && engine.family() != huncho_core::Family::F5)
             .then(|| Arc::new(Semaphore::new(usize::from(max_prepared))));
         Self {
@@ -39,6 +52,9 @@ impl ModelHandle {
             execution: Arc::new(Semaphore::new(1)),
             flights: RequestFlights::new(coalesce_bytes),
             preparation,
+            batch: batch.map(|(rows, wait, tokens)| {
+                BatchQueue::new(usize::from(max_queued) + 1, rows, wait, tokens)
+            }),
         }
     }
 }
@@ -57,6 +73,7 @@ impl ModelRegistry {
             max_queued: 32,
             coalesce_bytes: 0,
             max_prepared: 0,
+            batch: None,
         }
     }
 
@@ -68,6 +85,7 @@ impl ModelRegistry {
                 self.max_queued,
                 self.coalesce_bytes,
                 self.max_prepared,
+                self.batch,
             ),
         );
     }
@@ -93,16 +111,24 @@ impl ModelRegistry {
     }
 
     /// Called before serving starts. New registrations inherit the same limit.
-    fn configure_queue(&mut self, max_queued: u16, coalesce_bytes: usize, max_prepared: u16) {
+    fn configure_queue(
+        &mut self,
+        max_queued: u16,
+        coalesce_bytes: usize,
+        max_prepared: u16,
+        batch: Option<(u16, u16, usize)>,
+    ) {
         self.max_queued = max_queued;
         self.coalesce_bytes = coalesce_bytes;
         self.max_prepared = max_prepared;
+        self.batch = batch;
         for model in self.models.values_mut() {
             *model = ModelHandle::new(
                 model.engine.clone(),
                 max_queued,
                 coalesce_bytes,
                 max_prepared,
+                batch,
             );
         }
     }
@@ -130,6 +156,11 @@ impl AppState {
             config.max_queued_per_model,
             config.coalesce_bytes,
             config.max_prepared_per_model,
+            config
+                .batch_max_requests
+                .zip(config.max_batch_tokens)
+                .filter(|_| !config.prefix_cache)
+                .map(|(rows, tokens)| (rows, config.batch_wait_ms, tokens)),
         );
         AppState {
             config: Arc::new(config),

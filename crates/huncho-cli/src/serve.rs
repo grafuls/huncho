@@ -85,6 +85,19 @@ pub struct ServeArgs {
     #[arg(long, env = "HUNCHO_MAX_BATCH_TOKENS", conflicts_with = "prefix_cache")]
     pub max_batch_tokens: Option<usize>,
 
+    /// Collate up to this many prepared requests (2–64); requires a token budget.
+    #[arg(
+        long,
+        requires = "max_batch_tokens",
+        conflicts_with = "prefix_cache",
+        env = "HUNCHO_BATCH_MAX_REQUESTS"
+    )]
+    pub batch_max_requests: Option<u16>,
+
+    /// Maximum cross-request collation wait after enqueue, in milliseconds.
+    #[arg(long, default_value = "2", env = "HUNCHO_BATCH_WAIT_MS")]
+    pub batch_wait_ms: u16,
+
     /// Enable qualified F3 candidate-only vocabulary projection.
     #[arg(long, default_value_t = false, env = "HUNCHO_CANDIDATE_READOUT")]
     pub candidate_readout: bool,
@@ -103,6 +116,13 @@ fn load_models(args: &ServeArgs) -> anyhow::Result<ModelRegistry> {
     anyhow::ensure!(
         args.max_batch_tokens != Some(0),
         "max batch tokens must be positive"
+    );
+    anyhow::ensure!(
+        match args.batch_max_requests {
+            Some(rows) => (2..=64).contains(&rows),
+            None => true,
+        },
+        "batch max requests must be between 2 and 64"
     );
     anyhow::ensure!(
         !(args.prefix_cache && args.max_batch_tokens.is_some()),
@@ -183,7 +203,10 @@ fn load_models(args: &ServeArgs) -> anyhow::Result<ModelRegistry> {
 }
 
 fn qualify_optimizations(registry: &ModelRegistry, args: &ServeArgs) -> anyhow::Result<()> {
-    use huncho_core::conformance::{load_suite, run_suite_with_options, ConformanceThresholds};
+    use huncho_core::conformance::{
+        load_suite, run_suite_with_cross_request_batches, run_suite_with_options,
+        ConformanceThresholds,
+    };
     use huncho_core::engine::EvalOptions;
     let mut paths = std::collections::BTreeMap::new();
     for binding in &args.qualification_golden {
@@ -222,7 +245,9 @@ fn qualify_optimizations(registry: &ModelRegistry, args: &ServeArgs) -> anyhow::
             prefix_cache: args.prefix_cache && engine.supports_prefix_cache(),
             max_batch_tokens: args.max_batch_tokens.filter(|_| engine.supports_batch()),
             reference_readout: !args.candidate_readout,
-            prepare_all: args.max_prepared_per_model > 0 && engine.family() != Family::F5,
+            prepare_all: (args.max_prepared_per_model > 0
+                || (args.batch_max_requests.is_some() && engine.supports_batch()))
+                && engine.family() != Family::F5,
             ..Default::default()
         };
         if !opts.prefix_cache
@@ -239,8 +264,18 @@ fn qualify_optimizations(registry: &ModelRegistry, args: &ServeArgs) -> anyhow::
         let suite = load_suite(path)?;
         anyhow::ensure!(!(refit || kernel_profile) || suite.cases.iter().any(|case| !case.targets.is_empty()),
             "refitted or changed-kernel serving for `{name}` requires held-out golden vectors with observed target labels");
-        let report =
-            run_suite_with_options(engine, &suite, &ConformanceThresholds::default(), &opts)?;
+        let report = if let Some(rows) = args.batch_max_requests.filter(|_| engine.supports_batch())
+        {
+            run_suite_with_cross_request_batches(
+                engine,
+                &suite,
+                &ConformanceThresholds::default(),
+                &opts,
+                usize::from(rows),
+            )?
+        } else {
+            run_suite_with_options(engine, &suite, &ConformanceThresholds::default(), &opts)?
+        };
         anyhow::ensure!(report.passed,"qualification failed for `{name}` on {} / {}: golden delta={}, argmax={}, ECE drift={}, parity={:?}",engine.device(),engine.dtype(),report.max_prob_delta,report.argmax_agreement,report.ece,report.optimization_parity);
         tracing::info!(
             model = name,
@@ -264,6 +299,8 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
         coalesce_bytes: args.coalesce_bytes,
         prefix_cache: args.prefix_cache,
         max_batch_tokens: args.max_batch_tokens,
+        batch_max_requests: args.batch_max_requests,
+        batch_wait_ms: args.batch_wait_ms,
         candidate_readout: args.candidate_readout,
     };
 
@@ -420,6 +457,24 @@ mod qualification_tests {
                 targets: Default::default(),
             }],
         }
+    }
+
+    #[test]
+    fn cross_request_serving_requires_actual_mixed_batch_qualification() {
+        let mut args = args();
+        args.batch_max_requests = Some(4);
+        let models = registry(0.);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("golden.json");
+        let mut golden = suite();
+        std::fs::write(&path, serde_json::to_vec(&golden).unwrap()).unwrap();
+        args.qualification_golden = vec![format!("qual={}", path.display())];
+        assert!(qualify_optimizations(&models, &args).is_err());
+        golden.cases.push(golden.cases[0].clone());
+        golden.cases[1].id = "distinct request".into();
+        std::fs::write(&path, serde_json::to_vec(&golden).unwrap()).unwrap();
+        assert!(qualify_optimizations(&models, &args).is_ok());
+        assert!(qualify_optimizations(&registry(0.002), &args).is_err());
     }
 
     #[test]

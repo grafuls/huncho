@@ -98,6 +98,8 @@ pub struct ConformanceReport {
     pub max_batch_tokens: Option<usize>,
     #[serde(default)]
     pub prepare_all: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cross_request_max_requests: Option<usize>,
     #[serde(default)]
     pub work: crate::engine::EvalStats,
     pub cases: Vec<CaseReport>,
@@ -147,6 +149,64 @@ pub fn run_suite_with_options(
     thresholds: &ConformanceThresholds,
     options: &EvalOptions,
 ) -> Result<ConformanceReport> {
+    run_suite_impl(engine, suite, thresholds, options, None)
+}
+
+/// Qualify actual cross-request tensor collation, with fresh preparations and
+/// independent forwards. A suite that never mixes two requests cannot pass.
+pub fn run_suite_with_cross_request_batches(
+    engine: &Engine,
+    suite: &GoldenSuite,
+    thresholds: &ConformanceThresholds,
+    options: &EvalOptions,
+    max_requests: usize,
+) -> Result<ConformanceReport> {
+    if !(2..=64).contains(&max_requests) || !engine.supports_batch() {
+        return Err(Error::Conformance(
+            "cross-request qualification requires a native batch backend and 2–64 requests".into(),
+        ));
+    }
+    let budget = options.max_batch_tokens.ok_or_else(|| {
+        Error::Conformance("cross-request qualification requires a token budget".into())
+    })?;
+    let mut responses = Vec::with_capacity(suite.cases.len());
+    let mut work = crate::engine::EvalStats::default();
+    for group in suite.cases.chunks(max_requests) {
+        let packets = group
+            .iter()
+            .map(|case| {
+                engine.prepare_eval_uncached_with_stats(
+                    case.request.clone(),
+                    options.clone(),
+                    &mut Default::default(),
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut group_work = Default::default();
+        let result = engine.eval_prepared_batch_with_stats(packets, budget, &mut group_work);
+        work.accumulate(&group_work);
+        responses.extend(result?);
+    }
+    if work.cross_request_batches == 0 {
+        return Err(Error::Conformance(
+            "cross-request qualification requires a native batch containing questions from distinct requests".into(),
+        ));
+    }
+    let mut report = run_suite_impl(engine, suite, thresholds, options, Some((&responses, work)))?;
+    report.cross_request_max_requests = Some(max_requests);
+    Ok(report)
+}
+
+fn run_suite_impl(
+    engine: &Engine,
+    suite: &GoldenSuite,
+    thresholds: &ConformanceThresholds,
+    options: &EvalOptions,
+    collated: Option<(
+        &[crate::contract::SystemOneResponse],
+        crate::engine::EvalStats,
+    )>,
+) -> Result<ConformanceReport> {
     let case_family = crate::manifest::Family::parse(&suite.family)?;
     if case_family != engine.family() {
         return Err(Error::Conformance(format!(
@@ -169,7 +229,10 @@ pub fn run_suite_with_options(
         }
     }
     let mut cases = Vec::new();
-    let mut work = crate::engine::EvalStats::default();
+    let (responses, mut work) = match collated {
+        Some((responses, work)) => (Some(responses), work),
+        None => (None, Default::default()),
+    };
     let labeled = suite.cases.iter().any(|case| !case.targets.is_empty());
     let mut backend_brier = 0.0f64;
     let mut reference_brier = 0.0f64;
@@ -198,7 +261,7 @@ pub fn run_suite_with_options(
     let mut ref_preds = Vec::new();
     let mut ref_correct = Vec::new();
 
-    for case in &suite.cases {
+    for (index, case) in suite.cases.iter().enumerate() {
         if case.request.questions.len() != case.expected.len()
             || case
                 .request
@@ -233,7 +296,13 @@ pub fn run_suite_with_options(
         }
 
         let mut stats = crate::engine::EvalStats::default();
-        let resp = engine.eval_uncached_with_stats(&case.request, options, &mut stats)?;
+        let resp = match responses {
+            Some(responses) => responses
+                .get(index)
+                .ok_or_else(|| Error::Conformance("collation omitted a case".into()))?
+                .clone(),
+            None => engine.eval_uncached_with_stats(&case.request, options, &mut stats)?,
+        };
         work.accumulate(&stats);
         let independent = paired
             .then(|| {
@@ -382,6 +451,7 @@ pub fn run_suite_with_options(
         prefix_cache: options.prefix_cache,
         max_batch_tokens: options.max_batch_tokens,
         prepare_all: options.prepare_all,
+        cross_request_max_requests: None,
         work,
         cases,
         max_prob_delta: global_max,
@@ -431,7 +501,7 @@ pub fn save_suite(suite: &GoldenSuite, path: impl AsRef<std::path::Path>) -> Res
 }
 
 /// Extract an ordered label->probability map from an answer.
-fn answer_probabilities(answer: &Answer) -> Result<BTreeMap<String, f32>> {
+pub(crate) fn answer_probabilities(answer: &Answer) -> Result<BTreeMap<String, f32>> {
     Ok(match answer {
         Answer::Choice { probabilities, .. } => probabilities.clone(),
         Answer::Score { probabilities, .. } => probabilities.clone(),

@@ -65,6 +65,10 @@ pub struct ConformArgs {
     #[arg(long, conflicts_with = "prefix_cache")]
     pub max_batch_tokens: Option<usize>,
 
+    /// Qualify batches across this many cases (2–64), requiring actual mixing.
+    #[arg(long, requires = "max_batch_tokens", conflicts_with = "prefix_cache")]
+    pub batch_max_requests: Option<usize>,
+
     /// Qualify upfront prompt preparation against unchanged independent forwards.
     #[arg(long, default_value_t = false)]
     pub prepare_all: bool,
@@ -127,18 +131,24 @@ pub fn run(args: ConformArgs) -> anyhow::Result<()> {
         ..Default::default()
     };
 
-    let report = conformance::run_suite_with_options(
-        &engine,
-        &suite,
-        &thresholds,
-        &EvalOptions {
-            reference_readout: args.reference_readout,
-            prefix_cache: args.prefix_cache,
-            max_batch_tokens: args.max_batch_tokens,
-            prepare_all: args.prepare_all,
-            ..Default::default()
-        },
-    )?;
+    let options = EvalOptions {
+        reference_readout: args.reference_readout,
+        prefix_cache: args.prefix_cache,
+        max_batch_tokens: args.max_batch_tokens,
+        prepare_all: args.prepare_all || args.batch_max_requests.is_some(),
+        ..Default::default()
+    };
+    let report = if let Some(rows) = args.batch_max_requests {
+        conformance::run_suite_with_cross_request_batches(
+            &engine,
+            &suite,
+            &thresholds,
+            &options,
+            rows,
+        )?
+    } else {
+        conformance::run_suite_with_options(&engine, &suite, &thresholds, &options)?
+    };
 
     if args.json {
         println!("{}", serde_json::to_string_pretty(&report)?);
@@ -166,8 +176,11 @@ fn print_report(report: &ConformanceReport) {
     );
     println!("  cases: {}", report.cases.len());
     println!(
-        "  native batches: {}; forks: {}; physical token positions: {}",
-        report.work.batch_calls, report.work.cache_forks, report.work.processed_tokens
+        "  native batches: {}; cross-request batches: {}; forks: {}; physical token positions: {}",
+        report.work.batch_calls,
+        report.work.cross_request_batches,
+        report.work.cache_forks,
+        report.work.processed_tokens
     );
     println!("  max probability delta: {:.6}", report.max_prob_delta);
     println!("  argmax agreement:      {:.3}", report.argmax_agreement);
