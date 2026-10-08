@@ -98,6 +98,17 @@ async fn systemone(
     {
         return map_error(&Error::Unsupported("cooperative prefill requires CPU Kev, prefix reuse, configured chunks, one context, no batching and at most 62 queued requests".into()));
     }
+    if state.config.prefix_cache
+        && state.config.max_batch_tokens.is_some()
+        && (!engine.supports_fork_batch()
+            || state.config.max_batch_padding_percent > 0
+            || engine.batch.is_some())
+    {
+        return map_error(&Error::Unsupported(
+            "cached-branch batching requires CPU Kev, equal lengths and no cross-request collation"
+                .into(),
+        ));
+    }
     let admission = match engine.admission.clone().try_acquire_owned() {
         Ok(permit) => permit,
         Err(_) => {
@@ -444,8 +455,11 @@ pub(crate) fn record_execution(metrics: &Metrics, model: &str, stats: &EvalStats
         .persistent_prefix_hits
         .inc_by(stats.persistent_prefix_hits);
     metrics.batch_count.inc_by(stats.batch_calls);
-    metrics.cross_request_batch_count.inc_by(stats.cross_request_batches);
+    metrics
+        .cross_request_batch_count
+        .inc_by(stats.cross_request_batches);
     metrics.padded_batch_count.inc_by(stats.padded_batch_calls);
+    metrics.fork_batch_count.inc_by(stats.fork_batch_calls);
     metrics.padded_tokens.inc_by(stats.padded_tokens);
     metrics
         .reused_prefix_tokens

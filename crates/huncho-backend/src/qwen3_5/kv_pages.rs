@@ -64,6 +64,17 @@ impl PagedKv {
         Ok((Tensor::cat(&keys, 2)?, Tensor::cat(&values, 2)?))
     }
 
+    /// A private contiguous snapshot for a native branch batch. Page payloads
+    /// remain immutable; no batched suffix state is stored in these pages.
+    pub(super) fn materialize(&self) -> Result<(Tensor, Tensor)> {
+        if self.pages.is_empty() {
+            candle::bail!("cannot materialize an empty KV prefix")
+        }
+        let keys: Vec<_> = self.pages.iter().map(|page| &page.key).collect();
+        let values: Vec<_> = self.pages.iter().map(|page| &page.value).collect();
+        Ok((Tensor::cat(&keys, 2)?, Tensor::cat(&values, 2)?))
+    }
+
     fn owned_page(key: Tensor, value: Tensor, rows: usize) -> Result<Arc<Page>> {
         // Narrow views must not keep an entire projection/suffix allocation.
         Ok(Arc::new(Page {

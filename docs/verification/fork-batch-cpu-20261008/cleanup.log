@@ -1,0 +1,10 @@
+   Compiling huncho-core v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-core)
+   Compiling huncho-backend v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-backend)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.21s
+     Running unittests src/lib.rs (target/debug/deps/huncho_backend-b7e773da7a470404)
+
+running 1 test
+test qwen3_5::tests::failed_native_branch_inference_releases_every_temporary_handle ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 51 filtered out; finished in 0.03s
+

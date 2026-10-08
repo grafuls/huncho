@@ -88,6 +88,17 @@ pub struct PrefillWork {
     pub chunked_prefills: u64,
 }
 
+/// Actual isolated forks and native suffix work, including failed attempts.
+/// Prefix tokens are not recomputed. Caller token budgets must nevertheless
+/// charge each complete context to bound the private batched KV workspace.
+#[derive(Debug, Default)]
+pub struct ForkBatchWork {
+    pub cache_forks: u64,
+    pub forward_calls: u64,
+    pub processed_tokens: u64,
+    pub batch_calls: u64,
+}
+
 /// Hard native batch allocation limits, in addition to the caller token budget.
 /// Each input is conservatively charged `positions.len() + 1` readout rows,
 /// including a possible final decision row. Oversized singletons run independently.
@@ -233,6 +244,28 @@ pub trait Backend: Send + Sync {
     fn forward_batch(&mut self, _inputs: Vec<ForwardInput>) -> Result<Vec<ForwardOutput>> {
         Err(crate::error::Error::Unsupported(
             "backend does not expose native batching".into(),
+        ))
+    }
+
+    /// Whether equal-length suffixes of one immutable parent can share a
+    /// native backbone call. Independent batching does not imply this support.
+    fn supports_fork_batch(&self) -> bool {
+        false
+    }
+
+    /// Fork one complete parent into private rows and evaluate nonempty,
+    /// equal-length suffixes. Positions are relative to each suffix. No input
+    /// may retain state or supply another handle. Return owned readouts in input
+    /// order, leave the parent unchanged, and release all temporary branches on
+    /// success or failure. This does not publish continuation handles.
+    fn forward_fork_batch(
+        &mut self,
+        _parent: CacheHandle,
+        _inputs: Vec<ForwardInput>,
+        _work: &mut ForkBatchWork,
+    ) -> Result<Vec<ForwardOutput>> {
+        Err(crate::error::Error::Unsupported(
+            "backend does not expose native cached-branch batching".into(),
         ))
     }
 

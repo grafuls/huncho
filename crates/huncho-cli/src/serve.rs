@@ -104,7 +104,7 @@ pub struct ServeArgs {
     pub persistent_prefix_bytes: usize,
 
     /// Enable native equal-length question batching for qualified models/devices.
-    #[arg(long, env = "HUNCHO_MAX_BATCH_TOKENS", conflicts_with = "prefix_cache")]
+    #[arg(long, env = "HUNCHO_MAX_BATCH_TOKENS")]
     pub max_batch_tokens: Option<usize>,
 
     /// Allow supported CPU mixed lengths with at most this percent padding (0..100).
@@ -184,8 +184,9 @@ fn validate_scheduling(args: &ServeArgs) -> anyhow::Result<()> {
         "batch max requests must be between 2 and 64"
     );
     anyhow::ensure!(
-        !(args.prefix_cache && args.max_batch_tokens.is_some()),
-        "prefix reuse and batching cannot be combined yet"
+        !(args.prefix_cache && args.max_batch_tokens.is_some())
+            || (!args.cooperative_prefill && args.max_batch_padding_percent == 0 && args.batch_max_requests.is_none()),
+        "cached-branch batches require equal lengths, no cooperative prefill and no cross-request collation"
     );
     anyhow::ensure!(
         args.persistent_prefix_bytes == 0 || args.prefix_cache,
@@ -526,6 +527,8 @@ fn qualify_optimizations(registry: &ModelRegistry, args: &ServeArgs) -> anyhow::
         let replicas = engine.replica_engines();
         let replicated = replicas.len() > 1;
         let opts = evaluation_options(engine, args);
+        anyhow::ensure!(!(args.prefix_cache && args.max_batch_tokens.is_some()) || engine.supports_fork_batch(),
+            "cached-branch serving requires native CPU Kev support for every model");
         anyhow::ensure!(
             engine.family() != Family::F5
                 || opts.max_batch_tokens.is_none()

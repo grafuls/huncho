@@ -178,7 +178,7 @@ huncho serve --model ./models/laya \
 | `--result-cache-bytes` | Optional per-model exact-result retention budget; defaults to zero. Also `HUNCHO_RESULT_CACHE_BYTES`. |
 | `--coalesce-bytes` | Optional per-model metadata budget for identical in-flight request sharing; defaults to zero. Also `HUNCHO_COALESCE_BYTES`. |
 | `--prefix-cache` | Opt-in request-local Kev prefix fan-out; requires qualification for the loaded device/precision. |
-| `--max-batch-tokens` | Opt-in exact-length question batches, bounded by submitted token positions. Conflicts with prefix reuse. |
+| `--max-batch-tokens` | Opt-in exact-length question batches. CPU Kev can combine these with prefix reuse, charging complete contexts against the workspace budget. |
 | `--candidate-readout` | Opt-in F3 candidate-only projection, after qualification. |
 | `--qualification-golden MODEL=PATH` | Independent pinned labeled suite for every real runtime; checked before the listener opens. Repeatable. |
 | `--cache-dir` | Model cache directory; also seeds HF resolution (OPS-04). |
@@ -1175,3 +1175,36 @@ bounded at 64. The full reduced hidden states feed replicated FP32 pointer
 heads before shared calibration. Rank count/runtime/layout bind fresh receipts
 and are distinct arithmetic profiles requiring fitting and held-out gates.
 This increment does not implement pipeline, multi-node or GPU execution.
+
+## CPU Kev batches from a shared prefix
+
+`--prefix-cache --max-batch-tokens N` now combines request-local state prefill
+with equal-length native CPU Kev question batches. One immutable parent retains
+full-attention KV, GDN recurrence and causal-convolution state. Native rows start
+from private copies of that state, and the original trained pointer head reads
+each row's original markers and final decision. The parent never advances.
+No temporary branch handles or suffix cache survive the call, including errors.
+
+A group charges `B * (prefix_tokens + suffix_tokens)` against `N`, even though
+only the suffixes are recomputed. This bounds the private complete-KV workspace;
+it is not a byte/RSS limit. Equal complete contexts are bucketed separately from
+independent prompts, with at most 63 temporary forks and the existing 64 live
+handle cap. Oversized singletons remain intact. Another active prefix may exhaust
+the remaining handle capacity; the backend refuses admission explicitly.
+Logical wire usage counts every original complete prompt. Physical counters
+count actual prefill chunks and submitted suffixes, including failed attempts.
+`fork_batch_calls` in reports and `huncho_fork_batch_count` in metrics count
+actual multiple-row prefix batches, separately from independent batches.
+
+The profile is CPU Kev only and defaults off. Mixed-length padding,
+cooperative scheduling and cross-request collation cannot combine with it.
+Retained prefixes, chunks, immutable KV pages, CPU kernels, standard FP32 runtime
+LoRA and separately refitted packed CPU backbones keep their own qualification
+requirements. `conform`/`serve` require actual forks **and actual native cached
+batches**; a too-small budget or suite without equal-length suffixes cannot
+qualify. Serving still needs a complete fresh observed-label suite and unchanged
+external delta/full argmax/ECE plus paired independent 1e-4 gates. Fixtures with
+duplicated original typed questions retain frozen probabilities; synthetic
+fixture labels exercise gate plumbing only. Released CPU acceptance and
+workload latency/RSS remain unqualified/unmeasured. No actual GPU checks ran.
+See [CPU evidence](verification/fork-batch-cpu-20261008/README.md).

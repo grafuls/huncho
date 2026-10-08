@@ -1093,6 +1093,39 @@ struct ModelCache {
 }
 
 impl ModelCache {
+    fn branch_batch(&self, rows: usize) -> Result<Self> {
+        let repeat = |tensor: &Option<Tensor>| {
+            tensor
+                .as_ref()
+                .map(|tensor| Tensor::cat(&vec![tensor; rows], 0))
+                .transpose()
+        };
+        let layers = self
+            .layers
+            .iter()
+            .map(|layer| {
+                let (key, value) = match &layer.pages {
+                    Some(pages) => {
+                        let (key, value) = pages.materialize()?;
+                        (Some(key), Some(value))
+                    }
+                    None => (layer.key.clone(), layer.value.clone()),
+                };
+                Ok(LayerCache {
+                    pages: None,
+                    key: repeat(&key)?,
+                    value: repeat(&value)?,
+                    recurrent: repeat(&layer.recurrent)?,
+                    convolution: repeat(&layer.convolution)?,
+                })
+            })
+            .collect::<Result<_>>()?;
+        Ok(Self {
+            tokens: self.tokens,
+            layers,
+        })
+    }
+
     fn retention_bytes(&self, tokens: usize) -> Option<usize> {
         let mut bytes = tokens.checked_mul(8)?.checked_add(512)?;
         for layer in &self.layers {
@@ -2430,6 +2463,12 @@ impl Backend for Qwen3_5Backend {
             ("device".into(), crate::device_label(&self.device)),
             ("native_execution".into(), "candle-qwen35-v1".into()),
         ]);
+        if self.supports_fork_batch() {
+            extra.insert(
+                "cached_branch_batch".into(),
+                "cpu-kev-equal-suffix-v1".into(),
+            );
+        }
         if self.base_weight_cache {
             extra.insert("base_weight_cache".into(), "content-checked-cpu-v1".into());
         }
@@ -2618,6 +2657,96 @@ impl Backend for Qwen3_5Backend {
 
     fn forward_batch(&mut self, inputs: Vec<ForwardInput>) -> CoreResult<Vec<ForwardOutput>> {
         self.forward_independent_batch(inputs, false)
+    }
+
+    fn supports_fork_batch(&self) -> bool {
+        self.device.is_cpu() && matches!(self.head.as_ref(), Readout::Pointer(_))
+    }
+
+    fn forward_fork_batch(
+        &mut self,
+        parent: CacheHandle,
+        inputs: Vec<ForwardInput>,
+        work: &mut huncho_core::backend::ForkBatchWork,
+    ) -> CoreResult<Vec<ForwardOutput>> {
+        if !self.supports_fork_batch() {
+            return Err(Error::Unsupported(
+                "cached-branch batching requires CPU Kev".into(),
+            ));
+        }
+        let seq = inputs.first().map_or(0, |input| input.tokens.len());
+        let prefix = self
+            .caches
+            .get(&parent.id)
+            .ok_or_else(|| Error::Backend("unknown Qwen3.5 cache handle".into()))?;
+        if self.pending_prefills.contains_key(&parent.id)
+            || prefix.tokens == 0
+            || inputs.is_empty()
+            || inputs.len() > 63
+            || self.caches.len().saturating_add(inputs.len()) > 64
+            || seq == 0
+            || prefix
+                .tokens
+                .checked_add(seq)
+                .map_or(true, |n| n > self.max_context)
+            || inputs.iter().any(|input| {
+                input.tokens.len() != seq
+                    || input.fork_from.is_some()
+                    || input.retain_cache
+                    || input.logit_codes.is_some()
+                    || input.positions.is_empty()
+                    || input.positions.iter().any(|&p| p >= seq)
+                    || input
+                        .tokens
+                        .iter()
+                        .any(|&t| t as usize >= self.input_vocab_size)
+            })
+        {
+            return Err(Error::Backend(
+                "Kev branch batches require a complete parent, 1..=63 equal nonempty valid suffixes and available cache slots".into(),
+            ));
+        }
+        let mut branches = Vec::with_capacity(inputs.len());
+        let result = (|| {
+            for _ in &inputs {
+                branches.push(self.fork(parent)?);
+                work.cache_forks += 1;
+            }
+            // Each row starts from the exact same immutable prefix, including
+            // full KV, GDN recurrence and causal convolution. Tensor::cat owns
+            // the private workspace; no prefix or published branch is mutated.
+            let mut cache = self.caches[&parent.id]
+                .branch_batch(inputs.len())
+                .map_err(|e| Error::Backend(e.to_string()))?;
+            let tokens: Vec<_> = inputs
+                .iter()
+                .flat_map(|i| i.tokens.iter().copied())
+                .collect();
+            let ids = Tensor::from_vec(tokens, (inputs.len(), seq), &self.device)
+                .map_err(|e| Error::Backend(e.to_string()))?;
+            work.forward_calls += 1;
+            work.processed_tokens += (inputs.len() * seq) as u64;
+            work.batch_calls += u64::from(inputs.len() > 1);
+            let hidden = self
+                .model
+                .forward_cached(&ids, &mut cache)
+                .map_err(|e| Error::Backend(e.to_string()))?;
+            inputs
+                .iter()
+                .enumerate()
+                .map(|(row, input)| {
+                    let hidden = hidden
+                        .narrow(0, row, 1)
+                        .map_err(|e| Error::Backend(e.to_string()))?;
+                    self.readout(&hidden, input)
+                })
+                .collect()
+        })();
+        // Cleanup must also happen after allocation/inference/readout failure.
+        for branch in branches {
+            self.caches.remove(&branch.id);
+        }
+        result
     }
 
     fn supports_padded_batch(&self) -> bool {
@@ -2995,6 +3124,41 @@ fn core_from_tensor(t: &Tensor) -> CoreResult<CoreTensor> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn failed_native_branch_inference_releases_every_temporary_handle() {
+        use super::*;
+        let root = Path::new("tests/fixtures/tiny_kev");
+        let mut backend =
+            Qwen3_5Backend::load_kev(root, root, &root.join("head.pt"), 512, "fp32").unwrap();
+        let parent = backend.prefill(&[1, 2]).unwrap();
+        let before = backend.caches[&parent.id].tokens;
+        let vocab = backend.input_vocab_size;
+        // Pass admission then fail the actual native embedding lookup.
+        backend.input_vocab_size += 1;
+        let mut work = huncho_core::backend::ForkBatchWork::default();
+        let invalid = ForwardInput::new(vec![vocab as u32, 1], vec![0, 1]);
+        assert!(backend
+            .forward_fork_batch(parent, vec![invalid; 2], &mut work)
+            .is_err());
+        assert_eq!(
+            (work.cache_forks, work.forward_calls, work.batch_calls),
+            (2, 1, 1)
+        );
+        assert_eq!(work.processed_tokens, 4);
+        assert_eq!(backend.caches.len(), 1);
+        assert_eq!(backend.caches[&parent.id].tokens, before);
+        backend.input_vocab_size = vocab;
+        backend
+            .forward_fork_batch(
+                parent,
+                vec![ForwardInput::new(vec![3, 4], vec![0, 1]); 2],
+                &mut Default::default(),
+            )
+            .unwrap();
+        assert_eq!(backend.caches.len(), 1);
+        backend.release_cache(parent).unwrap();
+    }
+
     #[cfg(feature = "shared-base")]
     #[test]
     fn runtime_lora_shares_even_targeted_base_storage_and_survives_cache_eviction() {

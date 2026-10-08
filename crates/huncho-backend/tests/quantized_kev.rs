@@ -116,6 +116,21 @@ fn durable_quantized_artifacts_run_packed_kernels_and_preserve_native_cache_and_
                     .unwrap();
                 assert!(hit.hit);
                 let branch = backend.fork(hit.handle).unwrap();
+                let suffix_input = ForwardInput::new(
+                    tokens[boundary..].to_vec(),
+                    positions.iter().map(|p| p - boundary).collect(),
+                );
+                let mut work = huncho_core::backend::ForkBatchWork::default();
+                for output in backend
+                    .forward_fork_batch(hit.handle, vec![suffix_input; 2], &mut work)
+                    .unwrap()
+                {
+                    assert_paired(output.values().data(), baseline.values().data());
+                }
+                assert_eq!(
+                    (work.cache_forks, work.forward_calls, work.batch_calls),
+                    (2, 1, 1)
+                );
                 backend.release_cache(hit.handle).unwrap();
                 let mut suffix = ForwardInput::new(
                     tokens[boundary..].to_vec(),

@@ -1,0 +1,18 @@
+   Compiling huncho-backend v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-backend)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.40s
+     Running tests/fork_batch.rs (target/debug/deps/fork_batch-b59c2c81e2984c84)
+
+running 3 tests
+test cached_batches_reject_invalid_partial_foreign_and_exhausted_parents ... ok
+test cached_native_batches_preserve_typed_goldens_rows_pages_and_adapters ... ok
+test engine_branch_batches_preserve_original_goldens_usage_budgets_and_nonvacuous_gates ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 27.32s
+
+     Running tests/quantized_kev.rs (target/debug/deps/quantized_kev-6fc034cd4e5251d1)
+
+running 1 test
+test durable_quantized_artifacts_run_packed_kernels_and_preserve_native_cache_and_batch_isolation ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.48s
+

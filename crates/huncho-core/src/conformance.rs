@@ -516,6 +516,12 @@ fn run_suite_impl(
     if options.persistent_prefix_bytes > 0 && work.persistent_prefix_hits == 0 {
         return Err(Error::Conformance("persistent-prefix qualification requires fresh prefill and actual retained-snapshot hits".into()));
     }
+    if options.prefix_cache && options.max_batch_tokens.is_some() && work.fork_batch_calls == 0 {
+        return Err(Error::Conformance(
+            "cached-branch qualification requires an actual native batch of multiple prefix forks"
+                .into(),
+        ));
+    }
     if options.max_batch_tokens.is_some() && work.batch_calls == 0 {
         return Err(Error::Conformance("batch qualification requires a supported case that actually batches multiple questions".into()));
     }

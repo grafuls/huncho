@@ -49,6 +49,7 @@ pub struct Metrics {
     pub fork_count: IntCounter,
     pub reused_prefix_tokens: IntCounter,
     pub batch_count: IntCounter,
+    pub fork_batch_count: IntCounter,
     pub padded_batch_count: IntCounter,
     pub padded_tokens: IntCounter,
     pub cross_request_batch_count: IntCounter,
@@ -119,6 +120,14 @@ impl Metrics {
             "Native backbone calls containing multiple independent sequences.",
         )
         .unwrap();
+        let fork_batch_count = IntCounter::new(
+            "huncho_fork_batch_count",
+            "Native calls containing multiple suffixes of one immutable prefix.",
+        )
+        .unwrap();
+        registry
+            .register(Box::new(fork_batch_count.clone()))
+            .unwrap();
         let prefill_yields = IntCounter::new(
             "huncho_prefill_yields",
             "Completed prefix chunks leaving work for a later scheduling step.",
@@ -314,6 +323,7 @@ impl Metrics {
             fork_count,
             reused_prefix_tokens,
             batch_count,
+            fork_batch_count,
             padded_batch_count,
             padded_tokens,
             cross_request_batch_count,

@@ -530,6 +530,8 @@ impl QualificationRecord {
             || (engine.family() == Family::F3
                 && self.report.reference_readout != options.reference_readout)
             || (options.prefix_cache && self.report.work.cache_forks == 0)
+            || (options.prefix_cache && options.max_batch_tokens.is_some()
+                && self.report.work.fork_batch_calls == 0)
             || (fresh.metadata.contains_key("prefill_chunk_tokens")
                 && options.prefix_cache
                 && self.report.work.chunked_prefills == 0)

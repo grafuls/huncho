@@ -25,14 +25,14 @@ still times out. These variants remain unqualified.
 | O09 fused/bounded compute | CPU SiLU/multiply, causal query blocks and unexpanded grouped K/V available | FlashAttention and further fused native/device kernels |
 | O10 precision/calibration gates | Every real serving runtime requires fresh labeled conformance | Released CPU acceptance remains rejected/pending; no GPU checks |
 | O11 native Kev prefix forks | Available | Released CPU paired/labeled acceptance |
-| O12 dynamic batching | Equal-length collation and bounded CPU Qwen/ModernBERT/masked ONNX feature/whole-schema Clef right-padding available | Integrated-head graph batching, device qualification and cached-branch batching |
+| O12 dynamic batching | Equal-length collation and bounded CPU Qwen/ModernBERT/masked ONNX feature/whole-schema Clef right-padding and CPU Kev shared-prefix batches available | Integrated-head graph batching and device qualification |
 | O13 family head work | CPU Clef vectorized heads/grouped spans, optional Laya final marker queries and integrated ONNX F1 heads available | Released graph exports and Clef/Laya labeled qualification |
 | O14 concurrent execution contexts | CPU shared-weight replicas, including optional ONNX initializers, available | Released concurrent workloads, memory and affinity measurements |
 | O15 device buffers/graph replay | Optional stable CUDA ONNX I/O and bounded graph replay implemented; CPU ownership checks and CUDA compilation pass | Actual GPU capture/execution/calibration and released graph/performance qualification deferred |
 | O16 Candle device propagation | Optional CUDA loaders available | Actual GPU checks deferred |
 | O17 recurrent/conv buffers | CPU implementations available | Released profile acceptance rejected; parallel device kernels open |
 | O18 quantization | Experimental Candle and llama.cpp CPU Q8/Q4 packages available | Portable Q8/Q4 fit/held-out job staged; host currently unreachable; other families open |
-| O19 retained/paged prefixes | Bounded immutable CPU snapshots and copy-on-write CPU KV pages available | Direct paged-attention kernels, branch collation and tenant policies |
+| O19 retained/paged prefixes | Bounded immutable CPU snapshots and copy-on-write CPU KV pages and equal-suffix branch collation available | Direct paged-attention kernels, mixed-prefix collation and tenant policies |
 | O20 Metal | Skipped by user | Apple work deferred |
 | O21 llama.cpp | CPU F2/F3, full-state forks/chunks, bounded native batches and pending FP32/FP16/Q8/Q4 exports available | Released fitting/qualification and graph-side readout efficiency |
 | O22 shared bases/residency | Immutable CPU bases, lazy residency/preload/idle eviction and standard CPU FP32 F2/F3 runtime LoRA available | Released residency/calibration measurements, mixed-adapter collation and other profiles |
@@ -43,6 +43,28 @@ still times out. These variants remain unqualified.
 | O27 browser WASM/WebGPU | Separate CPU WASM F1 integrated-head SDK, packaging and fresh labeled gates available | Released exports/calibration, other families and browser scheduling; WebGPU deferred |
 
 ## Implemented increments
+
+### CPU Kev native batches from one immutable prefix
+
+O12/O19 now compose request-local prefill/fork reuse with equal-length CPU Kev
+question batches. A native tensor call collates complete prefix KV, recurrence
+and convolution into private rows, processes only new suffix tokens, then runs
+the existing trained readout and unchanged temperature. Temporary handles clean
+up on every path, and the parent and returned outputs remain independent.
+Complete-context token budgets and the 64-handle cap bound admission; physical
+work counters report actual suffix computation. A dedicated counter and gate
+require real cached-branch batching, so scalar forks plus unrelated independent
+batches cannot qualify this profile.
+
+Frozen typed Kev references, full argmax and paired 1e-4 gates remain unchanged
+across CPU FP32/FP16, pages, chunks, kernels, replicas and standard runtime LoRA.
+Packed Q8/Q4 scheduling is compared to its own unqualified packed scalar profile,
+not promoted to upstream calibration. CLI checks keep fresh labeled startup
+requirements and refuse vacuous/incompatible profiles. Synthetic labels prove
+plumbing only. Mixed-length/mixed-prefix/cross-request cached collation,
+cooperative branch scheduling and released latency/RSS/calibration remain open.
+No actual GPU check ran. [Evidence and limits](verification/fork-batch-cpu-20261008/README.md).
+
 
 ### Stable ONNX device I/O and bounded CUDA graph replay
 

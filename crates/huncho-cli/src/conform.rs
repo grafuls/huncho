@@ -76,7 +76,7 @@ pub struct ConformArgs {
     pub persistent_prefix_bytes: usize,
 
     /// Qualify native equal-length question batching against the same suite.
-    #[arg(long, conflicts_with = "prefix_cache")]
+    #[arg(long)]
     pub max_batch_tokens: Option<usize>,
 
     /// Allow supported CPU mixed lengths with at most this percent padding (0..100).

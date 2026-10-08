@@ -148,6 +148,137 @@ fn package() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
     (tmp, manifest_path, golden_path)
 }
 
+#[cfg(feature = "qualification")]
+#[test]
+fn cached_branch_cli_requires_actual_native_batches_and_fresh_labeled_gates() {
+    let (tmp, manifest, original) = package();
+    let mut suite: Value = serde_json::from_slice(&std::fs::read(&original).unwrap()).unwrap();
+    for case in suite["cases"].as_array_mut().unwrap() {
+        for (id, question) in case["request"]["questions"].as_object().unwrap().clone() {
+            let duplicate = format!("{id}-duplicate");
+            let probabilities = case["expected"][&id].clone();
+            case["request"]["questions"][&duplicate] = question;
+            case["expected"][&duplicate] = probabilities;
+        }
+    }
+    let path = tmp.path().join("duplicate-frozen-questions.json");
+    std::fs::write(&path, serde_json::to_vec(&suite).unwrap()).unwrap();
+    let receipt = tmp.path().join("cached-batch-numerical.json");
+    let args = [
+        "conform",
+        "--manifest",
+        manifest.to_str().unwrap(),
+        "--backend",
+        "candle",
+        "--dtype",
+        "fp32",
+        "--golden",
+        path.to_str().unwrap(),
+        "--prefix-cache",
+        "--max-batch-tokens",
+        "4096",
+        "--write-qualification",
+        receipt.to_str().unwrap(),
+        "--json",
+    ];
+    let output = run_storage_profile(&args, "3", "7", "1", "16");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["passed"], true);
+    assert_eq!(
+        report["execution_metadata"]["cached_branch_batch"],
+        "cpu-kev-equal-suffix-v1"
+    );
+    assert_eq!(report["work"]["fork_batch_calls"], 6);
+    assert_eq!(report["work"]["cache_forks"], 12);
+    assert_eq!(report["work"]["cross_request_batches"], 0);
+    assert!(
+        report["optimization_parity"]["max_prob_delta"]
+            .as_f64()
+            .unwrap()
+            <= 1e-4
+    );
+    let numerical: Value = serde_json::from_slice(&std::fs::read(&receipt).unwrap()).unwrap();
+    assert_eq!(numerical["outcome_gates_passed"], false);
+    let binding = format!("tiny-kev={}", path.display());
+    let serve = [
+        "serve",
+        "--manifest",
+        manifest.to_str().unwrap(),
+        "--backend",
+        "candle",
+        "--dtype",
+        "fp32",
+        "--prefix-cache",
+        "--max-batch-tokens",
+        "4096",
+        "--qualification-golden",
+        &binding,
+        "--bind",
+        "127.0.0.1:0",
+    ];
+    let output = run_storage_profile(&serve, "3", "7", "1", "16");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("observed target labels"));
+    // Fixture labels test gate plumbing only, never released-model calibration.
+    for case in suite["cases"].as_array_mut().unwrap() {
+        let labels: serde_json::Map<String, Value> = case["expected"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(id, p)| {
+                (
+                    id.clone(),
+                    json!(p.as_object().unwrap().keys().next().unwrap()),
+                )
+            })
+            .collect();
+        case["targets"] = json!(labels);
+    }
+    std::fs::write(&path, serde_json::to_vec(&suite).unwrap()).unwrap();
+    let labeled_receipt = tmp.path().join("cached-batch-labeled-fixture.json");
+    let mut labeled = args.to_vec();
+    let receipt_index = labeled
+        .iter()
+        .position(|s| *s == "--write-qualification")
+        .unwrap()
+        + 1;
+    labeled[receipt_index] = labeled_receipt.to_str().unwrap();
+    let output = run_storage_profile(&labeled, "3", "7", "1", "16");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let record: Value = serde_json::from_slice(&std::fs::read(&labeled_receipt).unwrap()).unwrap();
+    assert_eq!(record["outcome_gates_passed"], true);
+    let mut tiny = labeled.clone();
+    // Correct the token budget by name rather than relying on argument positions.
+    let budget = tiny
+        .iter()
+        .position(|s| *s == "--max-batch-tokens")
+        .unwrap()
+        + 1;
+    tiny[budget] = "1";
+    let write = tiny
+        .iter()
+        .position(|s| *s == "--write-qualification")
+        .unwrap();
+    tiny.drain(write..write + 2);
+    let output = run_storage_profile(&tiny, "3", "7", "1", "16");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("actual native batch"));
+    let mut invalid = serve.to_vec();
+    invalid.extend(["--max-batch-padding-percent", "10"]);
+    let output = run_storage_profile(&invalid, "3", "7", "1", "16");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("equal lengths"));
+}
+
 #[test]
 fn cooperative_conformance_requires_real_interleaving_on_unchanged_native_goldens() {
     let (tmp, manifest_path, golden_path) = package();

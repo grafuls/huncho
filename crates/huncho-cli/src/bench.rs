@@ -95,7 +95,7 @@ pub struct BenchArgs {
     pub persistent_prefix_bytes: usize,
 
     /// Opt-in native equal-length question batches bounded by total tokens.
-    #[arg(long, conflicts_with = "prefix_cache")]
+    #[arg(long)]
     pub max_batch_tokens: Option<usize>,
 
     /// Allow supported CPU mixed lengths with at most this percent padding (0..100).
@@ -104,7 +104,7 @@ pub struct BenchArgs {
 
     /// Collate up to this many complete requests per timed client group.
     /// F5 retains whole schemas; other families retain their question prompts.
-    #[arg(long, requires = "max_batch_tokens", value_parser = clap::value_parser!(u16).range(2..=64))]
+    #[arg(long, requires = "max_batch_tokens", conflicts_with = "prefix_cache", value_parser = clap::value_parser!(u16).range(2..=64))]
     pub batch_max_requests: Option<u16>,
 
     /// Use a long state (~1500 chars) instead of a short one.
