@@ -613,16 +613,30 @@ impl Attention {
             .transpose(1, 2)?;
 
         let (q, k) = apply_partial_rotary(&q, &k, cos, sin, self.rotary_dim)?;
+        let shared_pages = self.direct_paged_attention
+            && b > 1
+            && cache.as_ref().is_some_and(|c| c.pages.is_some());
         let retained_pages = cache
             .as_ref()
+            .filter(|_| !shared_pages)
             .and_then(|c| c.pages.as_ref())
             .map(|pages| pages.append(&k, &v))
             .transpose()?;
         let activation_dtype = q.dtype();
-        let (attn, retained) = if self.direct_paged_attention && retained_pages.is_some() {
-            // Persistent single-row pages take the direct path. Independent
-            // forwards and private multi-row branch workspaces retain the
-            // original flat attention path and are recorded as such.
+        let (attn, retained) = if shared_pages {
+            // Private native branch rows read the same immutable prefix pages.
+            // Their suffix KV and recurrent state are discarded after readout.
+            (
+                cache
+                    .as_ref()
+                    .unwrap()
+                    .pages
+                    .as_ref()
+                    .unwrap()
+                    .attention_suffix_batch(&q, &k, &v, self.query_rows)?,
+                None,
+            )
+        } else if self.direct_paged_attention && retained_pages.is_some() {
             (
                 retained_pages
                     .as_ref()
@@ -1110,7 +1124,7 @@ struct ModelCache {
 }
 
 impl ModelCache {
-    fn branch_batch(&self, rows: usize) -> Result<Self> {
+    fn branch_batch(&self, rows: usize, direct_pages: bool) -> Result<Self> {
         let repeat = |tensor: &Option<Tensor>| {
             tensor
                 .as_ref()
@@ -1122,6 +1136,7 @@ impl ModelCache {
             .iter()
             .map(|layer| {
                 let (key, value) = match &layer.pages {
+                    Some(_) if direct_pages => (None, None),
                     Some(pages) => {
                         let (key, value) = pages.materialize()?;
                         (Some(key), Some(value))
@@ -1129,7 +1144,7 @@ impl ModelCache {
                     None => (layer.key.clone(), layer.value.clone()),
                 };
                 Ok(LayerCache {
-                    pages: None,
+                    pages: direct_pages.then(|| layer.pages.clone()).flatten(),
                     key: repeat(&key)?,
                     value: repeat(&value)?,
                     recurrent: repeat(&layer.recurrent)?,
@@ -2576,17 +2591,17 @@ impl Backend for Qwen3_5Backend {
             );
         }
         if self.model.direct_paged_attention {
-            extra.insert("paged_attention".into(), "cpu-page-qk-pv-fp32-v1".into());
+            extra.insert("paged_attention".into(), "cpu-page-qk-pv-fp32-v2".into());
             extra.insert(
                 "paged_attention_fallback".into(),
-                "flat-independent-and-branch-batch-v1".into(),
+                "flat-independent-v1".into(),
             );
         }
         if self.model.kv_page_tokens > 0 {
             extra.insert(
                 "kv_storage".into(),
                 if self.model.direct_paged_attention {
-                    "cpu-cow-pages-direct-v1"
+                    "cpu-cow-pages-direct-v2"
                 } else {
                     "cpu-cow-pages-materialize-v1"
                 }
@@ -3073,10 +3088,11 @@ impl Qwen3_5Backend {
                 work.cache_forks += 1;
             }
             // Each row starts from the exact same immutable prefix, including
-            // full KV, GDN recurrence and causal convolution. Tensor::cat owns
-            // the private workspace; no prefix or published branch is mutated.
+            // full KV, GDN recurrence and causal convolution. Direct page
+            // profiles share immutable prefix KV; other profiles materialize
+            // private rows. Recurrence/conv are private in both paths.
             let mut cache = self.caches[&parent.id]
-                .branch_batch(inputs.len())
+                .branch_batch(inputs.len(), self.model.direct_paged_attention)
                 .map_err(|e| Error::Backend(e.to_string()))?;
             let tokens: Vec<_> = inputs
                 .iter()
@@ -3820,6 +3836,161 @@ mod tests {
             let a = huncho_core::calibration::calibrate(&results[0], temperature).unwrap();
             let b = huncho_core::calibration::calibrate(&results[1], temperature).unwrap();
             assert!(a.iter().zip(&b).all(|(a, b)| (a - b).abs() <= 1e-4));
+        }
+    }
+
+    #[test]
+    fn native_direct_page_groups_share_prefix_kv_and_preserve_original_readouts() {
+        let root = Path::new("tests/fixtures/tiny_kev");
+        let fixture: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(root.join("golden.json")).unwrap()).unwrap();
+        for (page_tokens, runtime) in [
+            (16, false),
+            (32, false),
+            (64, false),
+            (128, false),
+            (256, false),
+            (16, true),
+        ] {
+            let raw = if runtime {
+                Qwen3_5Backend::load_kev_runtime_lora(
+                    root,
+                    root,
+                    &root.join("head.pt"),
+                    512,
+                    "fp32",
+                )
+            } else {
+                Qwen3_5Backend::load_kev(root, root, &root.join("head.pt"), 512, "fp32")
+            }
+            .unwrap();
+            let mut backend = raw
+                .with_kv_page_tokens(page_tokens)
+                .unwrap()
+                .with_attention_query_rows(7)
+                .unwrap()
+                .with_direct_paged_attention(true)
+                .unwrap();
+            for case in fixture["cases"].as_array().unwrap() {
+                let rows = case["rows"].as_array().unwrap();
+                let prefix = rows[0]["prefix_len"].as_u64().unwrap() as usize;
+                let tokens: Vec<u32> = serde_json::from_value(rows[0]["tokens"].clone()).unwrap();
+                let parent = backend.prefill(&tokens[..prefix]).unwrap();
+                let inputs: Vec<_> = rows
+                    .iter()
+                    .map(|row| {
+                        let tokens: Vec<u32> =
+                            serde_json::from_value(row["tokens"].clone()).unwrap();
+                        let positions: Vec<usize> =
+                            serde_json::from_value(row["positions"].clone()).unwrap();
+                        ForwardInput::new(
+                            tokens[prefix..].to_vec(),
+                            positions.iter().map(|p| p - prefix).collect(),
+                        )
+                    })
+                    .collect();
+                let temporary = backend.caches[&parent.id].branch_batch(3, true).unwrap();
+                for (original, private) in backend.caches[&parent.id]
+                    .layers
+                    .iter()
+                    .zip(&temporary.layers)
+                {
+                    if original.pages.is_some() {
+                        assert!(private.pages.is_some());
+                        assert!(private.key.is_none() && private.value.is_none());
+                    }
+                    if let Some(recurrence) = &private.recurrent {
+                        assert_eq!(recurrence.dim(0).unwrap(), 3);
+                        assert_eq!(original.recurrent.as_ref().unwrap().dim(0).unwrap(), 1);
+                    }
+                }
+                drop(temporary);
+                for padded in [false, true] {
+                    let submitted = if padded {
+                        inputs.clone()
+                    } else {
+                        vec![inputs[0].clone(); 3]
+                    };
+                    let reference: Vec<_> = submitted
+                        .iter()
+                        .map(|input| {
+                            let branch = backend.fork(parent).unwrap();
+                            let mut input = input.clone();
+                            input.fork_from = Some(branch);
+                            let output = backend.forward(input).unwrap().values().data().to_vec();
+                            backend.release_cache(branch).unwrap();
+                            output
+                        })
+                        .collect();
+                    for _ in 0..25 {
+                        kv_pages::reset_path_counts();
+                        let mut work = huncho_core::backend::ForkBatchWork::default();
+                        let outputs = if padded {
+                            backend.forward_padded_fork_batch(parent, submitted.clone(), &mut work)
+                        } else {
+                            backend.forward_fork_batch(parent, submitted.clone(), &mut work)
+                        }
+                        .unwrap();
+                        assert_eq!(kv_pages::path_counts(), (0, 1));
+                        assert_eq!(backend.caches.len(), 1);
+                        assert_eq!(backend.caches[&parent.id].tokens, prefix);
+                        assert_eq!(
+                            (work.forward_calls, work.batch_calls, work.cache_forks),
+                            (1, 1, 3)
+                        );
+                        for (index, (output, raw)) in outputs.iter().zip(&reference).enumerate() {
+                            for temperature in [0.75, 1., 2.40605] {
+                                let a = huncho_core::calibration::calibrate(
+                                    output.values().data(),
+                                    temperature,
+                                )
+                                .unwrap();
+                                let b =
+                                    huncho_core::calibration::calibrate(raw, temperature).unwrap();
+                                assert_eq!(
+                                    huncho_core::calibration::argmax(&a),
+                                    huncho_core::calibration::argmax(&b)
+                                );
+                                assert!(a.iter().zip(&b).all(|(a, b)| (a - b).abs() <= 1e-4));
+                            }
+                            let a = huncho_core::calibration::calibrate(
+                                output.values().data(),
+                                2.40605,
+                            )
+                            .unwrap();
+                            let frozen: Vec<f32> = serde_json::from_value(
+                                rows[if padded { index } else { 0 }]["probabilities"].clone(),
+                            )
+                            .unwrap();
+                            assert_eq!(
+                                huncho_core::calibration::argmax(&a),
+                                huncho_core::calibration::argmax(&frozen)
+                            );
+                            assert!(a.iter().zip(&frozen).all(|(a, b)| (a - b).abs() <= 1e-3));
+                        }
+                    }
+                }
+                // Validation fails before creating private rows or reading pages.
+                let mut malformed = inputs.clone();
+                malformed[1].tokens[0] = u32::MAX;
+                kv_pages::reset_path_counts();
+                let mut work = huncho_core::backend::ForkBatchWork::default();
+                assert!(backend
+                    .forward_padded_fork_batch(parent, malformed, &mut work)
+                    .is_err());
+                assert_eq!(kv_pages::path_counts(), (0, 0));
+                assert_eq!(
+                    work.cache_forks
+                        + work.forward_calls
+                        + work.processed_tokens
+                        + work.batch_calls
+                        + work.padded_tokens
+                        + work.padded_batch_calls,
+                    0
+                );
+                assert_eq!(backend.caches.len(), 1);
+                backend.release_cache(parent).unwrap();
+            }
         }
     }
 

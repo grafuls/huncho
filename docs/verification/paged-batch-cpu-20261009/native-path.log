@@ -1,0 +1,9 @@
+   Compiling huncho-backend v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-backend)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.75s
+     Running unittests src/lib.rs (target/debug/deps/huncho_backend-97a358c1c68d3c25)
+
+running 1 test
+test qwen3_5::tests::native_direct_page_groups_share_prefix_kv_and_preserve_original_readouts ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 47 filtered out; finished in 8.94s
+

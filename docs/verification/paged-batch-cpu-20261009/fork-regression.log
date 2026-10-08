@@ -1,0 +1,11 @@
+   Compiling huncho-backend v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-backend)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.20s
+     Running tests/fork_batch.rs (target/debug/deps/fork_batch-38143f7e46e02aa0)
+
+running 3 tests
+test cached_batches_reject_invalid_partial_foreign_and_exhausted_parents ... ok
+test cached_native_batches_preserve_typed_goldens_rows_pages_and_adapters ... ok
+test engine_branch_batches_preserve_original_goldens_usage_budgets_and_nonvacuous_gates ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.20s
+

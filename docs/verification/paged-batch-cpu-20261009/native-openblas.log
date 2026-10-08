@@ -1,0 +1,11 @@
+   Compiling huncho-backend v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-backend)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.02s
+     Running tests/paged_attention.rs (target/debug/deps/paged_attention-a510c12deec15c2b)
+
+running 3 tests
+test direct_page_profile_rejects_missing_prerequisites_and_later_invalid_settings ... ok
+test direct_pages_keep_original_typed_goldens_across_boundaries_chunks_and_runtime_adapters ... ok
+test direct_pages_retain_transactional_bounds_snapshots_and_replica_isolation ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.58s
+

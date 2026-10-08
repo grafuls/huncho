@@ -1,0 +1,107 @@
+warning: variable does not need to be mutable
+   --> crates/huncho-backend/tests/paged_attention.rs:192:9
+    |
+192 |     let mut backend = load(16, false, false);
+    |         ----^^^^^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `huncho-backend` (test "paged_attention") generated 1 warning (run `cargo fix --test "paged_attention" -p huncho-backend` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running tests/kev_reference.rs (target/debug/deps/kev_reference-028b5eb7dca76560)
+
+running 1 test
+test kev_candle_matches_upstream_probabilities ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+
+     Running tests/kv_pages.rs (target/debug/deps/kv_pages-4d8f74b2b704227d)
+
+running 2 tests
+test native_pages_forks_and_chunks_match_flat_storage_and_frozen_typed_goldens ... ok
+test pages_are_bounded_transactional_and_compose_with_retention_and_partial_prefills ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.94s
+
+     Running tests/native_batch.rs (target/debug/deps/native_batch-4b562e13a56a55ba)
+
+running 5 tests
+test buffered_cpu_kernels_preserve_kev_reference_batches_and_prefixes ... ok
+test execution_profiles_preserve_fixture_readouts_and_cache_semantics ... ok
+test kev_cpu_cross_request_collation_qualifies_unchanged_upstream_vectors ... ok
+test modernbert_batches_preserve_rows_and_candidate_positions ... ok
+test qwen_pointer_batches_preserve_probabilities_and_reject_cache_branches ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.00s
+
+     Running tests/padded_batch.rs (target/debug/deps/padded_batch-3915692bcdddae36)
+
+running 3 tests
+test engine_padded_qualification_preserves_frozen_probabilities_and_counts_real_rectangles ... ok
+test native_cpu_candidate_padding_preserves_selected_columns_and_positions ... ok
+test native_cpu_pointer_padding_preserves_final_valid_decisions_and_isolation ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.45s
+
+     Running tests/paged_attention.rs (target/debug/deps/paged_attention-a45e4f8e6b874f38)
+
+running 3 tests
+test direct_page_profile_rejects_missing_prerequisites_and_later_invalid_settings ... ok
+test direct_pages_keep_original_typed_goldens_across_boundaries_chunks_and_runtime_adapters ... ok
+test direct_pages_retain_transactional_bounds_snapshots_and_replica_isolation ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.55s
+
+     Running tests/prefix_cache.rs (target/debug/deps/prefix_cache-0f9e68b8045abcc9)
+
+running 4 tests
+test cache_handles_are_owned_bounded_and_transactional ... ok
+test engine_fanout_preserves_wire_usage_and_releases_on_later_errors ... ok
+test native_forks_chunks_and_short_prefixes_preserve_probabilities ... ok
+test persistent_prefixes_are_exact_bounded_and_isolate_active_handles_on_cpu ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.46s
+
+     Running tests/quantized_kev.rs (target/debug/deps/quantized_kev-047f33a55aaf53b3)
+
+running 1 test
+test durable_quantized_artifacts_run_packed_kernels_and_preserve_native_cache_and_batch_isolation ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.18s
+
+     Running tests/query_attention.rs (target/debug/deps/query_attention-f1484f14cafee75c)
+
+running 4 tests
+test grouped_gqa_profile_cannot_change_shared_or_partial_prefix_arithmetic ... ok
+test query_blocks_preserve_complete_joint_schema_heads_and_usage ... ok
+test query_blocks_preserve_frozen_pointer_probabilities_prefixes_and_padded_batches ... ok
+test query_blocks_preserve_selected_candidate_logits ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 50.67s
+
+     Running tests/replicas.rs (target/debug/deps/replicas-fe20e5da26481024)
+
+running 3 tests
+test cpu_clef_replicas_preserve_whole_request_joint_logits_concurrently ... ok
+test cpu_modernbert_and_native_kev_replicas_preserve_independent_float_bits_concurrently ... ok
+test packed_cpu_kev_replicas_keep_the_same_packed_arithmetic_and_independent_state ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.83s
+
+     Running tests/runtime_lora.rs (target/debug/deps/runtime_lora-94db983c297030a8)
+
+running 3 tests
+test f3_runtime_adapters_preserve_raw_vocabulary_and_selected_candidate_batch_scores ... ok
+test runtime_adapters_preserve_frozen_typed_scores_batches_forks_and_owned_outputs ... ok
+test separate_live_adapters_keep_weights_and_prefixes_isolated_and_reject_other_precision ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.94s
+
+     Running tests/shared_base.rs (target/debug/deps/shared_base-9c3bdd3a18d7460f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

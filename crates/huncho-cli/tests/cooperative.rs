@@ -389,6 +389,7 @@ fn native_cpu_cooperative_groups_start_with_fresh_proofs_and_serve_original_type
     }
     for name in [
         "HUNCHO_CPU_BLAS_LIBRARY",
+        "HUNCHO_CPU_BLAS_THREADS",
         "HUNCHO_CPU_DELTA_RULE",
         "HUNCHO_CPU_CAUSAL_CONV",
         "HUNCHO_CPU_FUSED_GATE",
@@ -1266,6 +1267,10 @@ fn direct_page_profile_keeps_frozen_gates_and_requires_fresh_labeled_prefix_qual
         "--golden",
         golden.to_str().unwrap(),
         "--prefix-cache",
+        "--max-batch-tokens",
+        "4096",
+        "--max-batch-padding-percent",
+        "25",
         "--persistent-prefix-bytes",
         "1048576",
         "--json",
@@ -1294,13 +1299,15 @@ fn direct_page_profile_keeps_frozen_gates_and_requires_fresh_labeled_prefix_qual
         assert_eq!(report["passed"], true);
         assert_eq!(
             report["execution_metadata"]["kv_storage"],
-            "cpu-cow-pages-direct-v1"
+            "cpu-cow-pages-direct-v2"
         );
         assert_eq!(
             report["execution_metadata"]["paged_attention"],
-            "cpu-page-qk-pv-fp32-v1"
+            "cpu-page-qk-pv-fp32-v2"
         );
         assert!(report["work"]["cache_forks"].as_u64().unwrap() > 0);
+        assert!(report["work"]["fork_batch_calls"].as_u64().unwrap() > 0);
+        assert!(report["work"]["fork_padded_batch_calls"].as_u64().unwrap() > 0);
         assert!(report["work"]["persistent_prefix_hits"].as_u64().unwrap() > 0);
         assert!(
             report["optimization_parity"]["max_prob_delta"]

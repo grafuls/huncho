@@ -686,15 +686,24 @@ from flat attention; this default-off profile requires fresh fixed external,
 full-argmax, observed-label/ECE and paired 1e-4 startup gates with actual prefix
 fan-out. A storage-only receipt cannot authorize the direct profile.
 
-`kv_storage=cpu-cow-pages-direct-v1` and
-`paged_attention=cpu-page-qk-pv-fp32-v1` bind model execution and the environment.
-Independent forwards and private multi-row suffix batches retain flat kernels,
-recorded as `paged_attention_fallback=flat-independent-and-branch-batch-v1`.
-Their calibration gates still cover the whole request. This option is not a
+`kv_storage=cpu-cow-pages-direct-v2` and
+`paged_attention=cpu-page-qk-pv-fp32-v2` bind model execution and the environment.
+Native equal/padded cached suffix groups now share the immutable prefix pages.
+The kernel regroups query/probability rows across batch rows to read each page
+without repeating prefix K/V; each row's suffix stays private. Parent pages
+never advance, and temporary suffix state is discarded after the trained head.
+The existing complete-context budgets and live handle limits remain
+conservative. Fresh qualification includes the selected actual native group
+and padding work; a v1 receipt cannot authorize v2 execution. Independent
+forwards retain flat kernels, recorded as
+`paged_attention_fallback=flat-independent-v1`.
+Calibration gates cover the whole request. This option is not a
 GPU FlashAttention kernel. Scores and softmax still use temporary blocks;
 multiple small page matmuls may cost more latency than a large contiguous call.
-It avoids full prefix K/V workspaces for persistent single-row calls, not all
-model allocation or a total peak-memory bound. Measure a released workload
+It avoids full prefix K/V workspaces for persistent single-row calls and native
+shared-prefix groups. Private recurrence/conv, suffix K/V, activations and
+query/probability regrouping still allocate; this is not a total peak-memory
+bound. Mixed-prefix groups remain unsupported. Measure a released workload
 before choosing page/block sizes.
 
 Configure pages/query bounds/direct mode before live, partial or retained

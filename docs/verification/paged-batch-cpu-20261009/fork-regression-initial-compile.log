@@ -1,0 +1,33 @@
+   Compiling huncho-backend v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-backend)
+error[E0369]: binary operation `==` cannot be applied to type `BTreeMap<std::string::String, Answer>`
+   --> crates/huncho-backend/tests/fork_batch.rs:404:9
+    |
+404 |         assert_eq!(interleaved.answers, reference.answers);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |         |
+    |         BTreeMap<std::string::String, Answer>
+    |         BTreeMap<std::string::String, Answer>
+    |
+note: `Answer` does not implement `PartialEq`
+   --> crates/huncho-core/src/contract.rs:265:1
+    |
+265 | pub enum Answer {
+    | ^^^^^^^^^^^^^^^ `Answer` is defined in another crate
+
+error[E0369]: binary operation `==` cannot be applied to type `Usage`
+   --> crates/huncho-backend/tests/fork_batch.rs:405:9
+    |
+405 |         assert_eq!(interleaved.usage, reference.usage);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |         |
+    |         Usage
+    |         Usage
+    |
+note: `Usage` does not implement `PartialEq`
+   --> crates/huncho-core/src/contract.rs:296:1
+    |
+296 | pub struct Usage {
+    | ^^^^^^^^^^^^^^^^ `Usage` is defined in another crate
+
+For more information about this error, try `rustc --explain E0369`.
+error: could not compile `huncho-backend` (test "fork_batch") due to 2 previous errors

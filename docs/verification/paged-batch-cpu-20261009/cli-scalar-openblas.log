@@ -1,0 +1,13 @@
+   Compiling huncho-core v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-core)
+   Compiling huncho-backend v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-backend)
+   Compiling huncho-hub v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-hub)
+   Compiling huncho-api v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-api)
+   Compiling huncho-cli v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-cli)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.38s
+     Running tests/cooperative.rs (target/debug/deps/cooperative-55593384723b3142)
+
+running 1 test
+test direct_page_profile_keeps_frozen_gates_and_requires_fresh_labeled_prefix_qualification ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 29.88s
+

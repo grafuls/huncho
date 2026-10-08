@@ -1,0 +1,201 @@
+   Compiling huncho-core v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-core)
+   Compiling huncho-backend v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-backend)
+warning: variable does not need to be mutable
+   --> crates/huncho-backend/tests/paged_attention.rs:192:9
+    |
+192 |     let mut backend = load(16, false, false);
+    |         ----^^^^^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `huncho-backend` (test "paged_attention") generated 1 warning (run `cargo fix --test "paged_attention" -p huncho-backend` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.48s
+     Running unittests src/lib.rs (target/debug/deps/huncho_backend-97a358c1c68d3c25)
+
+running 1 test
+test qwen3_5::kv_pages::tests::shared_prefix_suffix_rows_preserve_causality_head_mapping_and_row_isolation ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 46 filtered out; finished in 1.29s
+
+     Running tests/candidate_readout.rs (target/debug/deps/candidate_readout-5375683bc376574f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/candle_integration.rs (target/debug/deps/candle_integration-7b1b7236d99aa91d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/chunked_prefill.rs (target/debug/deps/chunked_prefill-82763aa7d0ee7d3d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/clef_batch.rs (target/debug/deps/clef_batch-6e5b934862b61dcd)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/clef_reference.rs (target/debug/deps/clef_reference-92b903c2c785f8d5)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/conformance.rs (target/debug/deps/conformance-6ed4d089b11c1321)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+     Running tests/cooperative_batches.rs (target/debug/deps/cooperative_batches-d066dae351878029)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/cpu_blas.rs (target/debug/deps/cpu_blas-8417c40c0fce6eee)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/fork_batch.rs (target/debug/deps/fork_batch-77f2ca88847d10b4)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/kev_reference.rs (target/debug/deps/kev_reference-614a183347a9ee36)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/kv_pages.rs (target/debug/deps/kv_pages-85d82e06097e363f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/laya_padded.rs (target/debug/deps/laya_padded-923fc9da7ad3c20b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/laya_selected.rs (target/debug/deps/laya_selected-561467dc4d2d3aea)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/llamacpp.rs (target/debug/deps/llamacpp-263447a597dce1d2)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/native_batch.rs (target/debug/deps/native_batch-afc0c54a2c6097c4)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+     Running tests/onnx_conformance.rs (target/debug/deps/onnx_conformance-acf61355fce38a7f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/onnx_head_batch.rs (target/debug/deps/onnx_head_batch-03c90532fbf80c9e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/onnx_integrated.rs (target/debug/deps/onnx_integrated-45b29f32ebffdb30)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/onnx_integration.rs (target/debug/deps/onnx_integration-6724322eb6e3b169)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/onnx_padded.rs (target/debug/deps/onnx_padded-aa955d35ddcce433)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/onnx_replicas.rs (target/debug/deps/onnx_replicas-5d46f85a969e73dc)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/padded_batch.rs (target/debug/deps/padded_batch-9d179082c21c3135)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/paged_attention.rs (target/debug/deps/paged_attention-944e85aba6f75cd7)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/prefix_cache.rs (target/debug/deps/prefix_cache-d7c57a024b029723)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/quantized_kev.rs (target/debug/deps/quantized_kev-ac22a9793de17bac)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/query_attention.rs (target/debug/deps/query_attention-b673e32d53142cf0)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/replicas.rs (target/debug/deps/replicas-e7cea7178d88dce6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/runtime_lora.rs (target/debug/deps/runtime_lora-b12f5d5d5729943c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/shared_base.rs (target/debug/deps/shared_base-50619d867dcc959b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/vllm_cpu.rs (target/debug/deps/vllm_cpu-5b8eb457d1707432)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

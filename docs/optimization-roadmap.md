@@ -34,7 +34,7 @@ These variants remain unqualified.
 | O16 Candle device propagation | Optional CUDA loaders available | Actual GPU checks deferred |
 | O17 recurrent/conv buffers | CPU implementations available | Released profile acceptance rejected; parallel device kernels open |
 | O18 quantization | Experimental Candle and llama.cpp CPU Q8/Q4 packages available | CPU Q8 refit complete, held-out active at the recorded snapshot; Q4 waiting; other families open |
-| O19 retained/paged prefixes | Bounded immutable CPU snapshots, copy-on-write CPU KV pages, optional direct CPU FP32 page attention and equal/padded-suffix branch collation available | Mixed-prefix/multi-row direct page kernels, device kernels and tenant policies |
+| O19 retained/paged prefixes | Bounded immutable CPU snapshots, copy-on-write CPU KV pages and optional direct CPU FP32 single-row/native equal/padded shared-prefix attention available | Mixed-prefix groups, device kernels, controlled released memory/latency and tenant policies |
 | O20 Metal | Skipped by user | Apple work deferred |
 | O21 llama.cpp | CPU F2/F3, full-state forks/chunks, bounded native batches and pending FP32/FP16/Q8/Q4 exports available | Released fitting/qualification and graph-side readout efficiency |
 | O22 shared bases/residency | Immutable CPU bases, lazy residency/preload/idle eviction and standard CPU FP32 F2/F3 runtime LoRA available | Released residency/calibration measurements, mixed-adapter collation and other profiles |
@@ -45,6 +45,22 @@ These variants remain unqualified.
 | O27 browser WASM/WebGPU | Separate CPU WASM F1 scalar/native equal/masked row/marker heads, packaging, dedicated bounded CPU workers and fresh per-session labeled/paired gates available | Released exports/calibration, cross-request batches/prefixes, other families and multithread tuning; WebGPU deferred |
 
 ## Implemented increments
+
+### Direct CPU shared-prefix attention for native suffix rows
+
+O09/O19 now read the same immutable prefix KV pages for native equal/padded
+CPU FP32 Kev suffix groups, including cooperative scheduling. Query and
+probability rows regroup across native rows; prefix K/V never concatenate,
+expand or repeat. Each row has private suffix KV/recurrence/conv and one
+ordered complete causal softmax. Parent pages remain unchanged, and temporary
+suffix state is discarded. Complete-context/handle limits remain conservative.
+
+This changes matmul shapes and page/suffix PV summation, so v2 execution
+identity requires fresh complete labeled/paired gates. Independent forwards
+retain their explicit flat fallback. Frozen synthetic trained fixtures and
+ownership/causal checks are recorded separately from released calibration and
+performance. Mixed-prefix groups/device kernels remain open. No Apple or actual
+GPU checks run. [Evidence and limits](verification/paged-batch-cpu-20261009/README.md).
 
 ### Cooperative CPU Kev suffix groups with live child capacity
 

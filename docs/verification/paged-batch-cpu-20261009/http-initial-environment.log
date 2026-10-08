@@ -1,0 +1,26 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s
+     Running tests/cooperative.rs (target/debug/deps/cooperative-55593384723b3142)
+
+running 1 test
+test native_cpu_cooperative_groups_start_with_fresh_proofs_and_serve_original_typed_probabilities ... FAILED
+
+failures:
+
+---- native_cpu_cooperative_groups_start_with_fresh_proofs_and_serve_original_typed_probabilities stdout ----
+
+thread 'native_cpu_cooperative_groups_start_with_fresh_proofs_and_serve_original_typed_probabilities' (598753) panicked at crates/huncho-cli/tests/cooperative.rs:440:13:
+native server exited exit status: 1: 2026-10-08T22:14:57.087695Z  INFO loading model manifest /tmp/.tmpLQ0qC3/huncho-model.json
+2026-10-08T22:14:57.088061Z  INFO selected model runtime model=tiny-kev backend=candle dtype=fp32
+2026-10-08T22:14:57.088106Z  INFO loading tokenizer from /tmp/.tmpLQ0qC3/tokenizer.json
+2026-10-08T22:14:57.091876Z  INFO loading Qwen3.5 on CPU with fp32 weights
+Error: invalid request: CPU BLAS threads require an explicit library
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    native_cpu_cooperative_groups_start_with_fresh_proofs_and_serve_original_typed_probabilities
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.03s
+
+error: test failed, to rerun pass `-p huncho-cli --test cooperative`

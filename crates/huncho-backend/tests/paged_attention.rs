@@ -69,6 +69,7 @@ fn direct_pages_keep_original_typed_goldens_across_boundaries_chunks_and_runtime
         (16, false, false),
         (32, false, false),
         (64, false, false),
+        (128, false, false),
         (256, false, false),
         (16, true, false),
         (16, true, true),
@@ -76,7 +77,7 @@ fn direct_pages_keep_original_typed_goldens_across_boundaries_chunks_and_runtime
         let mut backend = load(pages, optimized, runtime);
         assert_eq!(
             backend.capabilities().extra["paged_attention"],
-            "cpu-page-qk-pv-fp32-v1"
+            "cpu-page-qk-pv-fp32-v2"
         );
         for case in source["cases"].as_array().unwrap() {
             for row in case["rows"].as_array().unwrap() {
@@ -189,7 +190,7 @@ fn direct_page_profile_rejects_missing_prerequisites_and_later_invalid_settings(
     let mut backend = load(16, true, false);
     let _partial = backend.begin_resumable_prefill(&[1; 33], 0).unwrap().handle;
     assert!(backend.with_direct_paged_attention(false).is_err());
-    let mut backend = load(16, false, false);
+    let backend = load(16, false, false);
     let _replica = backend.replica().unwrap();
     assert!(backend.with_direct_paged_attention(false).is_err());
     let mut backend = load(16, true, false);
