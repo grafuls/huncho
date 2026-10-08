@@ -1,0 +1,21 @@
+   Compiling huncho-backend v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-backend)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.01s
+     Running tests/onnx_head_batch.rs (target/debug/deps/onnx_head_batch-ed6901f677c4ee3f)
+
+running 3 tests
+test native_head_batches_reject_wrong_abis_invalid_types_counts_and_nonfinite_scores ... ok
+test native_head_engine_qualifies_frozen_typed_requests_and_cross_request_padding ... ok
+test native_raw_scores_keep_types_markers_mask_lengths_and_owned_outputs ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running tests/onnx_integrated.rs (target/debug/deps/onnx_integrated-983f20376e553545)
+
+running 4 tests
+test actual_native_typed_calibration_passes_fixed_synthetic_vectors_and_rejects_drift ... ok
+test integrated_contract_rejects_unsupported_profiles_bad_graphs_and_inputs_without_gpu_probes ... ok
+test integrated_shared_replicas_keep_raw_scores_and_independent_buffers_after_primary_drop ... ok
+test raw_typed_graph_scores_match_independent_native_frozen_reference_and_reuse_owned_outputs ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+

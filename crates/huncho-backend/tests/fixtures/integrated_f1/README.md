@@ -29,3 +29,17 @@ can be supplied with `ORT_LIB_LOCATION`, `ORT_PREFER_DYNAMIC_LINK=1` and its
 library directory in `LD_LIBRARY_PATH`. All actual execution is CPU. Tests
 that refuse GPU options do so before runtime initialization, without probes.
 Graph generators do not export or qualify any released model.
+
+`batch.onnx` and `batch-masked.onnx` use the separate dynamic native contract:
+`tokens[B,S]`, `positions[R,2]` row/marker pairs, `qtype[B]`, optional
+`attention_mask[B,S]`, and `scores[R,1]`. Markers concatenate in row/caller order;
+masked context means divide by each original row length. `batch-nonfinite.onnx`
+tests strict raw-score rejection. These graphs use the unchanged recorded
+weights and independent original scores/goldens; generating them never rewrites
+reference probabilities or the tokenizer/manifest.
+
+```sh
+python scripts/generate_onnx_head_batch_fixture.py
+HUNCHO_DEVICE=cpu cargo test --locked -p huncho-backend --features onnx-shared,clef --test onnx_head_batch -- --test-threads=1
+HUNCHO_DEVICE=cpu cargo test --locked -p huncho-cli --features onnx-shared,tokenizers,qualification --test onnx_head_batch -- --test-threads=1
+```

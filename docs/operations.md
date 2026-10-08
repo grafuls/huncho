@@ -1,6 +1,6 @@
 # Operations
 
-CPU ModernBERT F1, Qwen F2/F3 and masked native ONNX feature batching can
+CPU ModernBERT F1, Qwen F2/F3 and masked native ONNX feature/raw-head batching can
 merge different prompt lengths:
 
 ```sh
@@ -800,9 +800,9 @@ scores from a pending package for fitting remains possible offline.
 `HUNCHO_ONNX_OUTPUT_BUFFER_BYTES` can reuse one bounded CPU output buffer;
 returned scores own their data. `onnx-shared` plus
 `HUNCHO_ONNX_SHARED_INITIALIZERS=1` enables independent shared-source CPU
-replicas, including after source replacement or primary drop. Native batching,
-compact feature gathering, cached/prefix forwards, other precisions and GPU
-providers are rejected. The profile and environment flag bind qualification
+replicas, including after source replacement or primary drop. Dynamic batches
+need the distinct row/marker-coordinate ABI below. Compact feature gathering,
+cached/prefix forwards, other precisions and GPU providers are rejected. The profile and environment flag bind qualification
 receipts. Synthetic native/browser fixtures establish implementation parity,
 not released-model calibration, throughput or memory savings. See the
 [fixture and reproduction limits](../crates/huncho-backend/tests/fixtures/integrated_f1/README.md).
@@ -828,7 +828,8 @@ original row length, and no padding readout is returned. The scheduler charges
 the full batch-by-maximum-length rectangle against the token budget, caps the
 fraction of that rectangle used by padding and preserves oversized singletons
 without truncation. Padding is default-disabled. Graphs without a mask, ordinary
-non-batch graphs, integrated/compact graphs and GPU profiles do not expose it.
+non-batch graphs, compact feature graphs and GPU profiles do not expose it.
+Integrated F1 raw heads use their separate dynamic row/marker-coordinate ABI.
 `padded_batch_execution=onnx-cpu-right-mask-v1` records availability; active
 options and physical work bind conformance/receipts. The graph signature alone
 cannot prove it actually honors the mask.
@@ -1214,3 +1215,44 @@ fixture labels exercise gate plumbing only. Released CPU acceptance and
 workload latency/RSS remain unqualified/unmeasured. No actual GPU checks ran.
 See [equal-length evidence](verification/fork-batch-cpu-20261008/README.md) and
 [mixed-length evidence](verification/fork-padding-cpu-20261008/README.md).
+
+## Native batches of integrated F1 ONNX heads
+
+Enable both `HUNCHO_ONNX_INTEGRATED_HEAD=1` and
+`HUNCHO_ONNX_NATIVE_BATCH=1` for an explicitly exported CPU FP32 batch graph.
+The scalar `[1,S]` contract is distinct and rejected under this profile. Inputs
+are `tokens: int64[B,S]`, `positions: int64[R,2]`, `qtype: int64[B]`, and optional
+`attention_mask: int64[B,S]`; output is only `scores: float32[R,1]`. Batch/sequence,
+marker count and question-type dimensions must be dynamic. Each coordinate is
+`[row, original_marker_position]`. Coordinates concatenate each input's markers
+in caller order, retaining duplicate/out-of-order readouts. Types are `0..2`.
+The graph includes the original trained raw head; no post-score activation,
+temperature or candidate softmax belongs in this graph ABI. Shared Rust calibration runs once
+per original question after owned raw scores scatter back.
+
+Use existing `--max-batch-tokens` and optional `--batch-max-requests` controls.
+Up to 64 rows and 8,192 marker readouts are accepted; the core scheduler also
+charges its conservative readout limits. Equal lengths require no mask changes.
+CPU graphs explicitly declaring `attention_mask` additionally support bounded
+`--max-batch-padding-percent 1..100` (default zero). Masks use original lengths,
+including real token zero, and no marker may point into padding. Pooling and
+attention must actually honor each mask. Metadata alone does not establish that
+property; original/frozen and independent/paired qualification are mandatory.
+
+The ABI records `onnx_integrated_head=graph-integrated-f1-batch-v1` and
+`onnx_native_batch=raw-f1-row-markers-v1`. It composes with byte-bounded owned
+CPU output reuse and optional immutable shared-initializer replica sessions.
+Every actual serving context needs an explicit fitted/refitted `onnx:fp32`
+entry and fresh complete labeled conformance; actual mixed/cross-request work
+must satisfy the existing unchanged delta/full-argmax/ECE and paired 1e-4 gates.
+Scalar receipts cannot authorize the new graph/profile. Prefixes, vocabulary
+codes, reduced/packed head profiles and device providers remain unsupported.
+
+New synthetic CPU graphs retain the existing independent Rust typed scores,
+probabilities and temperatures. Masked means divide by original token counts;
+padding therefore cannot enter pooled context. Tests cover actual original
+requests, types, coordinates/ownership, failures, empty readouts, limits,
+shared sessions and per-context work. Arbitrary fixture targets test gate
+plumbing only. Released Laya exports/calibration and controlled latency/RSS
+measurements remain open. No Apple or actual GPU check ran.
+[Evidence](verification/onnx-head-batch-cpu-20261008/README.md).

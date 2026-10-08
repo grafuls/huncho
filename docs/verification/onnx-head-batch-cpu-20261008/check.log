@@ -1,0 +1,15 @@
+    Checking unicode-normalization-alignments v0.1.12
+   Compiling anyhow v1.0.104
+   Compiling ort-sys v2.0.0-rc.13
+    Checking ndarray v0.17.2
+   Compiling huncho-backend v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-backend)
+   Compiling prost-derive v0.14.4
+    Checking tokenizers v0.22.2
+    Checking tokenizers v0.20.4
+    Checking prost v0.14.4
+    Checking ort v2.0.0-rc.13
+    Checking huncho-core v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-core)
+    Checking candle-core v0.11.0
+    Checking candle-nn v0.11.0
+    Checking candle-transformers v0.11.0
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 11.60s

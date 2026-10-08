@@ -21,11 +21,11 @@ still times out. These variants remain unqualified.
 | O05 F3 selected projection | Available | Released Nimble qualification |
 | O06 execution/preparation workers | Available | Released workload capacity/latency measurements |
 | O07 tokenizer/prompt caching | Available, bounded, default off | Model-specific hit rates and memory measurements |
-| O08 ONNX output/readout path | CPU gather/output reuse/integrated F1 raw heads and compile-checked CUDA device I/O available | Released graph exports; actual device qualification and device-resident head |
+| O08 ONNX output/readout path | CPU gather/output reuse/scalar and batched integrated F1 raw heads and compile-checked CUDA device I/O available | Released graph exports; actual device qualification and device-resident head |
 | O09 fused/bounded compute | CPU SiLU/multiply, causal query blocks and unexpanded grouped K/V available | FlashAttention and further fused native/device kernels |
 | O10 precision/calibration gates | Every real serving runtime requires fresh labeled conformance | Released CPU acceptance remains rejected/pending; no GPU checks |
 | O11 native Kev prefix forks | Available | Released CPU paired/labeled acceptance |
-| O12 dynamic batching | Equal-length collation and bounded CPU Qwen/ModernBERT/masked ONNX feature/whole-schema Clef right-padding and CPU Kev equal/padded shared-prefix batches available | Integrated-head graph batching and device qualification |
+| O12 dynamic batching | Equal-length collation and bounded CPU Qwen/ModernBERT/masked ONNX feature/whole-schema Clef/integrated raw F1 right-padding and CPU Kev equal/padded shared-prefix batches available | Released graph calibration and device qualification |
 | O13 family head work | CPU Clef vectorized heads/grouped spans, optional Laya final marker queries and integrated ONNX F1 heads available | Released graph exports and Clef/Laya labeled qualification |
 | O14 concurrent execution contexts | CPU shared-weight replicas, including optional ONNX initializers, available | Released concurrent workloads, memory and affinity measurements |
 | O15 device buffers/graph replay | Optional stable CUDA ONNX I/O and bounded graph replay implemented; CPU ownership checks and CUDA compilation pass | Actual GPU capture/execution/calibration and released graph/performance qualification deferred |
@@ -43,6 +43,25 @@ still times out. These variants remain unqualified.
 | O27 browser WASM/WebGPU | Separate CPU WASM F1 integrated-head SDK, packaging and fresh labeled gates available | Released exports/calibration, other families and browser scheduling; WebGPU deferred |
 
 ## Implemented increments
+
+### Native CPU batches of integrated F1 raw ONNX heads
+
+O08/O12/O13 now collate strict dynamic raw-head graphs using explicit row/marker
+coordinates and per-row question types. Equal-length and explicitly masked CPU
+right-padded rows share a native tensor call; each original question receives
+owned scalar raw scores before unchanged typed calibration. The graph ABI is
+distinct from scalar heads and generic/compact features. Existing token/readout
+bounds, request scatter, shared initializer sessions and owned output reuse
+compose with fresh actual batch/label/paired gates.
+
+New synthetic graphs retain existing frozen independent Rust weights, scores,
+probabilities and temperatures. Original mixed typed requests and cross-request
+batches pass fixture gates; duplicates/empty markers, output ownership, strict
+contracts/limits/types, nonfinite results and isolated shared sessions are
+covered. Synthetic targets prove gate plumbing only. Released Laya exports,
+calibration and controlled latency/RSS remain open; no Apple or actual GPU
+checks ran. [CPU evidence](verification/onnx-head-batch-cpu-20261008/README.md).
+
 
 ### Bounded CPU Kev mixed-length prefix batches
 

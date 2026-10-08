@@ -106,15 +106,16 @@ including its trained head, instead of host features or mean projection.
 It currently requires `laya-v1`, a declared native tokenizer, an explicit
 `onnx:fp32` calibration entry and fresh complete labeled serving conformance.
 It composes with bounded CPU output reuse and optional shared initializer
-replicas. It cannot combine with native batching, compact feature gathering,
-prefix retention or GPU providers. Synthetic graphs cover the implementation;
+replicas. With `HUNCHO_ONNX_NATIVE_BATCH=1`, a separate dynamic row/marker-coordinate
+ABI supports equal-length and explicitly masked right-padded CPU batches. It
+cannot combine with compact feature gathering, prefix retention or GPU providers. Synthetic graphs cover the implementation;
 export and qualification of released trained Laya graphs remain open.
 
 Native dynamic feature graphs with an explicit `attention_mask` support optional
 mixed-length CPU batches. Original lengths own masks/readout bounds; the existing
 token/padding limits charge the complete rectangle. Mask-sensitive independent
 fixtures, shared replicas and fresh serving parity gates cover this path. It
-does not batch the separate integrated trained-head contract, and compatible
+uses a distinct feature ABI from integrated trained-head batches. Compatible
 mask metadata alone cannot establish a released graph's numerical/calibration
 behavior. See [native batches](operations.md#native-onnx-tensor-batches).
 

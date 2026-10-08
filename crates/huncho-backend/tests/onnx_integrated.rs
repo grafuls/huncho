@@ -120,11 +120,6 @@ fn integrated_contract_rejects_unsupported_profiles_bad_graphs_and_inputs_withou
     for options in [
         OnnxOptions {
             integrated_head: true,
-            native_batch: true,
-            ..Default::default()
-        },
-        OnnxOptions {
-            integrated_head: true,
             compact_readout: true,
             ..Default::default()
         },

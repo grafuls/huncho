@@ -1,0 +1,129 @@
+   Compiling huncho-backend v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-backend)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.06s
+     Running unittests src/lib.rs (target/debug/deps/huncho_backend-9bff8479749b3402)
+
+running 52 tests
+test candle::tests::config_parses_flat_rope_theta ... ok
+test candle::tests::config_parses_rope_parameters_object ... ok
+test candle::tests::cpu_replica_reuses_the_loaded_modernbert_storage ... ok
+test candle::tests::extraction_matches_manual_slice ... ok
+test candle::tests::remap_drops_non_encoder ... ok
+test candle::tests::remap_encoder_to_model ... ok
+test candle::tests::remap_keeps_model_prefix ... ok
+test candle::tests::selected_final_layer_keeps_all_keys_and_values_in_multihead_attention ... ok
+test clef::tests::cpu_replicas_share_backbone_head_and_tokenizer_and_freeze_backbone_profiles ... ok
+test conv_cpu::tests::convolution_cpu_timing ... ignored, CPU convolution microbenchmark; no released-model speed claim
+test conv_cpu::tests::convolution_matches_original_tap_order_across_dtypes_short_sequences_and_strides ... ok
+test cpu_profile::tests::identity_tracks_compiled_kernels_instead_of_host_detection ... ok
+test delta_cpu::tests::buffered_recurrence_matches_tensor_order_and_preserves_initial_storage ... ok
+test delta_cpu::tests::recurrence_cpu_timing ... ignored, CPU recurrence microbenchmark; no released-model speed claim
+test device::device_tests::auto_falls_back_when_cuda_initialization_or_kernels_fail ... ok
+test device::device_tests::auto_returns_successful_device ... ok
+test device::device_tests::cpu_never_initializes_cuda ... ok
+test device::device_tests::explicit_cuda_keeps_ordinal_and_never_falls_back ... ok
+test device::device_tests::invalid_devices_fail_before_initialization ... ok
+test device::device_tests::newly_ported_paths_require_explicit_cuda_and_never_hide_failure ... ok
+test gate_cpu::tests::fusion_preserves_typed_rounding_and_strided_views ... ok
+test gate_cpu::tests::gate_cpu_timing ... ignored, CPU gate microbenchmark; excludes projections and released models
+test gate_cpu::tests::unsupported_shapes_and_dtypes_fail_without_broadcasting ... ok
+test kev::tests::rejects_head_backbone_dimension_mismatch ... ok
+test kev::tests::rejects_invalid_calibration_and_unsupported_encoding ... ok
+test mock::tests::deterministic_output ... ok
+test mock::tests::fork_is_isolated ... ok
+test onnx::device_io::tests::actual_cpu_io_uses_original_addresses_for_changed_data_and_keeps_owned_copies ... ok
+test onnx::device_io::tests::slots_and_bytes_are_bounded_and_failures_poison_without_eviction_or_reallocation ... [1;31m2026-10-08 22:12:11.025690663 [E:onnxruntime:, sequential_executor.cc:671 ExecuteKernel] Non-zero status code returned while running Gather node. Name:'embed_lookup' Status Message: indices element out of data bounds, idx=9223372036854775807 must be within the inclusive range [-16,15][m
+ok
+test onnx::output_binding_tests::actual_native_output_uses_the_retained_allocation_and_preserves_owned_answers ... ok
+test onnx::output_binding_tests::integrated_runtime_output_rank_cannot_bypass_the_flat_score_abi ... ok
+test onnx::output_binding_tests::retained_binding_clears_request_inputs_after_success_and_output_validation_failure ... [1;31m2026-10-08 22:12:11.028742633 [E:onnxruntime:, sequential_executor.cc:671 ExecuteKernel] Non-zero status code returned while running Gather node. Name:'embed_lookup' Status Message: /home/runner/work/ort-artifacts/ort-artifacts/onnxruntime/include/onnxruntime/core/framework/op_kernel_context.h:42 const T *onnxruntime::OpKernelContext::Input(int) const [T = onnxruntime::Tensor] Missing Input: input_ids
+[m
+[1;31m2026-10-08 22:12:11.031298401 [E:onnxruntime:, sequential_executor.cc:671 ExecuteKernel] Non-zero status code returned while running Cast node. Name:'' Status Message: /home/runner/work/ort-artifacts/ort-artifacts/onnxruntime/include/onnxruntime/core/framework/op_kernel_context.h:42 const T *onnxruntime::OpKernelContext::Input(int) const [T = onnxruntime::Tensor] Missing Input: qtype
+[m
+ok
+test onnx_shared::tests::external_ranges_reject_traversal_duplicates_overflow_and_mixed_storage ... ok
+test onnx_shared::tests::shared_snapshot_rejects_ambiguous_names_dimensions_and_nested_graphs ... ok
+test onnx_shared::tests::typed_values_preserve_raw_bits_and_reject_unsupported_or_malformed_data ... ok
+test qwen3_5::attention::tests::blocks_preserve_full_causal_key_reductions_and_absolute_prefix_masks ... ok
+test qwen3_5::attention::tests::grouped_queries_preserve_head_mapping_and_full_key_reductions ... ok
+test qwen3_5::kv_pages::tests::page_order_and_copy_on_write_tails_preserve_exact_storage_values ... ok
+test qwen3_5::runtime_lora::tests::runtime_lora_keeps_base_and_applies_two_biased_base_plus_low_rank_rows ... ok
+test qwen3_5::runtime_lora::tests::runtime_lora_rejects_nonstandard_incomplete_and_malformed_semantics ... ok
+test qwen3_5::tests::attention_input_reuse_is_offset_aware_and_bounded ... ok
+test qwen3_5::tests::backend_returns_logits_shape ... ok
+test qwen3_5::tests::convolution_cache_tail_retains_only_its_visible_elements_on_cpu ... ok
+test qwen3_5::tests::cpu_replicas_share_loaded_weights_but_never_copy_active_or_retained_state ... ok
+test qwen3_5::tests::failed_native_branch_inference_releases_every_temporary_handle ... ok
+test qwen3_5::tests::forward_is_causal ... ok
+test qwen3_5::tests::forward_produces_finite_hidden ... ok
+test qwen3_5::tests::lo_merge_changes_weights ... ok
+test qwen3_5::tests::pointer_loading_filters_unused_vocabulary_weights_before_materialization ... ok
+test qwen3_5::tests::projection_chunks_preserve_order_bias_dtype_and_partial_rows ... ok
+test qwen3_5::tests::query_profile_removes_quadratic_setup_and_invalidates_old_masks ... ok
+test qwen3_5::tests::trace_kev_prefix_precision ... ignored, requires explicit pinned model/suite paths and qualification hardware
+
+test result: ok. 48 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 1.33s
+
+     Running tests/onnx_conformance.rs (target/debug/deps/onnx_conformance-c792a190c5ae8e26)
+
+running 4 tests
+test actual_shared_cpu_contexts_pass_unchanged_probability_goldens_concurrently ... ok
+test graph_side_readout_and_bound_buffer_pass_unchanged_probability_goldens ... ok
+test native_onnx_batches_qualify_per_request_and_cross_request_work ... ok
+test onnx_backend_passes_reference_golden ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/onnx_head_batch.rs (target/debug/deps/onnx_head_batch-ed6901f677c4ee3f)
+
+running 3 tests
+test native_head_batches_reject_wrong_abis_invalid_types_counts_and_nonfinite_scores ... ok
+test native_head_engine_qualifies_frozen_typed_requests_and_cross_request_padding ... ok
+test native_raw_scores_keep_types_markers_mask_lengths_and_owned_outputs ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running tests/onnx_integrated.rs (target/debug/deps/onnx_integrated-983f20376e553545)
+
+running 4 tests
+test actual_native_typed_calibration_passes_fixed_synthetic_vectors_and_rejects_drift ... ok
+test integrated_contract_rejects_unsupported_profiles_bad_graphs_and_inputs_without_gpu_probes ... ok
+test integrated_shared_replicas_keep_raw_scores_and_independent_buffers_after_primary_drop ... ok
+test raw_typed_graph_scores_match_independent_native_frozen_reference_and_reuse_owned_outputs ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running tests/onnx_integration.rs (target/debug/deps/onnx_integration-0ebd8e94416202b6)
+
+running 12 tests
+test compact_graph_and_bound_output_reuse_preserve_exact_rows ... ok
+test disabled_or_oversized_binding_retains_no_output_storage ... ok
+test forward_returns_hidden_states_at_positions ... ok
+test forward_slices_subset_of_positions ... ok
+test loads_and_reports_capabilities ... ok
+test native_dynamic_batches_preserve_isolated_rows_and_validate_contract ... ok
+test prefill_with_no_positions_returns_empty ... ok
+test provider_and_thread_configuration_validate_without_gpu_probes ... ok
+test rejects_invalid_positions_and_retains_graph_width_semantics ... ok
+test rejects_sequence_over_max_context ... ok
+test selected_rows_preserve_repeated_positions_and_exact_float_bits ... ok
+test stable_device_profiles_refuse_incompatible_options_before_loading_any_runtime ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/onnx_padded.rs (target/debug/deps/onnx_padded-388f3d934254abbf)
+
+running 3 tests
+test actual_masked_rectangles_match_independent_scores_and_preserve_owned_repeated_readouts ... ok
+test masked_native_shared_contexts_are_concurrently_independent ... ok
+test whole_engine_native_padding_counts_actual_work_and_passes_fixed_synthetic_labeled_gates ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/onnx_replicas.rs (target/debug/deps/onnx_replicas-94cea4c24c64b7e1)
+
+running 2 tests
+test actual_cpu_sessions_preserve_rows_after_source_mutation_and_primary_drop ... ok
+test shared_loading_rejects_gpu_selection_before_runtime_initialization ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+

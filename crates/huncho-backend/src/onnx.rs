@@ -88,7 +88,8 @@ impl Drop for OutputBindingGuard<'_> {
 pub struct OnnxOptions {
     /// CPU FP32 integrated F1 scalar head: tokens[1,S], positions[N],
     /// qtype[1], optional attention_mask[1,S], and raw scores[N,1].
-    /// Separate from generic feature, compact-gather and native-batch graphs.
+    /// With native_batch: tokens[B,S], positions[R,2] row/marker coordinates,
+    /// qtype[B], optional mask[B,S], and flat raw scores[R,1].
     pub integrated_head: bool,
     /// Require `huncho_readout_positions: int64[rows]` and
     /// `huncho_features: float32[1,rows,hidden]` (or `[rows,hidden]`).
@@ -101,7 +102,8 @@ pub struct OnnxOptions {
     pub intra_threads: usize,
     /// Opt into native tensor batches on a validated dynamic feature graph.
     /// CPU graphs with an explicit attention_mask also support right-padding.
-    /// Compact/integrated graphs use different contracts and cannot enable this.
+    /// Compact-gather graphs cannot enable this. Integrated raw heads use the
+    /// explicit row/marker-coordinate batch ABI above.
     pub native_batch: bool,
     /// Snapshot a supported flat CPU graph and share initializer/prepack storage
     /// across independently owned sessions. Requires `onnx-shared`; default off.
@@ -197,11 +199,10 @@ impl OnnxBackend {
         if options.integrated_head
             && (dtype != "fp32"
                 || options.execution_provider != OnnxExecutionProvider::Cpu
-                || options.compact_readout
-                || options.native_batch)
+                || options.compact_readout)
         {
             return Err(Error::Unsupported(
-                "integrated ONNX F1 heads require CPU fp32 and cannot combine with feature-gather/native-batch contracts".into(),
+                "integrated ONNX F1 heads require CPU fp32 and cannot combine with feature-gather contracts".into(),
             ));
         }
         if options.native_batch && options.compact_readout {
@@ -354,6 +355,9 @@ impl OnnxBackend {
             }
             for input in session.inputs() {
                 let expected: &[i64] = match input.name() {
+                    "tokens" | "attention_mask" if options.native_batch => &[-1, -1],
+                    "positions" if options.native_batch => &[-1, 2],
+                    "qtype" if options.native_batch => &[-1],
                     "tokens" | "attention_mask" => &[1, -1],
                     "positions" => &[-1],
                     "qtype" => &[1],
@@ -446,7 +450,7 @@ impl OnnxBackend {
                 _ => return Err(Error::Backend("huncho_features must be float32[1,rows,hidden] or [rows,hidden], with dynamic rows and fixed positive hidden width".into())),
             }
         }
-        if options.native_batch {
+        if options.native_batch && !options.integrated_head {
             for input in session.inputs() {
                 let supported = matches!(
                     input.name(),
@@ -523,7 +527,7 @@ impl OnnxBackend {
     fn run_readouts(
         &mut self,
         requests: &[(&[u32], &[usize])],
-        qtype: Option<u32>,
+        qtypes: Option<&[u32]>,
         padded: bool,
     ) -> Result<Vec<CoreTensor>> {
         let batch = requests.len();
@@ -547,7 +551,9 @@ impl OnnxBackend {
         } else {
             requests[0].0.len()
         };
-        if self.options.integrated_head && (seq == 0 || qtype.is_none_or(|q| q > 2)) {
+        if self.options.integrated_head
+            && (seq == 0 || qtypes.is_none_or(|q| q.len() != batch || q.iter().any(|&q| q > 2)))
+        {
             return Err(Error::Backend(
                 "integrated ONNX head needs nonempty tokens and qtype 0..2".into(),
             ));
@@ -575,8 +581,17 @@ impl OnnxBackend {
             }
         }
         let positions = requests[0].1;
-        if self.options.integrated_head && positions.is_empty() {
-            return Ok(vec![CoreTensor::zeros(vec![0, 1])]);
+        let marker_count = requests
+            .iter()
+            .try_fold(0usize, |n, (_, p)| n.checked_add(p.len()))
+            .ok_or_else(|| Error::Backend("ONNX marker count overflow".into()))?;
+        if self.options.integrated_head && self.options.native_batch && marker_count > 8192 {
+            return Err(Error::Request(
+                "integrated ONNX batches support at most 8192 markers".into(),
+            ));
+        }
+        if self.options.integrated_head && marker_count == 0 {
+            return Ok(vec![CoreTensor::zeros(vec![0, 1]); batch]);
         }
         let input_count = batch
             .checked_mul(seq)
@@ -587,6 +602,42 @@ impl OnnxBackend {
         for name in &self.input_names {
             if self.options.integrated_head {
                 let (shape, data): (Vec<usize>, Vec<i64>) = match name.as_str() {
+                    "tokens" if self.options.native_batch => (
+                        vec![batch, seq],
+                        requests
+                            .iter()
+                            .flat_map(|(tokens, _)| {
+                                tokens
+                                    .iter()
+                                    .map(|&t| i64::from(t))
+                                    .chain(std::iter::repeat(0))
+                                    .take(seq)
+                            })
+                            .collect(),
+                    ),
+                    "attention_mask" if self.options.native_batch => (
+                        vec![batch, seq],
+                        requests
+                            .iter()
+                            .flat_map(|(tokens, _)| {
+                                (0..seq).map(move |p| i64::from(p < tokens.len()))
+                            })
+                            .collect(),
+                    ),
+                    "positions" if self.options.native_batch => (
+                        vec![marker_count, 2],
+                        requests
+                            .iter()
+                            .enumerate()
+                            .flat_map(|(row, (_, positions))| {
+                                positions.iter().flat_map(move |&p| [row as i64, p as i64])
+                            })
+                            .collect(),
+                    ),
+                    "qtype" if self.options.native_batch => (
+                        vec![batch],
+                        qtypes.unwrap().iter().map(|&q| i64::from(q)).collect(),
+                    ),
                     "tokens" => (
                         vec![1, seq],
                         requests[0]
@@ -607,7 +658,7 @@ impl OnnxBackend {
                             })
                             .collect::<Result<_>>()?,
                     ),
-                    "qtype" => (vec![1], vec![i64::from(qtype.unwrap())]),
+                    "qtype" => (vec![1], vec![i64::from(qtypes.unwrap()[0])]),
                     _ => unreachable!("validated integrated graph inputs"),
                 };
                 let tensor = Tensor::from_array((shape, data))
@@ -668,7 +719,9 @@ impl OnnxBackend {
             inputs.push((name.clone(), t));
         }
 
-        let rows = if self.options.compact_readout || self.options.integrated_head {
+        let rows = if self.options.integrated_head {
+            marker_count
+        } else if self.options.compact_readout {
             positions.len()
         } else {
             seq
@@ -679,7 +732,11 @@ impl OnnxBackend {
             rows,
             compact: self.options.compact_readout || self.options.integrated_head,
             integrated: self.options.integrated_head,
-            empty_width: self.hidden_size,
+            empty_width: if self.options.integrated_head {
+                1
+            } else {
+                self.hidden_size
+            },
         };
         let shape = self.output_shape.as_deref().and_then(|shape| match shape {
             [b, n, h]
@@ -689,7 +746,11 @@ impl OnnxBackend {
             {
                 Some(vec![batch, rows, *h as usize])
             }
-            [n, h] if batch == 1 && (*n == -1 || *n == rows as i64) && *h > 0 => {
+            [n, h]
+                if (batch == 1 || self.options.integrated_head)
+                    && (*n == -1 || *n == rows as i64)
+                    && *h > 0 =>
+            {
                 Some(vec![rows, *h as usize])
             }
             _ => None,
@@ -801,11 +862,18 @@ impl ReadoutLayout {
         data: &[f32],
     ) -> Result<Vec<CoreTensor>> {
         let (batch, seq, rows) = (self.batch, self.seq, self.rows);
+        // Runtime shapes also own the ABI. A graph's declared rank cannot
+        // authorize interpreting [1,R,1] as flat raw [R,1] scores.
+        if self.integrated && !matches!(shape, [_, 1]) {
+            return Err(Error::Backend(
+                "integrated ONNX scores must have actual rank two and scalar width".into(),
+            ));
+        }
         let (output_seq, hidden) = match shape {
             [b, seq, hidden] if *b == batch as i64 && *seq >= 0 && *hidden > 0 => {
                 (*seq as usize, *hidden as usize)
             }
-            [seq, hidden] if batch == 1 && *seq >= 0 && *hidden > 0 => {
+            [seq, hidden] if (batch == 1 || self.integrated) && *seq >= 0 && *hidden > 0 => {
                 (*seq as usize, *hidden as usize)
             }
             _ => {
@@ -815,7 +883,10 @@ impl ReadoutLayout {
             }
         };
         if output_seq != rows
-            || rows.checked_mul(hidden).and_then(|n| n.checked_mul(batch)) != Some(data.len())
+            || rows
+                .checked_mul(hidden)
+                .and_then(|n| n.checked_mul(if self.integrated { 1 } else { batch }))
+                != Some(data.len())
         {
             return Err(Error::Backend(format!(
                 "ONNX feature shape {shape:?} does not cover the input sequence of length {seq}"
@@ -826,6 +897,7 @@ impl ReadoutLayout {
                 "integrated ONNX head returned nonfinite or nonscalar marker scores".into(),
             ));
         }
+        let mut marker_offset = 0;
         requests
             .iter()
             .enumerate()
@@ -835,7 +907,11 @@ impl ReadoutLayout {
                     .checked_mul(hidden)
                     .ok_or_else(|| Error::Backend("ONNX readout size overflow".into()))?;
                 let mut selected = Vec::with_capacity(count);
-                if self.compact {
+                if self.integrated {
+                    let end = marker_offset + positions.len();
+                    selected.extend_from_slice(&data[marker_offset..end]);
+                    marker_offset = end;
+                } else if self.compact {
                     selected.extend_from_slice(data);
                 } else {
                     for &pos in *positions {
@@ -858,6 +934,21 @@ impl ReadoutLayout {
 
 #[cfg(test)]
 mod output_binding_tests {
+    #[test]
+    fn integrated_runtime_output_rank_cannot_bypass_the_flat_score_abi() {
+        let layout = super::ReadoutLayout {
+            batch: 1,
+            seq: 3,
+            rows: 2,
+            compact: true,
+            integrated: true,
+            empty_width: 1,
+        };
+        let requests = [(&[1u32, 2, 3][..], &[0usize, 1][..])];
+        assert!(layout.copy(&requests, &[1, 2, 1], &[0.1, 0.2]).is_err());
+        assert!(layout.copy(&requests, &[2, 1], &[0.1, 0.2]).is_ok());
+    }
+
     use super::*;
 
     #[test]
@@ -1035,7 +1126,15 @@ impl Backend for OnnxBackend {
                     );
                 }
                 if self.options.native_batch {
-                    extra.insert("onnx_native_batch".into(), "equal-length-v1".into());
+                    extra.insert(
+                        "onnx_native_batch".into(),
+                        if self.options.integrated_head {
+                            "raw-f1-row-markers-v1"
+                        } else {
+                            "equal-length-v1"
+                        }
+                        .into(),
+                    );
                 }
                 if self.supports_padded_batch() {
                     extra.insert(
@@ -1049,7 +1148,12 @@ impl Backend for OnnxBackend {
                 if self.options.integrated_head {
                     extra.insert(
                         "onnx_integrated_head".into(),
-                        "graph-integrated-f1-v1".into(),
+                        if self.options.native_batch {
+                            "graph-integrated-f1-batch-v1"
+                        } else {
+                            "graph-integrated-f1-v1"
+                        }
+                        .into(),
                     );
                 }
                 if self.options.output_buffer_bytes > 0 {
@@ -1078,7 +1182,7 @@ impl Backend for OnnxBackend {
         let values = self
             .run_readouts(
                 &[(&input.tokens, &input.positions)],
-                Some(input.qtype),
+                Some(std::slice::from_ref(&input.qtype)),
                 false,
             )?
             .remove(0);
@@ -1098,6 +1202,17 @@ impl Backend for OnnxBackend {
         self.options.native_batch
     }
 
+    fn batch_limits(&self) -> huncho_core::backend::BatchLimits {
+        huncho_core::backend::BatchLimits {
+            max_rows: 64,
+            max_readouts: if self.options.integrated_head && self.options.native_batch {
+                Some(8192)
+            } else {
+                None
+            },
+        }
+    }
+
     fn forward_batch(&mut self, inputs: Vec<ForwardInput>) -> Result<Vec<ForwardOutput>> {
         if !self.options.native_batch
             || inputs.iter().any(|input| {
@@ -1112,13 +1227,25 @@ impl Backend for OnnxBackend {
             .iter()
             .map(|input| (input.tokens.as_slice(), input.positions.as_slice()))
             .collect::<Vec<_>>();
-        let values = self.run_readouts(&requests, None, false)?;
+        let qtypes = self.options.integrated_head.then(|| {
+            inputs.iter().map(|input| input.qtype).collect::<Vec<_>>()
+        });
+        let values = self.run_readouts(&requests, qtypes.as_deref(), false)?;
         Ok(inputs
             .into_iter()
             .zip(values)
-            .map(|(input, values)| ForwardOutput::Features {
-                positions: input.positions,
-                values,
+            .map(|(input, values)| {
+                if self.options.integrated_head {
+                    ForwardOutput::Logits {
+                        positions: input.positions,
+                        values,
+                    }
+                } else {
+                    ForwardOutput::Features {
+                        positions: input.positions,
+                        values,
+                    }
+                }
             })
             .collect())
     }
@@ -1143,13 +1270,25 @@ impl Backend for OnnxBackend {
             .iter()
             .map(|input| (input.tokens.as_slice(), input.positions.as_slice()))
             .collect::<Vec<_>>();
-        let values = self.run_readouts(&requests, None, true)?;
+        let qtypes = self.options.integrated_head.then(|| {
+            inputs.iter().map(|input| input.qtype).collect::<Vec<_>>()
+        });
+        let values = self.run_readouts(&requests, qtypes.as_deref(), true)?;
         Ok(inputs
             .into_iter()
             .zip(values)
-            .map(|(input, values)| ForwardOutput::Features {
-                positions: input.positions,
-                values,
+            .map(|(input, values)| {
+                if self.options.integrated_head {
+                    ForwardOutput::Logits {
+                        positions: input.positions,
+                        values,
+                    }
+                } else {
+                    ForwardOutput::Features {
+                        positions: input.positions,
+                        values,
+                    }
+                }
             })
             .collect())
     }
