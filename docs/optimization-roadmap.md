@@ -34,13 +34,35 @@ also show drift. Packed CPU fitting/held-out evaluation is still running.
 | O20 Metal | Skipped by user | Apple work deferred |
 | O21 llama.cpp | CPU F2/F3, full-state forks/chunks, bounded native batches and pending FP32/FP16/Q8/Q4 exports available | Released fitting/qualification and graph-side readout efficiency |
 | O22 shared bases/residency | Immutable CPU bases and bounded CPU lazy loading/preload/idle eviction available | Released residency measurements and runtime LoRA dispatch |
-| O23 vLLM custom readouts | Open | Actual no-decode family implementation and qualification |
+| O23 vLLM custom readouts | Pinned actual CPU Kev F2 raw pooling and equal-length batches available | Released fitting/held-out acceptance; other families, prefixes, quantization and device profiles |
 | O24 distributed/sharded inference | Open | Implementation; actual multi-GPU qualification deferred |
 | O25 prefill scheduling | Resumable CPU prefix/question scheduling available | Released labeled qualification and latency; tensor/device scheduling open |
 | O26 MLX | Skipped by user | Apple work deferred |
 | O27 browser WASM/WebGPU | Separate CPU WASM F1 integrated-head SDK, packaging and fresh labeled gates available | Released exports/calibration, other families and browser scheduling; WebGPU deferred |
 
 ## Implemented increments
+
+### Actual CPU vLLM raw pointer pooling
+
+O23 now executes Kev/Qwen3.5 in a pinned optional local CPU vLLM worker with
+BF16 backbone and FP32 trained pointer. The custom model omits the LM head,
+sampler and decode loop; marker/final-position scores feed unchanged core
+typed calibration. Equal-length groups perform exactly one verified native
+forward. Strict artifact/runtime identities, owned bounded IPC, CPU-only
+imports and failure invalidation prevent silent backend substitution.
+
+Offline conversion merges complete standard LoRA into new FP32 storage,
+preserves temperatures/overrides and writes Pending `vllm:bf16`. Actual
+Pending fitting capture is supported; serving requires an explicit fitted
+entry and fresh complete observed-label conformance. Default builds retain
+their dependency profile. Fixed independent PyTorch fixtures pass probability,
+argmax, native paired-batch and synthetic labeled gates. CLI processes cover
+capture without source mutation, HTTP/receipts/work and qualification refusal.
+Synthetic labels do not release Kev. Prefix/forks, chunking/padding, replicas,
+runtime adapters, other families, quantization, distributed execution and
+device profiles remain open. No actual GPU check or 4B performance/acceptance
+claim is made. [CPU operation](vllm.md) and
+[verification](verification/vllm-cpu-20261008/README.md).
 
 ### Whole-schema CPU Clef request batches
 

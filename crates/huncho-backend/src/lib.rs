@@ -35,6 +35,8 @@ pub mod device;
 pub mod kev;
 pub mod mock;
 pub mod null;
+#[cfg(feature = "vllm")]
+pub mod vllm;
 #[cfg(feature = "onnx")]
 pub mod onnx;
 #[cfg(feature = "onnx-shared")]

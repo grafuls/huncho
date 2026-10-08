@@ -153,6 +153,14 @@ fn input_paths(
             paths.insert("backbone/gguf".into(), dir.join(&artifact.path));
             if manifest.family == Family::F2 { paths.insert("head".into(), dir.join(&manifest.head.weights)); }
         }
+        BackendId::Vllm => {
+            let artifact = manifest
+                .find_artifact(backend, dtype)
+                .ok_or_else(|| Error::Package("missing exact vLLM artifact".into()))?;
+            let descriptor = dir.join(&artifact.path);
+            paths.insert("vllm/descriptor".into(), descriptor.clone());
+            add_tree(&mut paths, descriptor.parent().unwrap_or(dir), "vllm/files")?;
+        }
         BackendId::Onnx => {
             let artifact = manifest.find_artifact(backend, dtype).ok_or_else(|| Error::Package("missing selected ONNX artifact".into()))?;
             let graph = dir.join(&artifact.path);
@@ -283,6 +291,11 @@ impl ExecutionIdentity {
             "HUNCHO_LLAMA_BATCH_ROWS",
             "HUNCHO_ONNX_NATIVE_BATCH",
             "HUNCHO_ONNX_SHARED_INITIALIZERS",
+            "HUNCHO_VLLM_PYTHON",
+            "HUNCHO_VLLM_THREADS",
+            "HUNCHO_VLLM_BATCH_ROWS",
+            "HUNCHO_VLLM_KV_BYTES",
+            "HUNCHO_VLLM_TIMEOUT_SECS",
             "HUNCHO_CPU_DELTA_RULE",
             "HUNCHO_CPU_CAUSAL_CONV",
             "HUNCHO_CPU_FUSED_GATE",

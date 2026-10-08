@@ -1,0 +1,9 @@
+   Compiling huncho-cli v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-cli)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.24s
+     Running tests/vllm_cpu.rs (target/debug/deps/vllm_cpu-a3f843b157d5d590)
+
+running 1 test
+test real_cpu_cli_qualifies_raw_pooling_and_refuses_unqualified_serving ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 110.35s
+

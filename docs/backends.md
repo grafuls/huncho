@@ -53,6 +53,7 @@ scores all questions together. See [Clef setup](clef.md).
 | `CandleBackend` | `huncho-backend` | ⚙️ feature-gated | Native ModernBERT/Laya, FP32 on CPU by default; explicit optional CUDA path requires labeled qualification. Built with `candle`; GPU kernels require `cuda`. |
 | `Qwen3_5Backend` | `huncho-backend` | ⚙️ feature-gated | Kev F2 pointers and F3 candidate logits over Qwen3.5/merged LoRA. CPU, optional CUDA; F3 GPU selection is explicit and requires labeled qualification. |
 | `LlamaCppBackend` | `huncho-backend` | `llamacpp` | Pinned CPU Qwen3.5 GGUF; trained Kev F2 pointers and F3 raw candidate logits. Shared-weight replicas and bounded full-state F2 prefix forks/retention; fresh labeled qualification required. See [workflow and limits](llamacpp.md). |
+| `VllmBackend` | `huncho-backend` | `vllm` | Pinned optional local CPU Python pooling worker for Kev F2, BF16 backbone/FP32 raw pointer; no vocabulary head or decode. Offline merged LoRA, bounded equal-length native batches; fresh labeled qualification required. See [workflow and limits](vllm.md). |
 
 The separate [browser package](../browser/README.md) executes F1 FP32 integrated
 scalar-head ONNX graphs through CPU WASM with shared Rust prompt/calibration

@@ -2,7 +2,7 @@
 
 mod bench;
 mod calibrate;
-#[cfg(any(feature = "quantization", feature = "llamacpp"))]
+#[cfg(any(feature = "quantization", feature = "llamacpp", feature = "vllm"))]
 mod capture_logits;
 mod conform;
 mod convert;
@@ -39,7 +39,7 @@ enum Command {
     #[cfg(feature = "quantization")]
     /// Build a new CPU Kev packed-weight package with pending calibration.
     Quantize(quantize::QuantizeArgs),
-    #[cfg(any(feature = "quantization", feature = "llamacpp"))]
+    #[cfg(any(feature = "quantization", feature = "llamacpp", feature = "vllm"))]
     /// Collect independent Kev fitting logits offline, including pending variants.
     CaptureLogits(capture_logits::CaptureArgs),
     #[cfg(feature = "llamacpp")]
@@ -72,7 +72,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Bench(a) => bench::run(a),
         #[cfg(feature = "quantization")]
         Command::Quantize(a) => quantize::run(a),
-        #[cfg(any(feature = "quantization", feature = "llamacpp"))]
+        #[cfg(any(feature = "quantization", feature = "llamacpp", feature = "vllm"))]
         Command::CaptureLogits(a) => capture_logits::run(a),
         #[cfg(feature = "llamacpp")]
         Command::ExportLlamacpp(a) => export_llamacpp::run(a),

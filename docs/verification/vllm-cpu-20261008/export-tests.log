@@ -1,0 +1,9 @@
+test_cpu_gdn_dimensions_and_runtime_adapter_semantics_are_refused (__main__.CpuExportTests.test_cpu_gdn_dimensions_and_runtime_adapter_semantics_are_refused) ... ok
+test_missing_backbone_tensor_is_refused_without_partial_output (__main__.CpuExportTests.test_missing_backbone_tensor_is_refused_without_partial_output) ... ok
+test_mutation_during_weight_loading_is_refused (__main__.CpuExportTests.test_mutation_during_weight_loading_is_refused) ... ok
+test_new_export_pins_complete_source_preserves_overrides_and_refuses_overwrite (__main__.CpuExportTests.test_new_export_pins_complete_source_preserves_overrides_and_refuses_overwrite) ... ok
+
+----------------------------------------------------------------------
+Ran 4 tests in 3.239s
+
+OK

@@ -40,7 +40,7 @@ pub struct BenchArgs {
     #[arg(long)]
     pub cache_dir: Option<String>,
 
-    /// Backend override (auto|onnx|candle|clef|llamacpp|mock). Auto selects from model metadata.
+    /// Backend override (auto|onnx|candle|clef|llamacpp|vllm|mock). Auto selects from model metadata.
     #[arg(long, default_value = "auto")]
     pub backend: String,
 

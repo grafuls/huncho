@@ -51,7 +51,7 @@ pub struct ServeArgs {
     #[arg(long)]
     pub token: Option<String>,
 
-    /// Backend override (auto|onnx|candle|clef|llamacpp|mock). Auto selects a runtime per model.
+    /// Backend override (auto|onnx|candle|clef|llamacpp|vllm|mock). Auto selects a runtime per model.
     #[arg(long, default_value = "auto", env = "HUNCHO_BACKEND")]
     pub backend: String,
 
@@ -442,6 +442,7 @@ fn requires_outcome_qualification(engine: &huncho_core::engine::Engine) -> bool 
         "joint_head_execution",
         "joint_pool_execution",
         "request_batch_execution",
+        "vllm_readout",
         "onnx_execution_provider",
         "onnx_intra_threads",
         "onnx_native_batch",
@@ -493,6 +494,13 @@ fn qualify_optimizations(registry: &ModelRegistry, args: &ServeArgs) -> anyhow::
             engine.dtype()
         );
         let refit = engine.calibration().status == CalibrationStatus::Refit;
+        if engine.backend_id() == huncho_core::manifest::BackendId::Vllm {
+            anyhow::ensure!(
+                engine.manifest().calibration.entries.get("vllm:bf16")
+                    .is_some_and(|entry| entry.status != CalibrationStatus::Pending),
+                "vLLM serving for `{name}` requires an explicit fitted/refitted vllm:bf16 calibration entry"
+            );
+        }
         if engine.execution_metadata().contains_key("onnx_integrated_head") {
             anyhow::ensure!(engine.manifest().calibration.entries.get("onnx:fp32")
                 .is_some_and(|entry| entry.status != CalibrationStatus::Pending),

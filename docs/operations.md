@@ -196,7 +196,7 @@ CLI serving rejects pending calibration. Refitted entries require an explicit
 qualification suite with observed target labels for every question, even when
 no numerical optimization is enabled. Keep fitting inputs separate from those
 held-out cases; the CLI checks coverage and drift, not dataset provenance.
-Every native Candle, Clef, ONNX and llama.cpp runtime also requires complete
+Every native Candle, Clef, ONNX, llama.cpp and vLLM runtime also requires complete
 labeled startup qualification with `fit` metadata and no optimization flags.
 Temperature fallback does not authorize a different backend/device/precision.
 The explicit offline mock retains its demo path. General signed execution
@@ -739,7 +739,7 @@ labeled calibration, throughput/RSS and CUDA batching remain unqualified.
 
 ### Qualification of all real serving runtimes
 
-Every actual Candle, Clef, ONNX and llama.cpp runtime requires
+Every actual Candle, Clef, ONNX, llama.cpp and vLLM runtime requires
 `--qualification-golden MODEL=PATH`, including an unoptimized source package
 marked `fit`. The suite must supply observed outcomes for every question and
 pass the unchanged external probability, argmax and ECE-drift gates before
@@ -1047,3 +1047,15 @@ Artifact/context/queue limits, copies, application trust, single-thread CPU
 execution and unsigned report limitations are explicit. Released exports and
 calibration remain qualification work. Apple is skipped and WebGPU/actual GPU
 checks remain deferred.
+
+### Optional CPU vLLM execution
+
+The `vllm` build feature uses an explicitly pinned local CPU pooling worker for
+Kev F2, with BF16 backbone and FP32 raw pointer scores. It omits the vocabulary
+head and decode loop. Offline conversion keeps source temperatures and creates
+an explicit Pending `vllm:bf16` entry; `capture-logits` can collect independent
+fitting rows before calibration. Serving requires that exact fitted/refitted
+entry and fresh complete labeled startup gates. Equal-length native batching
+uses existing budgets and paired gates. CPU prefixes, replicas, quantization,
+other families and device execution are unsupported. See
+[environment, export, fitting and limits](vllm.md).

@@ -1,0 +1,55 @@
+{
+  "schema_version": "1.0",
+  "name": "tiny-vllm-kev",
+  "family": "F2",
+  "backbone": {
+    "source": {
+      "kind": "local",
+      "path": "vllm/model"
+    },
+    "artifacts": {
+      "vllm": [
+        {
+          "path": "vllm/artifact.json",
+          "dtype": "bf16"
+        }
+      ]
+    },
+    "hidden_size": 128,
+    "max_context": 512,
+    "tokenizer": "tokenizer.json"
+  },
+  "head": {
+    "kind": "pointer",
+    "weights": "vllm/model/model.safetensors",
+    "width": 32
+  },
+  "prompt_contract": {
+    "template": "kev-v1",
+    "option_marker_tokens": [
+      "<option:0>"
+    ],
+    "state_budget": 512,
+    "head_budget": 512,
+    "max_options": 255,
+    "contract_hash": "frozen-kev-v1-vllm-fixture"
+  },
+  "calibration": {
+    "default": {
+      "temperature": 2.406050072164233,
+      "confidence": "peak",
+      "status": "pending"
+    },
+    "entries": {
+      "vllm:bf16": {
+        "temperature": 2.406050072164233,
+        "confidence": "peak",
+        "status": "pending"
+      }
+    }
+  },
+  "capabilities": {
+    "supports_fork": false,
+    "supports_multi_lora": false
+  }
+}

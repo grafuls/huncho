@@ -45,6 +45,7 @@ pub(crate) fn available_backends() -> Vec<BackendId> {
         (BackendId::Candle, cfg!(feature = "candle")),
         (BackendId::Onnx, cfg!(feature = "onnx")),
         (BackendId::LlamaCpp, cfg!(feature = "llamacpp")),
+        (BackendId::Vllm, cfg!(feature = "vllm")),
     ]
     .into_iter()
     .filter_map(|(backend, enabled)| enabled.then_some(backend))
@@ -315,10 +316,45 @@ fn load_backend(
         BackendId::Candle => load_candle(manifest, dtype, dir),
         BackendId::Clef => load_clef(manifest, dtype, dir),
         BackendId::LlamaCpp => load_llamacpp(manifest, dtype, dir),
+        BackendId::Vllm => load_vllm(manifest, dtype, dir),
         other => Err(Error::Unsupported(format!(
             "backend `{other}` is not available in this build"
         ))),
     }
+}
+
+#[cfg(feature = "vllm")]
+fn load_vllm(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<dyn Backend>> {
+    let number = |name: &str, default: usize| -> Result<usize> {
+        match std::env::var(name) {
+            Ok(value) => value
+                .parse()
+                .map_err(|_| Error::Package(format!("{name} must be an integer"))),
+            Err(std::env::VarError::NotPresent) => Ok(default),
+            Err(_) => Err(Error::Package(format!("{name} must be UTF-8"))),
+        }
+    };
+    let python = std::env::var_os("HUNCHO_VLLM_PYTHON").ok_or_else(|| {
+        Error::Package("vLLM requires an explicit HUNCHO_VLLM_PYTHON CPU environment".into())
+    })?;
+    Ok(Box::new(huncho_backend::vllm::VllmBackend::load(
+        dir,
+        manifest,
+        dtype,
+        huncho_backend::vllm::VllmOptions {
+            python: python.into(),
+            threads: number("HUNCHO_VLLM_THREADS", 2)?,
+            batch_rows: number("HUNCHO_VLLM_BATCH_ROWS", 1)?,
+            kv_cache_bytes: number("HUNCHO_VLLM_KV_BYTES", 1024 * 1024 * 1024)?,
+            timeout: std::time::Duration::from_secs(number("HUNCHO_VLLM_TIMEOUT_SECS", 180)? as u64),
+        },
+    )?))
+}
+#[cfg(not(feature = "vllm"))]
+fn load_vllm(_: &ModelManifest, _: &str, _: &Path) -> Result<Box<dyn Backend>> {
+    Err(Error::Unsupported(
+        "vLLM requires --features vllm and a pinned optional CPU Python runtime".into(),
+    ))
 }
 
 #[cfg(feature = "llamacpp")]

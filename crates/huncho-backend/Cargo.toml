@@ -23,9 +23,11 @@ sha2 = { version = "0.10.9", optional = true }
 llama-cpp-sys-2 = { version = "=0.1.159", optional = true, default-features = false }
 prost = { version = "0.14.3", optional = true }
 libloading = { version = "0.8.9", optional = true }
+tempfile = { version = "3", optional = true }
 
 [features]
 default = []
+vllm = ["dep:sha2", "dep:tempfile", "huncho-core/tokenizers"]
 onnx = ["dep:ort"]
 onnx-shared = ["onnx", "dep:prost", "dep:sha2"]
 onnx-cuda = ["onnx", "ort/cuda"]

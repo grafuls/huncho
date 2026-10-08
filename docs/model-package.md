@@ -11,6 +11,12 @@ Standard dense Qwen3.5 artifacts for the optional `llamacpp` runtime use separat
 with the Candle packed-projection format above. See [CPU GGUF export and pending
 calibration](llamacpp.md); external quantized layouts need their exact profile.
 
+The optional CPU `vllm` artifact uses dtype `bf16` and the pinned
+`kev-pointer-vllm-cpu-bf16-v1` descriptor. FP32 merged backbone and pointer
+storage execute as BF16/FP32 respectively. Offline export always writes an
+explicit Pending `vllm:bf16` calibration entry; source temperatures and DEFAULT
+fallback do not authorize serving. See [export, fitting and limits](vllm.md).
+
 A model package is a single `huncho-model.json` manifest plus artifacts. Every
 backend can load it. The manifest pins everything the engine needs to serve a
 model deterministically: family, backbone, head, prompt contract, calibration,

@@ -1,0 +1,13 @@
+   Compiling huncho-backend v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-backend)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.12s
+     Running tests/vllm_cpu.rs (target/debug/deps/vllm_cpu-443dc5ba8604a44c)
+
+running 1 test
+test real_cpu_pooling_preserves_frozen_scores_native_batches_and_fixed_shared_gates ... [W1008 20:25:07.722344255 utils.cpp:68] Warning: NUMA binding: Using MEMBIND policy for memory allocation on the NUMA nodes (0). Memory allocations will be strictly bound to these NUMA nodes. (function init_cpu_memory_env)
+Loading safetensors checkpoint shards:   0% Completed | 0/1 [00:00<?, ?it/s]
+Loading safetensors checkpoint shards: 100% Completed | 1/1 [00:00<00:00, 327.12it/s]
+
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 20.12s
+

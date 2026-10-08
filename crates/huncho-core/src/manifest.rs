@@ -77,6 +77,7 @@ impl BackendId {
             Self::Onnx => "rebuild with `--features onnx,hf,tokenizers`",
             Self::Candle => "rebuild with `--features candle,hf,tokenizers`",
             Self::Clef => "rebuild with `--features clef`",
+            Self::Vllm => "rebuild with `--features vllm` and provide a pinned CPU Python runtime",
             _ => "use a build that supports this backend",
         };
         Err(Error::Unsupported(format!(

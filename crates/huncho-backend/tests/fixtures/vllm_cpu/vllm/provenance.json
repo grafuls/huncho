@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "source_sha256": {
+    "config.json": "35cd59a5f0fa7e5cd44ae616d11f5775552b1768e5cfc5df292a9c2be5e16935",
+    "head.pt": "1012622c82550313d7483a780a1b903ce2ced435db6580767a2744d44631eb47",
+    "huncho-model.json": "fd291bd6373a60c4e6cc54f878a76d794567f21307c6728a623d453899a4f5d1",
+    "adapter_config.json": "8a792e494876120a836c97c9a5b167d2bd7cb693e802dd923555b61fa708e456",
+    "adapter_model.safetensors": "75de499a6c21ae81b186756e61f77cbe2c795da30dcf0cae3b91dc2fa7c66f16",
+    "model.safetensors": "cefc5685b95284094e6fc738c1657cb03aa9357e13be0dc3606b24036b80505f",
+    "tokenizer.json": "88cc477c95359c575b2088a2938deaf2e48b31d34032a71c68a1d8b9fc57e7da"
+  },
+  "torch": "2.13.0+cpu",
+  "temperature_fit": "not performed",
+  "backbone_execution": "bf16",
+  "head_execution": "fp32",
+  "decode": "disabled"
+}

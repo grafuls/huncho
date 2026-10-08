@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "profile": "kev-pointer-vllm-cpu-bf16-v1",
+  "model_dir": "model",
+  "files": {
+    "model/config.json": "2affe1f4b491ff1ec713f855afc9a9680c4f091bcad401c9fdfdbae99b4ef1f1",
+    "model/model.safetensors": "ea0d3c5d2e1e65a1980f59a432dccec22c3d09a89c60037330019449f593210e"
+  }
+}
