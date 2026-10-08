@@ -613,7 +613,12 @@ impl LinearAttn {
         let convolution = if cache.is_some() && keep > 0 {
             // Copy the small tail so it does not retain the entire prefix's
             // projection storage through a tensor view.
-            Some(mixed.narrow(2, mixed.dims()[2] - keep, keep)?.copy()?)
+            Some(
+                mixed
+                    .narrow(2, mixed.dims()[2] - keep, keep)?
+                    .force_contiguous()?
+                    .detach(),
+            )
         } else {
             None
         };
@@ -2068,6 +2073,63 @@ mod tests {
         let weights = tiny_weights(cfg, device);
         let vb = VarBuilder::from_tensors(weights, DType::F32, device);
         Model::new(cfg, vb, device, DType::F32).unwrap()
+    }
+
+    #[test]
+    fn convolution_cache_tail_retains_only_its_visible_elements_on_cpu() {
+        let root = Path::new("tests/fixtures/tiny_kev");
+        for dtype in ["fp32", "fp16"] {
+            let mut backend =
+                Qwen3_5Backend::load_kev(root, root, &root.join("head.pt"), 512, dtype).unwrap();
+            let handle = backend.prefill(&[1; 64]).unwrap();
+            {
+                let tail = backend.caches[&handle.id].layers[0]
+                    .convolution
+                    .as_ref()
+                    .unwrap();
+                assert_eq!(tail.dims()[2], 3);
+                let (storage, layout) = tail.storage_and_layout();
+                let allocated = match &*storage {
+                    candle::Storage::Cpu(candle::CpuStorage::F32(data)) => data.len(),
+                    candle::Storage::Cpu(candle::CpuStorage::F16(data)) => data.len(),
+                    _ => panic!("expected CPU fp32/fp16 tail"),
+                };
+                assert_eq!(
+                    allocated,
+                    tail.elem_count(),
+                    "retained tail must not own the complete prefix projection"
+                );
+                assert_eq!(layout.start_offset(), 0);
+                assert!(layout.contiguous_offsets().is_some());
+            }
+            let fork = backend.fork(handle).unwrap();
+            backend.release_cache(handle).unwrap();
+            let mut suffix = ForwardInput::new(vec![2, 3], vec![0, 1]);
+            suffix.fork_from = Some(fork);
+            let cached = backend.forward(suffix).unwrap();
+            let mut all = vec![1; 64];
+            all.extend([2, 3]);
+            let independent = backend
+                .forward(ForwardInput::new(all, vec![64, 65]))
+                .unwrap();
+            for temperature in [0.75, 1., 2.40605] {
+                let actual =
+                    huncho_core::calibration::calibrate(cached.values().data(), temperature)
+                        .unwrap();
+                let expected =
+                    huncho_core::calibration::calibrate(independent.values().data(), temperature)
+                        .unwrap();
+                assert_eq!(
+                    huncho_core::calibration::argmax(&actual),
+                    huncho_core::calibration::argmax(&expected)
+                );
+                assert!(actual
+                    .iter()
+                    .zip(&expected)
+                    .all(|(a, b)| (a - b).abs() <= 1e-4));
+            }
+            backend.release_cache(fork).unwrap();
+        }
     }
 
     #[test]

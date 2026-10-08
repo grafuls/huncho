@@ -437,3 +437,22 @@ The [audit](verification/delta-cpu-20261008/recurrence-microbenchmark.json) reta
 all timings, CPU/affinity/thread environment, compiler, source and binary
 identities, with released-model qualification explicitly false. Remaining O17
 work includes fused convolution, GPU/chunk delta kernels and their qualification.
+
+## Compact convolution-tail retention (2026-10-08)
+
+O02/O19 now fix a verified backing-storage retention issue in request-local
+Qwen caches. `Tensor::copy()` on the narrow convolution tail copied the full
+projection backing allocation and preserved its offset/strides. With a 64-token
+CPU fixture it retained 2,048 elements for a visible 96-element tail. The cache
+now uses `force_contiguous().detach()` to retain only the visible tail in compact
+storage. This changes storage layout without changing convolution values,
+recurrent arithmetic or temperatures. Persistent snapshots already made their
+own compact copies; active handles now have the same compact tail property.
+
+The regression first fails on the old allocation (2,048 versus 96), then checks
+the compact allocation, zero offset and contiguous layout for fp32/fp16. Parent
+release leaves forks valid, and two-candidate continuation probabilities meet
+the unchanged 1e-4 paired gate at three temperatures. Existing native batch,
+prefix, immutable snapshot and original upstream checks cover the complete
+readout path. The generic storage-copy change has only CPU validation here;
+actual GPU checks remain deferred.
