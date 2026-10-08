@@ -663,9 +663,41 @@ Serving requires `--prefix-cache` and fresh complete observed-label conformance,
 including actual forks and independent paired probability gates. Qualification
 identity records `kv_storage=cpu-cow-pages-materialize-v1`, page size and the
 configuration environment. CPU fixture bitwise parity does not release Kev or
-establish speed/RSS. Direct paged kernels, cached-branch batches and tenant
-retention policy remain separate work. Apple work and actual GPU checks are
+establish speed/RSS. The optional direct CPU page path below and the cached-branch batch section
+describe separate arithmetic profiles. Tenant retention policy remains open. Apple work and actual GPU checks are
 deferred by the user.
+
+### Direct CPU Kev page attention
+
+Set `HUNCHO_DEVICE=cpu HUNCHO_KV_PAGE_TOKENS=16
+HUNCHO_ATTENTION_QUERY_ROWS=64 HUNCHO_DIRECT_PAGED_ATTENTION=1` and select
+`--dtype fp32`. The native Candle Kev F2 path reads compact immutable K/V pages
+through bounded query blocks, without concatenating complete prefixes or
+expanding grouped K/V heads. One softmax spans every original key in order and
+keeps the absolute causal mask. Pagewise QK/PV shapes and PV summation differ
+from flat attention; this default-off profile requires fresh fixed external,
+full-argmax, observed-label/ECE and paired 1e-4 startup gates with actual prefix
+fan-out. A storage-only receipt cannot authorize the direct profile.
+
+`kv_storage=cpu-cow-pages-direct-v1` and
+`paged_attention=cpu-page-qk-pv-fp32-v1` bind model execution and the environment.
+Independent forwards and private multi-row suffix batches retain flat kernels,
+recorded as `paged_attention_fallback=flat-independent-and-branch-batch-v1`.
+Their calibration gates still cover the whole request. This option is not a
+GPU FlashAttention kernel. Scores and softmax still use temporary blocks;
+multiple small page matmuls may cost more latency than a large contiguous call.
+It avoids full prefix K/V workspaces for persistent single-row calls, not all
+model allocation or a total peak-memory bound. Measure a released workload
+before choosing page/block sizes.
+
+Configure pages/query bounds/direct mode before live, partial or retained
+caches and replicas. Disable direct mode before setting either prerequisite
+to zero. Reduced/packed dtypes, other families/runtimes and devices are refused
+before execution. Existing chunked/resumable prefill, retained snapshot budgets,
+immutable forks, CPU kernels, FP32 runtime LoRA and independent shared replicas
+retain their limits. Only CPU fixture correctness is recorded; released Kev
+acceptance remains rejected/pending. Apple work and actual GPU checks are
+currently deferred.
 
 ### Optional ONNX CUDA device I/O and graph replay
 

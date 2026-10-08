@@ -98,7 +98,7 @@ pub(super) fn query_blocks(q: &Tensor, k: &Tensor, v: &Tensor, rows: usize) -> R
     Tensor::cat(&output, 2)
 }
 
-fn query_mask(start: usize, rows: usize, keys: usize, offset: usize) -> Result<Tensor> {
+pub(super) fn query_mask(start: usize, rows: usize, keys: usize, offset: usize) -> Result<Tensor> {
     let size = rows
         .checked_mul(keys)
         .ok_or_else(|| candle::Error::Msg("attention block mask overflow".into()))?;

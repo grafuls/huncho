@@ -33,12 +33,24 @@ fn run_adapter_profile(
     pages: &str,
     lora: &str,
 ) -> Output {
+    run_page_kernel_profile(args, chunk, query_rows, grouped, pages, lora, "0")
+}
+fn run_page_kernel_profile(
+    args: &[&str],
+    chunk: &str,
+    query_rows: &str,
+    grouped: &str,
+    pages: &str,
+    lora: &str,
+    direct: &str,
+) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_huncho"))
         .env("HUNCHO_DEVICE", "cpu")
         .env("HUNCHO_PREFILL_CHUNK_TOKENS", chunk)
         .env("HUNCHO_ATTENTION_QUERY_ROWS", query_rows)
         .env("HUNCHO_GROUPED_GQA", grouped)
         .env("HUNCHO_KV_PAGE_TOKENS", pages)
+        .env("HUNCHO_DIRECT_PAGED_ATTENTION", direct)
         .env("HUNCHO_RUNTIME_LORA", lora)
         .env("RAYON_NUM_THREADS", "1")
         .env("CANDLE_NUM_THREADS", "1")
@@ -1067,5 +1079,158 @@ fn runtime_lora_binds_fresh_qualification_and_keeps_frozen_probabilities_and_ref
         );
         assert!(!output.status.success());
         assert!(String::from_utf8_lossy(&output.stderr).contains(expected));
+    }
+}
+
+#[cfg(feature = "qualification")]
+#[test]
+fn direct_page_profile_keeps_frozen_gates_and_requires_fresh_labeled_prefix_qualification() {
+    let (tmp, manifest, golden) = package();
+    let receipt = tmp.path().join("direct-pages-numerical.json");
+    let args = [
+        "conform",
+        "--manifest",
+        manifest.to_str().unwrap(),
+        "--backend",
+        "candle",
+        "--dtype",
+        "fp32",
+        "--golden",
+        golden.to_str().unwrap(),
+        "--prefix-cache",
+        "--persistent-prefix-bytes",
+        "1048576",
+        "--json",
+        "--write-qualification",
+        receipt.to_str().unwrap(),
+    ];
+    for (pages, chunks, grouped, runtime) in [("16", "0", "0", "0"), ("256", "3", "1", "1")] {
+        let profile_receipt = tmp
+            .path()
+            .join(format!("direct-pages-{pages}-{chunks}.json"));
+        let mut profile_args = args.to_vec();
+        let output_index = profile_args
+            .iter()
+            .position(|x| *x == "--write-qualification")
+            .unwrap()
+            + 1;
+        profile_args[output_index] = profile_receipt.to_str().unwrap();
+        let output =
+            run_page_kernel_profile(&profile_args, chunks, "7", grouped, pages, runtime, "1");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["passed"], true);
+        assert_eq!(
+            report["execution_metadata"]["kv_storage"],
+            "cpu-cow-pages-direct-v1"
+        );
+        assert_eq!(
+            report["execution_metadata"]["paged_attention"],
+            "cpu-page-qk-pv-fp32-v1"
+        );
+        assert!(report["work"]["cache_forks"].as_u64().unwrap() > 0);
+        assert!(report["work"]["persistent_prefix_hits"].as_u64().unwrap() > 0);
+        assert!(
+            report["optimization_parity"]["max_prob_delta"]
+                .as_f64()
+                .unwrap()
+                <= 1e-4
+        );
+        assert_eq!(report["optimization_parity"]["argmax_agreement"], 1.0);
+        let record: Value =
+            serde_json::from_slice(&std::fs::read(&profile_receipt).unwrap()).unwrap();
+        assert_eq!(record["outcome_gates_passed"], false);
+        assert!(std::fs::read_to_string(&profile_receipt)
+            .unwrap()
+            .contains("HUNCHO_DIRECT_PAGED_ATTENTION"));
+    }
+    // Synthetic targets prove startup plumbing only, not released calibration.
+    let mut suite: Value = serde_json::from_slice(&std::fs::read(&golden).unwrap()).unwrap();
+    for case in suite["cases"].as_array_mut().unwrap() {
+        let targets: serde_json::Map<String, Value> = case["expected"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(id, p)| {
+                (
+                    id.clone(),
+                    json!(p.as_object().unwrap().keys().next().unwrap()),
+                )
+            })
+            .collect();
+        case["targets"] = json!(targets);
+    }
+    let labeled = tmp.path().join("direct-pages-labeled-fixture.json");
+    std::fs::write(&labeled, serde_json::to_vec(&suite).unwrap()).unwrap();
+    let mut labeled_args = args.to_vec();
+    let i = labeled_args.iter().position(|x| *x == "--golden").unwrap() + 1;
+    labeled_args[i] = labeled.to_str().unwrap();
+    let output = run_page_kernel_profile(&labeled_args, "3", "7", "1", "16", "0", "1");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let record: Value = serde_json::from_slice(&std::fs::read(&receipt).unwrap()).unwrap();
+    assert_eq!(record["outcome_gates_passed"], true);
+    let binding = format!("tiny-kev={}", golden.display());
+    let serving = [
+        "serve",
+        "--manifest",
+        manifest.to_str().unwrap(),
+        "--backend",
+        "candle",
+        "--dtype",
+        "fp32",
+        "--qualification-golden",
+        &binding,
+        "--bind",
+        "127.0.0.1:0",
+    ];
+    let output = run_page_kernel_profile(&serving, "0", "7", "0", "16", "0", "1");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("requires --prefix-cache"));
+    let mut prefix = serving.to_vec();
+    prefix.push("--prefix-cache");
+    let output = run_page_kernel_profile(&prefix, "0", "7", "0", "16", "0", "1");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("observed target labels"));
+    // Missing prerequisites and precision/backend changes fail before device selection.
+    for (pages, queries, dtype, direct) in [
+        ("0", "7", "fp32", "1"),
+        ("16", "0", "fp32", "1"),
+        ("16", "7", "fp16", "1"),
+        ("16", "7", "fp32", "broken"),
+    ] {
+        let output = run_page_kernel_profile(
+            &[
+                "bench",
+                "--manifest",
+                manifest.to_str().unwrap(),
+                "--backend",
+                "candle",
+                "--dtype",
+                dtype,
+                "--iterations",
+                "1",
+            ],
+            "0",
+            queries,
+            "0",
+            pages,
+            "0",
+            direct,
+        );
+        assert!(!output.status.success());
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            error.contains("direct paged attention")
+                || error.contains("HUNCHO_DIRECT_PAGED_ATTENTION"),
+            "{error}"
+        );
     }
 }

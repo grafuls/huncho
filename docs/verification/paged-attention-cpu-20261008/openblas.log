@@ -1,0 +1,22 @@
+   Compiling huncho-backend v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-backend)
+warning: variable does not need to be mutable
+   --> crates/huncho-backend/tests/paged_attention.rs:192:9
+    |
+192 |     let mut backend = load(16, false, false);
+    |         ----^^^^^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `huncho-backend` (test "paged_attention") generated 1 warning (run `cargo fix --test "paged_attention" -p huncho-backend` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.64s
+     Running tests/paged_attention.rs (target/debug/deps/paged_attention-a510c12deec15c2b)
+
+running 3 tests
+test direct_page_profile_rejects_missing_prerequisites_and_later_invalid_settings ... ok
+test direct_pages_keep_original_typed_goldens_across_boundaries_chunks_and_runtime_adapters ... ok
+test direct_pages_retain_transactional_bounds_snapshots_and_replica_isolation ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.21s
+

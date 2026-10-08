@@ -1,7 +1,19 @@
-//! Immutable CPU KV pages. Attention still materializes the original complete
-//! key order; this changes persistent storage/branch copies, not reductions.
-use candle::{Result, Tensor};
+//! Immutable CPU KV pages, with an optional direct FP32 query-block path.
+use candle::{DType, Result, Tensor};
 use std::sync::Arc;
+
+#[cfg(test)]
+thread_local! {
+    static PATH_COUNTS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+#[cfg(test)]
+pub(super) fn reset_path_counts() {
+    PATH_COUNTS.with(|counts| counts.set((0, 0)));
+}
+#[cfg(test)]
+pub(super) fn path_counts() -> (usize, usize) {
+    PATH_COUNTS.with(|counts| counts.get())
+}
 
 struct Page {
     key: Tensor,
@@ -53,6 +65,11 @@ impl PagedKv {
         key: &Tensor,
         value: &Tensor,
     ) -> Result<(Tensor, Tensor)> {
+        #[cfg(test)]
+        PATH_COUNTS.with(|counts| {
+            let (flat, direct) = counts.get();
+            counts.set((flat + 1, direct));
+        });
         self.validate(key, value)?;
         if self.pages.is_empty() {
             return Ok((key.clone(), value.clone()));
@@ -67,12 +84,93 @@ impl PagedKv {
     /// A private contiguous snapshot for a native branch batch. Page payloads
     /// remain immutable; no batched suffix state is stored in these pages.
     pub(super) fn materialize(&self) -> Result<(Tensor, Tensor)> {
+        #[cfg(test)]
+        PATH_COUNTS.with(|counts| {
+            let (flat, direct) = counts.get();
+            counts.set((flat + 1, direct));
+        });
         if self.pages.is_empty() {
             candle::bail!("cannot materialize an empty KV prefix")
         }
         let keys: Vec<_> = self.pages.iter().map(|page| &page.key).collect();
         let values: Vec<_> = self.pages.iter().map(|page| &page.value).collect();
         Ok((Tensor::cat(&keys, 2)?, Tensor::cat(&values, 2)?))
+    }
+
+    /// Read immutable pages directly, without concatenating or expanding K/V.
+    /// Softmax still includes every causal key in its original order. QK/PV
+    /// matmul shapes and PV summation change, so this is a separate arithmetic
+    /// profile, not a bitwise storage optimization. The caller bounds queries.
+    pub(super) fn attention(&self, q: &Tensor, query_rows: usize) -> Result<Tensor> {
+        #[cfg(test)]
+        PATH_COUNTS.with(|counts| {
+            let (flat, direct) = counts.get();
+            counts.set((flat, direct + 1));
+        });
+        let (batch, heads, queries, width) = q.dims4()?;
+        let first = self.pages.first().ok_or_else(|| {
+            candle::Error::Msg("direct page attention requires nonempty KV pages".into())
+        })?;
+        let (kb, kv_heads, _, kw) = first.key.dims4()?;
+        if !q.device().is_cpu()
+            || q.dtype() != DType::F32
+            || first.key.dtype() != DType::F32
+            || batch != 1
+            || kb != batch
+            || heads == 0
+            || kv_heads == 0
+            || heads % kv_heads != 0
+            || queries == 0
+            || queries > self.tokens
+            || width == 0
+            || width != kw
+            || !(1..=4096).contains(&query_rows)
+        {
+            candle::bail!("direct page attention requires compatible single-row CPU FP32 queries and 1..4096 block rows")
+        }
+        let groups = heads / kv_heads;
+        let offset = self.tokens - queries;
+        let scale = 1.0 / (width as f64).sqrt();
+        let mut outputs = Vec::new();
+        for start in (0..queries).step_by(query_rows) {
+            let count = query_rows.min(queries - start);
+            let query = q.narrow(2, start, count)?.contiguous()?.reshape((
+                batch,
+                kv_heads,
+                groups * count,
+                width,
+            ))?;
+            let scores = self
+                .pages
+                .iter()
+                .map(|page| query.matmul(&page.key.transpose(2, 3)?))
+                .collect::<Result<Vec<_>>>()?;
+            let scores = Tensor::cat(&scores, 3)?.affine(scale, 0.0)?.reshape((
+                batch,
+                kv_heads,
+                groups,
+                count,
+                self.tokens,
+            ))?;
+            let mask = super::attention::query_mask(start, count, self.tokens, offset)?;
+            let probabilities = candle_nn::ops::softmax(&scores.broadcast_add(&mask)?, 4)?
+                .reshape((batch, kv_heads, groups * count, self.tokens))?;
+            let mut key_start = 0;
+            let mut combined: Option<Tensor> = None;
+            for page in &self.pages {
+                let contribution = probabilities
+                    .narrow(3, key_start, page.rows)?
+                    .contiguous()?
+                    .matmul(&page.value)?;
+                combined = Some(match combined {
+                    Some(previous) => previous.add(&contribution)?,
+                    None => contribution,
+                });
+                key_start += page.rows;
+            }
+            outputs.push(combined.unwrap().reshape((batch, heads, count, width))?);
+        }
+        Tensor::cat(&outputs, 2)
     }
 
     fn owned_page(key: Tensor, value: Tensor, rows: usize) -> Result<Arc<Page>> {
@@ -164,6 +262,89 @@ mod tests {
             .iter()
             .map(|n| n.to_bits())
             .collect()
+    }
+    #[test]
+    fn direct_page_attention_preserves_causal_head_mapping_and_full_softmax() {
+        for groups in [1, 2, 4] {
+            for page_tokens in [16, 32, 64, 256] {
+                for (queries, offset) in [(1, 0), (19, 0), (19, 17), (3, 263)] {
+                    let keys = queries + offset;
+                    let tensor = |heads: usize, rows: usize, phase: f32| {
+                        Tensor::from_vec(
+                            (0..heads * rows * 8)
+                                .map(|i| ((i as f32 + phase) * 0.37).sin() * 0.7)
+                                .collect::<Vec<_>>(),
+                            (1, rows, heads, 8),
+                            &Device::Cpu,
+                        )
+                        .unwrap()
+                        .transpose(1, 2)
+                        .unwrap()
+                    };
+                    let q = tensor(groups * 2, queries, 1.0);
+                    let k = tensor(2, keys, 3.0);
+                    let v = tensor(2, keys, 5.0);
+                    let pages = PagedKv::new(page_tokens).append(&k, &v).unwrap();
+                    let expanded_k = super::super::repeat_interleave_head(&k, groups, 1)
+                        .unwrap()
+                        .contiguous()
+                        .unwrap();
+                    let expanded_v = super::super::repeat_interleave_head(&v, groups, 1)
+                        .unwrap()
+                        .contiguous()
+                        .unwrap();
+                    let expected = super::super::attention::query_blocks(
+                        &q.contiguous().unwrap(),
+                        &expanded_k,
+                        &expanded_v,
+                        7,
+                    )
+                    .unwrap()
+                    .flatten_all()
+                    .unwrap()
+                    .to_vec1::<f32>()
+                    .unwrap();
+                    for rows in [1, 7, 64] {
+                        let actual = pages
+                            .attention(&q, rows)
+                            .unwrap()
+                            .flatten_all()
+                            .unwrap()
+                            .to_vec1::<f32>()
+                            .unwrap();
+                        assert!(actual
+                            .iter()
+                            .zip(&expected)
+                            .all(|(a, b)| (a - b).abs() < 1e-6));
+                    }
+                    assert!(pages.attention(&q, 0).is_err());
+                    assert!(pages.attention(&q, 4097).is_err());
+                    assert!(pages
+                        .attention(&q.to_dtype(DType::F16).unwrap(), 7)
+                        .is_err());
+                    // Values beyond each query's absolute position cannot enter
+                    // its distribution. Poisoning just the final future token
+                    // changes only the final query in a multi-query suffix.
+                    if queries > 1 {
+                        let vk = v.narrow(2, 0, keys - 1).unwrap();
+                        let tail = v.narrow(2, keys - 1, 1).unwrap().affine(1., 100.).unwrap();
+                        let changed = Tensor::cat(&[&vk, &tail], 2).unwrap();
+                        let changed = PagedKv::new(page_tokens)
+                            .append(&k, &changed)
+                            .unwrap()
+                            .attention(&q, 7)
+                            .unwrap();
+                        let original = pages.attention(&q, 7).unwrap();
+                        assert_eq!(
+                            bits(&changed.narrow(2, 0, queries - 1).unwrap()),
+                            bits(&original.narrow(2, 0, queries - 1).unwrap()),
+                        );
+                    }
+                }
+            }
+        }
+        let empty = PagedKv::new(16);
+        assert!(empty.attention(&tensors(0, 1, DType::F32).0, 7).is_err());
     }
     #[test]
     fn page_order_and_copy_on_write_tails_preserve_exact_storage_values() {

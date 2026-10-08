@@ -1,0 +1,9 @@
+   Compiling huncho-backend v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-backend)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.87s
+     Running unittests src/lib.rs (target/debug/deps/huncho_backend-97a358c1c68d3c25)
+
+running 1 test
+test qwen3_5::kv_pages::tests::direct_page_attention_preserves_causal_head_mapping_and_full_softmax ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 44 filtered out; finished in 0.19s
+

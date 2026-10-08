@@ -280,6 +280,7 @@ fn load_backend(
     let query_rows = attention_query_rows_from_env()?;
     let grouped_gqa = bool_env("HUNCHO_GROUPED_GQA")?;
     validate_kv_pages(manifest, backend_id)?;
+    validate_direct_paged_attention(manifest, backend_id, dtype)?;
     validate_runtime_lora(manifest, backend_id, Some(dtype))?;
     if (query_rows > 0 || grouped_gqa)
         && (!cfg!(feature = "candle")
@@ -336,7 +337,29 @@ fn validate_kv_pages(manifest: &ModelManifest, backend_id: BackendId) -> Result<
             || manifest.prompt_contract.template != "kev-v1"
             || std::env::var("HUNCHO_DEVICE").as_deref() != Ok("cpu"))
     {
-        return Err(Error::Unsupported("KV pages require native Candle Kev F2 and explicit HUNCHO_DEVICE=cpu".into()));
+        return Err(Error::Unsupported(
+            "KV pages require native Candle Kev F2 and explicit HUNCHO_DEVICE=cpu".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_direct_paged_attention(
+    manifest: &ModelManifest,
+    backend_id: BackendId,
+    dtype: &str,
+) -> Result<()> {
+    if bool_env("HUNCHO_DIRECT_PAGED_ATTENTION")?
+        && (!cfg!(feature = "candle")
+            || backend_id != BackendId::Candle
+            || manifest.family != Family::F2
+            || manifest.prompt_contract.template != "kev-v1"
+            || std::env::var("HUNCHO_DEVICE").as_deref() != Ok("cpu")
+            || dtype != "fp32"
+            || kv_page_tokens_from_env()? == 0
+            || attention_query_rows_from_env()? == 0)
+    {
+        return Err(Error::Unsupported("direct paged attention requires native Candle CPU FP32 Kev, HUNCHO_KV_PAGE_TOKENS and HUNCHO_ATTENTION_QUERY_ROWS".into()));
     }
     Ok(())
 }
@@ -507,6 +530,7 @@ fn load_candle(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<
             .with_cpu_fused_gate(bool_env("HUNCHO_CPU_FUSED_GATE")?)?
             .with_attention_query_rows(attention_query_rows_from_env()?)?
             .with_grouped_gqa(bool_env("HUNCHO_GROUPED_GQA")?)?
+            .with_direct_paged_attention(bool_env("HUNCHO_DIRECT_PAGED_ATTENTION")?)?
             .with_cpu_blas_from_env()?
             .with_prefill_chunk_tokens(prefill_chunk_tokens_from_env()?)?;
             return Ok(Box::new(backend));
@@ -532,16 +556,17 @@ fn load_candle(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<
             )?
         };
         let backend = backend
-        .with_kv_page_tokens(kv_page_tokens_from_env()?)?
-        .with_projection_chunk_rows(projection_chunk_rows_from_env()?)?
-        .with_fp32_attention(fp32_attention_from_env()?)?
-        .with_cpu_delta_rule(bool_env("HUNCHO_CPU_DELTA_RULE")?)?
-        .with_cpu_causal_conv(bool_env("HUNCHO_CPU_CAUSAL_CONV")?)?
-        .with_cpu_fused_gate(bool_env("HUNCHO_CPU_FUSED_GATE")?)?
-        .with_attention_query_rows(attention_query_rows_from_env()?)?
-        .with_grouped_gqa(bool_env("HUNCHO_GROUPED_GQA")?)?
-        .with_cpu_blas_from_env()?
-        .with_prefill_chunk_tokens(prefill_chunk_tokens_from_env()?)?;
+            .with_kv_page_tokens(kv_page_tokens_from_env()?)?
+            .with_projection_chunk_rows(projection_chunk_rows_from_env()?)?
+            .with_fp32_attention(fp32_attention_from_env()?)?
+            .with_cpu_delta_rule(bool_env("HUNCHO_CPU_DELTA_RULE")?)?
+            .with_cpu_causal_conv(bool_env("HUNCHO_CPU_CAUSAL_CONV")?)?
+            .with_cpu_fused_gate(bool_env("HUNCHO_CPU_FUSED_GATE")?)?
+            .with_attention_query_rows(attention_query_rows_from_env()?)?
+            .with_grouped_gqa(bool_env("HUNCHO_GROUPED_GQA")?)?
+            .with_direct_paged_attention(bool_env("HUNCHO_DIRECT_PAGED_ATTENTION")?)?
+            .with_cpu_blas_from_env()?
+            .with_prefill_chunk_tokens(prefill_chunk_tokens_from_env()?)?;
         return Ok(Box::new(backend));
     }
     // F3 (Bespoke-Nimble) packages are candidate-logit PEFT adapters over a

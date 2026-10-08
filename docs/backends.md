@@ -322,6 +322,16 @@ the separate `quantization` feature. The pointer head and retained state remain
 FP32; conversion leaves calibration pending and serving requires an explicit
 variant refit plus fresh labeled conformance. See [quantization](quantization.md).
 
+Optional CPU FP32 Kev direct page attention requires `HUNCHO_KV_PAGE_TOKENS`,
+positive `HUNCHO_ATTENTION_QUERY_ROWS`, and `HUNCHO_DIRECT_PAGED_ATTENTION=1`.
+Persistent single-row QK/PV read immutable pages without full prefix copies or
+K/V head expansion; one ordered causal softmax remains. Page matmul/summation
+rounding changes, so this separately identified profile requires fresh labeled
+prefix/fork gates. Independent and private multi-row branch calls retain a
+recorded flat fallback. Reduced/packed dtypes and devices are unsupported;
+controlled released latency/RSS and outcome acceptance remain open.
+[Configuration and limits](operations.md#direct-cpu-kev-page-attention).
+
 `HUNCHO_PREFILL_CHUNK_TOKENS=1..4096` optionally bounds CPU Kev prefix query
 length. It requires `--prefix-cache` when serving, a representative prefix
 longer than the selected chunk size, and fresh labeled/paired qualification.

@@ -440,6 +440,7 @@ fn requires_outcome_qualification(engine: &huncho_core::engine::Engine) -> bool 
         "attention_execution",
         "gqa_execution",
         "kv_storage",
+        "paged_attention",
         "adapter_execution",
         "device_path",
         "joint_head_execution",

@@ -529,6 +529,7 @@ struct Attention {
     fp32_compute: bool,
     query_rows: usize,
     grouped_gqa: bool,
+    direct_paged_attention: bool,
 }
 
 impl Attention {
@@ -578,6 +579,7 @@ impl Attention {
             fp32_compute: false,
             query_rows: 0,
             grouped_gqa: false,
+            direct_paged_attention: false,
         })
     }
 
@@ -616,62 +618,77 @@ impl Attention {
             .and_then(|c| c.pages.as_ref())
             .map(|pages| pages.append(&k, &v))
             .transpose()?;
-        let (k, v) = if let Some(pages) = cache.as_ref().and_then(|c| c.pages.as_ref()) {
-            pages.materialize_with(&k, &v)?
-        } else {
-            match cache
-                .as_ref()
-                .and_then(|cache| cache.key.as_ref().zip(cache.value.as_ref()))
-            {
-                Some((past_key, past_value)) => (
-                    Tensor::cat(&[past_key, &k], 2)?,
-                    Tensor::cat(&[past_value, &v], 2)?,
-                ),
-                None => (k, v),
-            }
-        };
-        // Retain unexpanded GQA tensors. A fork shares immutable prefix storage;
-        // appending a branch produces new tensors and cannot mutate its parent.
-        let retained = cache
-            .as_ref()
-            .filter(|_| retained_pages.is_none())
-            .map(|_| (k.clone(), v.clone()));
-
-        let n_rep = self.num_heads / self.num_kv_heads;
-        let k = if n_rep > 1 && !self.grouped_gqa {
-            repeat_interleave_head(&k, n_rep, 1)?
-        } else {
-            k
-        };
-        let v = if n_rep > 1 && !self.grouped_gqa {
-            repeat_interleave_head(&v, n_rep, 1)?
-        } else {
-            v
-        };
-
         let activation_dtype = q.dtype();
-        let (q, k, v) = if self.fp32_compute {
+        let (attn, retained) = if self.direct_paged_attention && retained_pages.is_some() {
+            // Persistent single-row pages take the direct path. Independent
+            // forwards and private multi-row branch workspaces retain the
+            // original flat attention path and are recorded as such.
             (
-                q.to_dtype(DType::F32)?,
-                k.to_dtype(DType::F32)?,
-                v.to_dtype(DType::F32)?,
+                retained_pages
+                    .as_ref()
+                    .unwrap()
+                    .attention(&q, self.query_rows)?,
+                None,
             )
         } else {
-            (q, k, v)
+            let (k, v) = if let Some(pages) = cache.as_ref().and_then(|c| c.pages.as_ref()) {
+                pages.materialize_with(&k, &v)?
+            } else {
+                match cache
+                    .as_ref()
+                    .and_then(|cache| cache.key.as_ref().zip(cache.value.as_ref()))
+                {
+                    Some((past_key, past_value)) => (
+                        Tensor::cat(&[past_key, &k], 2)?,
+                        Tensor::cat(&[past_value, &v], 2)?,
+                    ),
+                    None => (k, v),
+                }
+            };
+            // Retain unexpanded GQA tensors. A fork shares immutable prefix storage;
+            // appending a branch produces new tensors and cannot mutate its parent.
+            let retained = cache
+                .as_ref()
+                .filter(|_| retained_pages.is_none())
+                .map(|_| (k.clone(), v.clone()));
+
+            let n_rep = self.num_heads / self.num_kv_heads;
+            let k = if n_rep > 1 && !self.grouped_gqa {
+                repeat_interleave_head(&k, n_rep, 1)?
+            } else {
+                k
+            };
+            let v = if n_rep > 1 && !self.grouped_gqa {
+                repeat_interleave_head(&v, n_rep, 1)?
+            } else {
+                v
+            };
+
+            let (q, k, v) = if self.fp32_compute {
+                (
+                    q.to_dtype(DType::F32)?,
+                    k.to_dtype(DType::F32)?,
+                    v.to_dtype(DType::F32)?,
+                )
+            } else {
+                (q, k, v)
+            };
+            let attn = if self.grouped_gqa {
+                attention::grouped_queries(&q, &k, &v, self.query_rows, mask)?
+            } else if self.query_rows > 0 {
+                attention::query_blocks(&q, &k, &v, self.query_rows)?
+            } else {
+                let mask =
+                    mask.ok_or_else(|| candle::Error::Msg("missing full causal mask".into()))?;
+                let scale = 1.0 / (self.head_dim as f64).sqrt();
+                let scores = q.matmul(&k.transpose(2, 3)?)?.affine(scale, 0.0)?;
+                let scores = scores.broadcast_add(&mask.to_dtype(scores.dtype())?)?;
+                let probs = candle_nn::ops::softmax(&scores, 3)?;
+                probs.matmul(&v)?
+            }
+            .to_dtype(activation_dtype)?;
+            (attn, retained)
         };
-        let attn = if self.grouped_gqa {
-            attention::grouped_queries(&q, &k, &v, self.query_rows, mask)?
-        } else if self.query_rows > 0 {
-            attention::query_blocks(&q, &k, &v, self.query_rows)?
-        } else {
-            let mask = mask.ok_or_else(|| candle::Error::Msg("missing full causal mask".into()))?;
-            let scale = 1.0 / (self.head_dim as f64).sqrt();
-            let scores = q.matmul(&k.transpose(2, 3)?)?.affine(scale, 0.0)?;
-            let scores = scores.broadcast_add(&mask.to_dtype(scores.dtype())?)?;
-            let probs = candle_nn::ops::softmax(&scores, 3)?;
-            probs.matmul(&v)?
-        }
-        .to_dtype(activation_dtype)?;
         let attn = attn.transpose(1, 2)?; // [B, seq, num_heads, head_dim]
                                           // `attn_output_gate`: the gate is the same shape as each head (the
                                           // q_proj output is split in two: query + gate), so multiply elementwise.
@@ -1260,6 +1277,7 @@ pub struct Model {
     fp32_attention: bool,
     attention_query_rows: usize,
     grouped_gqa: bool,
+    direct_paged_attention: bool,
     kv_page_tokens: usize,
     runtime_lora_targets: usize,
     cpu_delta_rule: bool,
@@ -1316,6 +1334,7 @@ impl Model {
             fp32_attention: false,
             attention_query_rows: 0,
             grouped_gqa: false,
+            direct_paged_attention: false,
             kv_page_tokens: 0,
             runtime_lora_targets: 0,
             cpu_delta_rule: false,
@@ -1755,6 +1774,11 @@ impl Qwen3_5Backend {
                 "KV pages currently require CPU Kev with full attention".into(),
             ));
         }
+        if tokens == 0 && self.model.direct_paged_attention {
+            return Err(Error::Unsupported(
+                "disable direct paged attention before KV pages".into(),
+            ));
+        }
         if tokens != self.model.kv_page_tokens {
             if !self.caches.is_empty()
                 || !self.pending_prefills.is_empty()
@@ -1765,6 +1789,42 @@ impl Qwen3_5Backend {
                 ));
             }
             self.model_mut()?.kv_page_tokens = tokens;
+        }
+        Ok(self)
+    }
+    /// Read cached CPU FP32 Kev pages without full-KV concatenation. Softmax
+    /// retains every causal key; page matmul/PV reductions require fresh gates.
+    /// Configure pages and bounded query rows first, before handles/replicas.
+    pub fn with_direct_paged_attention(mut self, enabled: bool) -> CoreResult<Self> {
+        if enabled
+            && (!self.device.is_cpu()
+                || self.dtype != "fp32"
+                || !matches!(self.head.as_ref(), Readout::Pointer(_))
+                || self.model.kv_page_tokens == 0
+                || self.model.attention_query_rows == 0)
+        {
+            return Err(Error::Unsupported(
+                "direct paged attention requires CPU FP32 Kev, KV pages and bounded query rows"
+                    .into(),
+            ));
+        }
+        if enabled != self.model.direct_paged_attention {
+            if !self.caches.is_empty()
+                || !self.pending_prefills.is_empty()
+                || !self.prefixes.values.is_empty()
+            {
+                return Err(Error::Unsupported(
+                    "release retained/partial Qwen caches before changing direct paged attention"
+                        .into(),
+                ));
+            }
+            let model = self.model_mut()?;
+            model.direct_paged_attention = enabled;
+            for layer in &mut model.layers {
+                if let Some(attention) = &mut layer.self_attn {
+                    attention.direct_paged_attention = enabled;
+                }
+            }
         }
         Ok(self)
     }
@@ -1784,6 +1844,11 @@ impl Qwen3_5Backend {
     /// Bound CPU attention score/mask rows; every causal key remains present.
     /// Reduction shapes change, so fresh conformance is required before serving.
     pub fn with_attention_query_rows(mut self, rows: usize) -> CoreResult<Self> {
+        if rows == 0 && self.model.direct_paged_attention {
+            return Err(Error::Unsupported(
+                "disable direct paged attention before query blocks".into(),
+            ));
+        }
         if rows != self.model.attention_query_rows {
             if !self.caches.is_empty() || !self.prefixes.values.is_empty() {
                 return Err(Error::Unsupported(
@@ -2510,8 +2575,23 @@ impl Backend for Qwen3_5Backend {
                 self.model.runtime_lora_targets.to_string(),
             );
         }
+        if self.model.direct_paged_attention {
+            extra.insert("paged_attention".into(), "cpu-page-qk-pv-fp32-v1".into());
+            extra.insert(
+                "paged_attention_fallback".into(),
+                "flat-independent-and-branch-batch-v1".into(),
+            );
+        }
         if self.model.kv_page_tokens > 0 {
-            extra.insert("kv_storage".into(), "cpu-cow-pages-materialize-v1".into());
+            extra.insert(
+                "kv_storage".into(),
+                if self.model.direct_paged_attention {
+                    "cpu-cow-pages-direct-v1"
+                } else {
+                    "cpu-cow-pages-materialize-v1"
+                }
+                .into(),
+            );
             extra.insert(
                 "kv_page_tokens".into(),
                 self.model.kv_page_tokens.to_string(),
@@ -3680,6 +3760,53 @@ mod tests {
                 (x - y).abs() < 1e-4,
                 "position-0 hidden changed: {x} vs {y}"
             );
+        }
+    }
+
+    #[test]
+    fn direct_paged_cached_execution_never_materializes_complete_kv() {
+        let root = Path::new("tests/fixtures/tiny_kev");
+        let fixture: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(root.join("golden.json")).unwrap()).unwrap();
+        let row = &fixture["cases"][0]["rows"][0];
+        let tokens: Vec<u32> = serde_json::from_value(row["tokens"].clone()).unwrap();
+        let positions: Vec<usize> = serde_json::from_value(row["positions"].clone()).unwrap();
+        let prefix = row["prefix_len"].as_u64().unwrap() as usize;
+        let mut results = Vec::new();
+        for direct in [false, true] {
+            let mut backend =
+                Qwen3_5Backend::load_kev(root, root, &root.join("head.pt"), 512, "fp32")
+                    .unwrap()
+                    .with_kv_page_tokens(16)
+                    .unwrap()
+                    .with_attention_query_rows(7)
+                    .unwrap()
+                    .with_direct_paged_attention(direct)
+                    .unwrap();
+            kv_pages::reset_path_counts();
+            let parent = backend.prefill(&tokens[..prefix]).unwrap();
+            let branch = backend.fork(parent).unwrap();
+            let mut input = ForwardInput::new(
+                tokens[prefix..].to_vec(),
+                positions.iter().map(|p| p - prefix).collect(),
+            );
+            input.fork_from = Some(branch);
+            let output = backend.forward(input).unwrap();
+            let counts = kv_pages::path_counts();
+            assert_eq!(counts, if direct { (0, 2) } else { (2, 0) });
+            for layer in &backend.caches[&branch.id].layers {
+                if layer.pages.is_some() {
+                    assert!(layer.key.is_none() && layer.value.is_none());
+                }
+            }
+            results.push(output.values().data().to_vec());
+            backend.release_cache(branch).unwrap();
+            backend.release_cache(parent).unwrap();
+        }
+        for temperature in [0.75, 1., 2.40605] {
+            let a = huncho_core::calibration::calibrate(&results[0], temperature).unwrap();
+            let b = huncho_core::calibration::calibrate(&results[1], temperature).unwrap();
+            assert!(a.iter().zip(&b).all(|(a, b)| (a - b).abs() <= 1e-4));
         }
     }
 

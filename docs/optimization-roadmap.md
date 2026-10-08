@@ -32,7 +32,7 @@ still times out. These variants remain unqualified.
 | O16 Candle device propagation | Optional CUDA loaders available | Actual GPU checks deferred |
 | O17 recurrent/conv buffers | CPU implementations available | Released profile acceptance rejected; parallel device kernels open |
 | O18 quantization | Experimental Candle and llama.cpp CPU Q8/Q4 packages available | Portable Q8/Q4 fit/held-out job staged; host currently unreachable; other families open |
-| O19 retained/paged prefixes | Bounded immutable CPU snapshots and copy-on-write CPU KV pages and equal/padded-suffix branch collation available | Direct paged-attention kernels, mixed-prefix collation and tenant policies |
+| O19 retained/paged prefixes | Bounded immutable CPU snapshots, copy-on-write CPU KV pages, optional direct CPU FP32 page attention and equal/padded-suffix branch collation available | Mixed-prefix/multi-row direct page kernels, device kernels and tenant policies |
 | O20 Metal | Skipped by user | Apple work deferred |
 | O21 llama.cpp | CPU F2/F3, full-state forks/chunks, bounded native batches and pending FP32/FP16/Q8/Q4 exports available | Released fitting/qualification and graph-side readout efficiency |
 | O22 shared bases/residency | Immutable CPU bases, lazy residency/preload/idle eviction and standard CPU FP32 F2/F3 runtime LoRA available | Released residency/calibration measurements, mixed-adapter collation and other profiles |
@@ -43,6 +43,24 @@ still times out. These variants remain unqualified.
 | O27 browser WASM/WebGPU | Separate CPU WASM F1 integrated-head SDK, packaging and fresh labeled gates available | Released exports/calibration, other families and browser scheduling; WebGPU deferred |
 
 ## Implemented increments
+
+### Direct CPU FP32 attention over immutable Kev pages
+
+O09/O19 now offer default-disabled direct page QK/PV with bounded query blocks
+and unexpanded grouped K/V. Every original causal key enters one ordered
+softmax; persistent single-row prefixes and suffixes avoid complete-KV
+concatenation. Independent forwards and private multi-row branch batches use
+the explicitly recorded flat fallback. Pagewise matmul shapes/PV summation
+change rounding, so the profile requires fresh complete labeled prefix/fork
+and paired qualification rather than inheriting the storage-only profile.
+
+Native tests verify actual direct calls with zero materialization, causal/head
+mapping, all four page sizes, frozen typed probabilities, chunk boundaries,
+runtime LoRA and kernels, snapshots, replicas, guards and cancellation. CPU
+fixture evidence does not release Kev or establish speed/peak RSS. Direct
+multi-row/mixed-prefix and device kernels remain open; Apple and actual GPU
+checks are deferred. [Evidence](verification/paged-attention-cpu-20261008/README.md).
+
 
 ### Native CPU batches of integrated F1 raw ONNX heads
 

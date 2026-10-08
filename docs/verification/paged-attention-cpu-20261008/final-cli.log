@@ -1,0 +1,9 @@
+   Compiling huncho-cli v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-cli)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.44s
+     Running tests/cooperative.rs (target/debug/deps/cooperative-89def9cd5d11accd)
+
+running 1 test
+test direct_page_profile_keeps_frozen_gates_and_requires_fresh_labeled_prefix_qualification ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 20.01s
+
