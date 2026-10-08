@@ -20,6 +20,8 @@ pub mod candle;
 #[cfg(feature = "clef")]
 pub mod clef;
 #[cfg(feature = "candle")]
+mod conv_cpu;
+#[cfg(feature = "candle")]
 mod delta_cpu;
 #[cfg(feature = "candle")]
 pub mod device;

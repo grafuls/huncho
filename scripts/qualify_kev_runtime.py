@@ -65,6 +65,8 @@ def verify_report(report, args, suite, mode):
         expected_metadata["attention_compute_dtype"] = "fp32"
     if args.cpu_delta_rule:
         expected_metadata["delta_rule_execution"] = "cpu-buffered-v1"
+    if args.cpu_causal_conv:
+        expected_metadata["causal_conv_execution"] = "cpu-buffered-v1"
     if args.dtype in PACKED_PROFILES:
         expected_metadata.update(weight_quantization=PACKED_PROFILES[args.dtype],
             activation_dtype="fp32", recurrent_state_dtype="fp32", pointer_head_dtype="fp32",
@@ -119,8 +121,8 @@ def verify_report(report, args, suite, mode):
 
 
 def run(args):
-    if args.cpu_delta_rule and args.device != "cpu":
-        raise ValueError("buffered delta recurrence is CPU-only")
+    if (args.cpu_delta_rule or args.cpu_causal_conv) and args.device != "cpu":
+        raise ValueError("buffered recurrence and convolution are CPU-only")
     if args.dtype in PACKED_PROFILES and args.device != "cpu":
         raise ValueError("packed Kev artifacts are CPU-only")
     if args.persistent_prefix_bytes < 0:
@@ -173,6 +175,7 @@ def run(args):
         "dtype": args.dtype, "projection_chunk_rows": args.projection_chunk_rows,
         "fp32_attention": args.fp32_attention, "kernel": platform.release(),
         "cpu_delta_rule": args.cpu_delta_rule,
+        "cpu_causal_conv": args.cpu_causal_conv,
         "persistent_prefix_bytes": args.persistent_prefix_bytes,
         "batch_max_requests": args.batch_max_requests,
         "cpu_affinity": sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else None,
@@ -194,6 +197,7 @@ def run(args):
     env.update(HUNCHO_DEVICE=args.device, HUNCHO_PROJECTION_CHUNK_ROWS=str(args.projection_chunk_rows),
         HUNCHO_ATTENTION_FP32=str(args.fp32_attention).lower(),
         HUNCHO_CPU_DELTA_RULE=str(args.cpu_delta_rule).lower())
+    env["HUNCHO_CPU_CAUSAL_CONV"] = str(args.cpu_causal_conv).lower()
     identity["rayon_num_threads"] = env.get("RAYON_NUM_THREADS")
     identity["thread_environment"] = {key: env[key] for key in
         ["RAYON_NUM_THREADS", "CANDLE_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"] if key in env}
@@ -250,6 +254,7 @@ def main():
     parser.add_argument("--projection-chunk-rows", type=int, default=0)
     parser.add_argument("--fp32-attention", action="store_true")
     parser.add_argument("--cpu-delta-rule", action="store_true")
+    parser.add_argument("--cpu-causal-conv", action="store_true")
     parser.add_argument("--persistent-prefix-bytes", type=int, default=0)
     parser.add_argument("--batch-max-requests", type=int)
     parser.add_argument("--prepare-all", action="store_true")

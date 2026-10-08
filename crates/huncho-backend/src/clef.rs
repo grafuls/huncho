@@ -168,7 +168,6 @@ impl ClefBackend {
         })
     }
 
-    /// Opt in to grouped joint-head projections after model/device qualification.
     /// Optional CPU backbone recurrence profile; joint-head math is unchanged.
     pub fn with_cpu_delta_rule(mut self, enabled: bool) -> Result<Self> {
         if enabled && !self.device.is_cpu() {
@@ -185,6 +184,25 @@ impl ClefBackend {
         Ok(self)
     }
 
+    /// Optional CPU convolution buffers; attention/head arithmetic is unchanged.
+    pub fn with_cpu_causal_conv(mut self, enabled: bool) -> Result<Self> {
+        if enabled && !self.device.is_cpu() {
+            return Err(Error::Unsupported(
+                "buffered causal convolution is CPU-only".into(),
+            ));
+        }
+        self.model.set_cpu_causal_conv(enabled);
+        if enabled {
+            self.capabilities
+                .extra
+                .insert("causal_conv_execution".into(), "cpu-buffered-v1".into());
+        } else {
+            self.capabilities.extra.remove("causal_conv_execution");
+        }
+        Ok(self)
+    }
+
+    /// Opt in to grouped joint-head projections after model/device qualification.
     pub fn with_vectorized_head(mut self, enabled: bool) -> Self {
         self.vectorized_head = enabled;
         if enabled {

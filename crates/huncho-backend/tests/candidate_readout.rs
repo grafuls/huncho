@@ -8,12 +8,14 @@ use std::path::Path;
 
 #[test]
 fn candidate_only_projection_preserves_probabilities_at_existing_temperatures() {
-    assert_candidate_projection_parity(candle::Device::Cpu, false);
+    assert_candidate_projection_parity(candle::Device::Cpu, false, false);
 }
 
 #[test]
-fn buffered_cpu_recurrence_preserves_f3_candidate_projection_probabilities() {
-    assert_candidate_projection_parity(candle::Device::Cpu, true);
+fn buffered_cpu_kernels_preserve_f3_candidate_projection_probabilities() {
+    for (delta, conv) in [(true, false), (false, true), (true, true)] {
+        assert_candidate_projection_parity(candle::Device::Cpu, delta, conv);
+    }
 }
 
 #[cfg(feature = "cuda")]
@@ -22,10 +24,10 @@ fn buffered_cpu_recurrence_preserves_f3_candidate_projection_probabilities() {
 fn cuda_candidate_projection_keeps_the_vocabulary_head_on_the_execution_device() {
     let device = huncho_backend::device::device_from_env().unwrap();
     assert!(device.is_cuda(), "GPU test must run on CUDA");
-    assert_candidate_projection_parity(device, false);
+    assert_candidate_projection_parity(device, false, false);
 }
 
-fn assert_candidate_projection_parity(device: candle::Device, buffered: bool) {
+fn assert_candidate_projection_parity(device: candle::Device, buffered: bool, conv: bool) {
     let root = Path::new("tests/fixtures/tiny_kev");
     let golden: serde_json::Value =
         serde_json::from_slice(&std::fs::read(root.join("golden.json")).unwrap()).unwrap();
@@ -58,6 +60,8 @@ fn assert_candidate_projection_parity(device: candle::Device, buffered: bool) {
             Qwen3_5Backend::load_on_device(package.path(), Some(root), 512, dtype, device.clone())
                 .unwrap()
                 .with_cpu_delta_rule(buffered)
+                .unwrap()
+                .with_cpu_causal_conv(conv)
                 .unwrap();
         assert_eq!(
             backend

@@ -76,7 +76,13 @@ fn vectorized_clef_head_preserves_probabilities_and_original_option_order_on_cpu
 }
 
 #[test]
-fn buffered_clef_cpu_recurrence_matches_independent_joint_logits() {
+fn buffered_clef_cpu_kernels_match_independent_joint_logits() {
+    for (delta, conv) in [(true, false), (false, true), (true, true)] {
+        assert_buffered_clef_profile(delta, conv);
+    }
+}
+
+fn assert_buffered_clef_profile(delta: bool, conv: bool) {
     let root = Path::new(FIXTURE);
     let manifest = ModelManifest::load(root.join("huncho-model.json")).unwrap();
     let golden: Value =
@@ -85,11 +91,17 @@ fn buffered_clef_cpu_recurrence_matches_independent_joint_logits() {
         let mut reference = ClefBackend::load(root, &manifest, dtype, candle::Device::Cpu).unwrap();
         let mut buffered = ClefBackend::load(root, &manifest, dtype, candle::Device::Cpu)
             .unwrap()
-            .with_cpu_delta_rule(true)
+            .with_cpu_delta_rule(delta)
+            .unwrap()
+            .with_cpu_causal_conv(conv)
             .unwrap();
         assert_eq!(
-            buffered.capabilities().extra["delta_rule_execution"],
-            "cpu-buffered-v1"
+            buffered
+                .capabilities()
+                .extra
+                .get("delta_rule_execution")
+                .map(String::as_str),
+            delta.then_some("cpu-buffered-v1")
         );
         for case in golden["cases"].as_array().unwrap() {
             let request: SystemOneRequest =
@@ -112,7 +124,11 @@ fn buffered_clef_cpu_recurrence_matches_independent_joint_logits() {
                 assert_eq!(bits(logits), bits(&expected.logits[id]));
             }
         }
-        let reference_again = buffered.with_cpu_delta_rule(false).unwrap();
+        let reference_again = buffered
+            .with_cpu_delta_rule(false)
+            .unwrap()
+            .with_cpu_causal_conv(false)
+            .unwrap();
         assert!(!reference_again
             .capabilities()
             .extra

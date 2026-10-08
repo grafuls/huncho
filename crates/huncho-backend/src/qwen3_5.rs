@@ -580,6 +580,7 @@ struct LinearAttn {
     dtype: DType,
     eps: f32,
     cpu_delta_rule: bool,
+    cpu_causal_conv: bool,
 }
 
 impl LinearAttn {
@@ -627,12 +628,18 @@ impl LinearAttn {
             dtype,
             eps: cfg.rms_norm_eps,
             cpu_delta_rule: false,
+            cpu_causal_conv: false,
         })
     }
 
     /// Causal depthwise conv1d over `[B, C, T]` (same length out):
     /// `out[c, l] = sum_k w[c, k] * x[c, l - (K-1) + k]`.
     fn causal_conv(&self, x: &Tensor) -> Result<Tensor> {
+        if self.cpu_causal_conv {
+            let out = crate::conv_cpu::causal(x, &self.conv1d_w)?;
+            // Preserve the original FP32 SiLU before casting to activations.
+            return candle_nn::ops::silu(&out)?.to_dtype(x.dtype());
+        }
         let (b, conv_dim, seq) = x.dims3()?;
         let k = self.conv_kernel;
         let x_f = x.to_dtype(DType::F32)?;
@@ -1042,6 +1049,7 @@ pub struct Model {
     projection_chunk_rows: usize,
     fp32_attention: bool,
     cpu_delta_rule: bool,
+    cpu_causal_conv: bool,
 }
 
 impl Model {
@@ -1078,6 +1086,7 @@ impl Model {
             projection_chunk_rows: 0,
             fp32_attention: false,
             cpu_delta_rule: false,
+            cpu_causal_conv: false,
         })
     }
 
@@ -1129,6 +1138,15 @@ impl Model {
         for layer in &mut self.layers {
             if let Some(attention) = &mut layer.linear_attn {
                 attention.cpu_delta_rule = enabled;
+            }
+        }
+    }
+
+    pub(crate) fn set_cpu_causal_conv(&mut self, enabled: bool) {
+        self.cpu_causal_conv = enabled;
+        for layer in &mut self.layers {
+            if let Some(attention) = &mut layer.linear_attn {
+                attention.cpu_causal_conv = enabled;
             }
         }
     }
@@ -1280,6 +1298,23 @@ enum Readout {
 }
 
 impl Qwen3_5Backend {
+    /// Optional CPU convolution buffers, with unchanged FP32 tap reduction.
+    pub fn with_cpu_causal_conv(mut self, enabled: bool) -> CoreResult<Self> {
+        if enabled && !self.device.is_cpu() {
+            return Err(Error::Unsupported(
+                "buffered causal convolution is CPU-only".into(),
+            ));
+        }
+        if enabled != self.model.cpu_causal_conv
+            && (!self.caches.is_empty() || !self.prefixes.values.is_empty())
+        {
+            return Err(Error::Unsupported(
+                "release retained Qwen caches before changing convolution kernels".into(),
+            ));
+        }
+        self.model.set_cpu_causal_conv(enabled);
+        Ok(self)
+    }
     /// Optional CPU recurrence buffers; cache state remains immutable FP32.
     /// Requires qualification for the loaded model, dtype and CPU runtime.
     pub fn with_cpu_delta_rule(mut self, enabled: bool) -> CoreResult<Self> {
@@ -1662,6 +1697,9 @@ impl Backend for Qwen3_5Backend {
         }
         if self.model.cpu_delta_rule {
             extra.insert("delta_rule_execution".into(), "cpu-buffered-v1".into());
+        }
+        if self.model.cpu_causal_conv {
+            extra.insert("causal_conv_execution".into(), "cpu-buffered-v1".into());
         }
         #[cfg(feature = "quantization")]
         if let Some(scheme) = quantized::Scheme::from_dtype(&self.dtype) {

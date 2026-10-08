@@ -83,3 +83,8 @@ forks, persistent hits, native batch isolation, malformed artifact rejection,
 source immutability, no overwrite, offline target alignment and mandatory
 refit/startup gates. They do not qualify released Kev or replace upstream
 reference goldens with optimized output.
+
+Both buffered CPU recurrence (`HUNCHO_CPU_DELTA_RULE`) and convolution
+(`HUNCHO_CPU_CAUSAL_CONV`) can be selected explicitly. They add recorded kernel
+profiles and require their own fresh labeled qualification; conversion itself
+does not enable them or fit temperatures for them.

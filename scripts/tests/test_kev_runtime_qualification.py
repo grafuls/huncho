@@ -23,7 +23,7 @@ def suite():
 def options(**overrides):
     args = SimpleNamespace(device="cpu", dtype="fp16", projection_chunk_rows=64,
         fp32_attention=True, batch_tokens=4096, numerical_only=False, prepare_all=False,
-        cpu_delta_rule=False, persistent_prefix_bytes=0, batch_max_requests=None)
+        cpu_delta_rule=False, cpu_causal_conv=False, persistent_prefix_bytes=0, batch_max_requests=None)
     vars(args).update(overrides)
     return args
 
@@ -62,6 +62,16 @@ class RuntimeQualificationTests(unittest.TestCase):
                 with self.subTest(dtype=dtype, field=field), self.assertRaises(ValueError):
                     qualifier.verify_report(changed, args, suite(), "prefix")
 
+    def test_cpu_convolution_must_report_the_requested_profile(self):
+        data = report()
+        args = options(cpu_causal_conv=True)
+        with self.assertRaisesRegex(ValueError, "kernel profile"):
+            qualifier.verify_report(data, args, suite(), "prefix")
+        data["execution_metadata"]["causal_conv_execution"] = "cpu-buffered-v1"
+        self.assertTrue(qualifier.verify_report(data, args, suite(), "prefix"))
+        with self.assertRaisesRegex(ValueError, "kernel profile"):
+            qualifier.verify_report(data, options(), suite(), "prefix")
+
     def test_persistent_prefix_reuse_requires_real_hits_and_exact_budget(self):
         args = options(persistent_prefix_bytes=1024)
         data = dict(report(), persistent_prefix_bytes=1024)
@@ -89,6 +99,7 @@ class RuntimeQualificationTests(unittest.TestCase):
     def test_invalid_cpu_profile_and_cache_modes_fail_before_any_file_or_device_access(self):
         for change in [
             {"device": "cuda", "cpu_delta_rule": True},
+            {"device": "cuda", "cpu_causal_conv": True},
             {"device": "cuda", "dtype": "q8_0-fp32"},
             {"persistent_prefix_bytes": -1}, {"persistent_prefix_bytes": 1, "modes": "independent"},
             {"batch_max_requests": 1}, {"batch_max_requests": 65},

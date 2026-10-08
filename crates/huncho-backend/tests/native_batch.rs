@@ -90,7 +90,13 @@ fn qwen_pointer_batches_preserve_probabilities_and_reject_cache_branches() {
 }
 
 #[test]
-fn buffered_cpu_recurrence_preserves_kev_reference_batches_and_prefixes() {
+fn buffered_cpu_kernels_preserve_kev_reference_batches_and_prefixes() {
+    for (delta, conv) in [(true, false), (false, true), (true, true)] {
+        assert_buffered_kev_profile(delta, conv);
+    }
+}
+
+fn assert_buffered_kev_profile(delta: bool, conv: bool) {
     let root = Path::new("tests/fixtures/tiny_kev");
     let golden: serde_json::Value =
         serde_json::from_slice(&std::fs::read(root.join("golden.json")).unwrap()).unwrap();
@@ -98,10 +104,18 @@ fn buffered_cpu_recurrence_preserves_kev_reference_batches_and_prefixes() {
         let load =
             || Qwen3_5Backend::load_kev(root, root, &root.join("head.pt"), 512, dtype).unwrap();
         let mut reference = load();
-        let mut buffered = load().with_cpu_delta_rule(true).unwrap();
+        let mut buffered = load()
+            .with_cpu_delta_rule(delta)
+            .unwrap()
+            .with_cpu_causal_conv(conv)
+            .unwrap();
         assert_eq!(
-            buffered.capabilities().extra["delta_rule_execution"],
-            "cpu-buffered-v1"
+            buffered
+                .capabilities()
+                .extra
+                .get("delta_rule_execution")
+                .map(String::as_str),
+            delta.then_some("cpu-buffered-v1")
         );
         for case in golden["cases"].as_array().unwrap() {
             let rows = case["rows"].as_array().unwrap();
@@ -143,7 +157,14 @@ fn buffered_cpu_recurrence_preserves_kev_reference_batches_and_prefixes() {
             }
             buffered.release_cache(parent).unwrap();
         }
-        assert!(buffered.with_cpu_delta_rule(false).is_err());
+        assert!(buffered.with_cpu_delta_rule(!delta).is_err());
+        let mut retained_conv = load();
+        let parent = retained_conv
+            .prefill_cached(&[1, 2], 1024 * 1024)
+            .unwrap()
+            .handle;
+        retained_conv.release_cache(parent).unwrap();
+        assert!(retained_conv.with_cpu_causal_conv(true).is_err());
         let mut retained = load();
         retained.prefill(&[1, 2]).unwrap();
         assert!(retained.with_cpu_delta_rule(true).is_err());

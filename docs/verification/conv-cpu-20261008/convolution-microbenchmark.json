@@ -1,0 +1,98 @@
+{
+  "shape": [
+    1,
+    128,
+    512
+  ],
+  "kernel": "6.19.10-300.fc44.x86_64",
+  "input_strides": [
+    65536,
+    1,
+    128
+  ],
+  "calls_per_sample": 20,
+  "original_ms": [
+    0.24341735,
+    0.240638,
+    0.24687960000000003,
+    0.2561423,
+    0.24135334999999997,
+    0.24203674999999997
+  ],
+  "buffered_ms": [
+    0.19830440000000002,
+    0.20282120000000003,
+    0.19818894999999997,
+    0.19800055,
+    0.19785935000000002,
+    0.2014404
+  ],
+  "original_mean_ms": 0.2450778916666667,
+  "buffered_mean_ms": 0.19943580833333333,
+  "speedup": 1.2288560099350265,
+  "float_bits_equal": true,
+  "qualified_release": false,
+  "started_from_commit": "8f091212725fdefec1f6697a612472850c064584",
+  "utc": "2026-10-08T11:10:43.867603+00:00",
+  "command": [
+    "cargo",
+    "test",
+    "--offline",
+    "--release",
+    "-p",
+    "huncho-backend",
+    "--features",
+    "candle",
+    "--lib",
+    "conv_cpu::tests::convolution_cpu_timing",
+    "--",
+    "--ignored",
+    "--nocapture"
+  ],
+  "source_sha256": {
+    "crates/huncho-backend/src/conv_cpu.rs": "56799c2aba9eb24cef5c4f6de7a4fafff61a56da2539feabbaf7b77c206fdb41",
+    "crates/huncho-backend/src/qwen3_5.rs": "b48c43111b78d558c93d0dfbf5bb2aaf6ad7589b4bde712627c7e5669ffb9f3d",
+    "crates/huncho-backend/Cargo.toml": "5f76c4a46ec1521dcef993b06738715588aeed3473862ea294d33e4ba29addc4",
+    "Cargo.lock": "4f7b3919bba75f8773feb06b26431f1f3bbe7af55c56e2e84264fbba7de53dd1"
+  },
+  "test_binary_sha256": "3fc60a64017267aa75949f1e590d573c595cccbb706b3bd21ce1334e895b58c9",
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Fedora 1.97.1-1.fc44)\nbinary: rustc\ncommit-hash: 8bab26f4f68e0e26f0bb7960be334d5b520ea452\ncommit-date: 2026-07-14\nhost: x86_64-unknown-linux-gnu\nrelease: 1.97.1\nLLVM version: 22.1.8\n",
+  "cpu": {
+    "vendor_id": "GenuineIntel",
+    "model name": "Intel(R) Core(TM) Ultra 7 165H",
+    "flags": "fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush dts acpi mmx fxsr sse sse2 ss ht tm pbe syscall nx pdpe1gb rdtscp lm constant_tsc art arch_perfmon pebs bts rep_good nopl xtopology nonstop_tsc cpuid aperfmperf tsc_known_freq pni pclmulqdq dtes64 monitor ds_cpl vmx smx est tm2 ssse3 sdbg fma cx16 xtpr pdcm pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand lahf_lm abm 3dnowprefetch cpuid_fault epb ssbd ibrs ibpb stibp ibrs_enhanced tpr_shadow flexpriority ept vpid ept_ad fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid rdseed adx smap clflushopt clwb intel_pt sha_ni xsaveopt xsavec xgetbv1 xsaves split_lock_detect user_shstk avx_vnni dtherm ida arat pln pts hwp hwp_notify hwp_act_window hwp_epp hwp_pkg_req hfi vnmi umip pku ospke waitpkg gfni vaes vpclmulqdq rdpid bus_lock_detect movdiri movdir64b fsrm md_clear serialize pconfig arch_lbr ibt flush_l1d arch_capabilities"
+  },
+  "affinity": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21
+  ],
+  "thread_environment": {
+    "RAYON_NUM_THREADS": "4",
+    "CANDLE_NUM_THREADS": "4"
+  },
+  "limits": [
+    "Raw CPU convolution kernel only; excludes SiLU, casting, the rest of the model and serving.",
+    "Six alternating samples of twenty calls; no frequency or heterogeneous-core isolation.",
+    "No GPU probes or inference; released-model qualification is false."
+  ]
+}

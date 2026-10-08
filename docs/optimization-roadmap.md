@@ -517,3 +517,30 @@ not peak RSS or a speed claim. Released Kev Q8_0/Q4_0 acceptance, direct packed
 model construction, other families/platforms and additional quantization layouts
 remain open. CONV-03 is partial: conversion supplies no automatic calibration
 approval. See [the workflow and limits](quantization.md).
+
+## Buffered CPU causal convolution (2026-10-08)
+
+O17 now includes `crates/huncho-backend/src/conv_cpu.rs`, a depthwise CPU
+convolution that reads strided storage, casts complete inputs once and writes
+one FP32 output buffer. It preserves ascending tap multiplication/addition and
+the original FP32 SiLU-before-activation-cast order. The original implementation
+allocated full contribution, padding and addition tensors for each tap. This
+does not change token positions, retained convolution history or temperatures.
+
+`HUNCHO_CPU_CAUSAL_CONV=1` is a default-off CPU profile for native F2/F3/F5,
+including packed Kev. Changing it with retained prefixes fails; metadata and
+receipts bind it, and fresh complete labeled startup conformance is mandatory.
+CPU unit tests match original raw float bits for fp32/fp16 inputs, noncontiguous
+weights/input views and short sequences. Full F2/F5 independent fixture logits
+also match bits; F3 candidate projections and F2 cache/batch/fork paths pass
+existing probability gates. Tests cover convolution alone, recurrence alone
+and both together; packed Q8_0/Q4_0 cache/batch tests exercise both CPU kernels.
+The full-model tests caught an omitted SiLU during development and now verify
+the corrected activation order.
+
+The [alternating CPU kernel audit](verification/conv-cpu-20261008/convolution-microbenchmark.json)
+retains six samples of twenty calls at `[1,128,512]`, kernel width four, source
+and binary hashes, compiler, CPU/affinity and thread environment. It excludes
+SiLU, casting, model inference and serving, and has no frequency or heterogeneous
+core isolation. Released checkpoint/calibration qualification remains false;
+the measurements do not establish a full-model speed or cost improvement.

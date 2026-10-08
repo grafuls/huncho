@@ -37,6 +37,8 @@ fn durable_quantized_artifacts_run_packed_kernels_and_preserve_native_cache_and_
         )
         .unwrap()
         .with_cpu_delta_rule(true)
+        .unwrap()
+        .with_cpu_causal_conv(true)
         .unwrap();
         let metadata = backend.capabilities();
         assert_eq!(metadata.dtype, scheme.dtype());

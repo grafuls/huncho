@@ -376,6 +376,7 @@ fn changed_arithmetic_profile(engine: &huncho_core::engine::Engine) -> bool {
         "onnx_intra_threads",
         "onnx_native_batch",
         "delta_rule_execution",
+        "causal_conv_execution",
         "weight_quantization",
     ]
     .iter()
@@ -784,6 +785,7 @@ mod qualification_tests {
             ("onnx_intra_threads", "4"),
             ("onnx_native_batch", "equal-length-v1"),
             ("delta_rule_execution", "cpu-buffered-v1"),
+            ("causal_conv_execution", "cpu-buffered-v1"),
         ] {
             let registry = registry_with_execution_metadata(
                 0.0,
