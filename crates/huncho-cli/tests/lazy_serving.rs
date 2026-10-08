@@ -94,8 +94,10 @@ fn command(manifest: &Path, golden: &Path, bind: &str) -> Command {
 
 fn http(bind: &str, method: &str, path: &str, body: &str) -> (u16, Value) {
     let mut socket = TcpStream::connect(bind).unwrap();
+    // Fresh cold loads hash the large unstripped debug executable twice and
+    // rerun qualification. Keep an HTTP timeout without skipping those pins.
     socket
-        .set_read_timeout(Some(Duration::from_secs(15)))
+        .set_read_timeout(Some(Duration::from_secs(60)))
         .unwrap();
     write!(socket, "{method} {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
     let mut response = String::new();
@@ -118,7 +120,7 @@ fn start(mut command: Command, bind: &str) -> Server {
                 String::from_utf8_lossy(&output.stderr)
             );
         }
-        if start.elapsed() > Duration::from_secs(10) {
+        if start.elapsed() > Duration::from_secs(30) {
             let _ = child.kill();
             let _ = child.wait();
             panic!("lazy startup hung");

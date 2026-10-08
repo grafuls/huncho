@@ -1,0 +1,10 @@
+   Compiling huncho-backend v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-backend)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.89s
+     Running tests/clef_batch.rs (target/debug/deps/clef_batch-6e5b934862b61dcd)
+
+running 3 tests
+test native_complete_schemas_keep_original_joint_head_lengths_and_physical_rectangles ... ok
+test native_schema_validation_fails_before_any_forward_and_oversized_singletons_stay_intact ... ok
+test opaque_whole_request_collation_preserves_wire_cache_ownership_and_fresh_fixed_gates ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 33.54s

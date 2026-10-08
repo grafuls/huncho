@@ -326,7 +326,8 @@ fn evaluation_options(
         prepare_all: (args.cooperative_prefill
             || args.max_prepared_per_model > 0
             || (args.batch_max_requests.is_some() && engine.supports_batch()))
-            && engine.family() != Family::F5,
+            && (engine.family() != Family::F5
+                || (args.batch_max_requests.is_some() && engine.supports_batch())),
         ..Default::default()
     }
 }
@@ -440,6 +441,7 @@ fn requires_outcome_qualification(engine: &huncho_core::engine::Engine) -> bool 
         "device_path",
         "joint_head_execution",
         "joint_pool_execution",
+        "request_batch_execution",
         "onnx_execution_provider",
         "onnx_intra_threads",
         "onnx_native_batch",
@@ -512,8 +514,14 @@ fn qualify_optimizations(registry: &ModelRegistry, args: &ServeArgs) -> anyhow::
         let replicas = engine.replica_engines();
         let replicated = replicas.len() > 1;
         let opts = evaluation_options(engine, args);
+        anyhow::ensure!(
+            engine.family() != Family::F5
+                || opts.max_batch_tokens.is_none()
+                || args.batch_max_requests.is_some(),
+            "F5 batching requires --batch-max-requests: questions within one joint schema cannot be split into separate forwards"
+        );
         anyhow::ensure!(args.max_batch_padding_percent <= 100 && (args.max_batch_padding_percent == 0 || (opts.max_batch_tokens.is_some() && engine.supports_padded_batch())),
-            "padded serving requires CPU ModernBERT F1, masked native ONNX F1 or Qwen F2/F3, a batch token budget and padding percent in 1..100 for every model");
+            "padded serving requires a supported CPU backend, a batch token budget and padding percent in 1..100 for every model");
         anyhow::ensure!(!args.cooperative_prefill || engine.supports_resumable_prefill(),
             "cooperative prefill requires CPU Kev with HUNCHO_PREFILL_CHUNK_TOKENS configured for every model");
         anyhow::ensure!(!engine.execution_metadata().contains_key("prefill_chunk_tokens") || opts.prefix_cache,

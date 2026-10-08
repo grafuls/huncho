@@ -102,6 +102,11 @@ pub struct BenchArgs {
     #[arg(long, default_value_t = 0, requires = "max_batch_tokens")]
     pub max_batch_padding_percent: usize,
 
+    /// Collate up to this many complete requests per timed client group.
+    /// F5 retains whole schemas; other families retain their question prompts.
+    #[arg(long, requires = "max_batch_tokens", value_parser = clap::value_parser!(u16).range(2..=64))]
+    pub batch_max_requests: Option<u16>,
+
     /// Use a long state (~1500 chars) instead of a short one.
     #[arg(long, default_value_t = false)]
     pub long_state: bool,
@@ -160,6 +165,16 @@ pub fn run(args: BenchArgs) -> anyhow::Result<()> {
         engines.push(replica);
     }
     let engine = &engines[0];
+    anyhow::ensure!(
+        args.batch_max_requests.is_none() || engine.supports_batch(),
+        "cross-request benchmarks require a native batch backend"
+    );
+    anyhow::ensure!(
+        engine.family() != Family::F5
+            || args.max_batch_tokens.is_none()
+            || args.batch_max_requests.is_some(),
+        "F5 batching benchmarks require --batch-max-requests; questions within one schema cannot be split"
+    );
     let warmup_case = if args.repeat_inputs { 0 } else { usize::MAX };
     let options = EvalOptions {
         reference_readout: args.reference_readout,
@@ -167,18 +182,27 @@ pub fn run(args: BenchArgs) -> anyhow::Result<()> {
         persistent_prefix_bytes: args.persistent_prefix_bytes / replica_count,
         max_batch_tokens: args.max_batch_tokens,
         max_batch_padding_percent: args.max_batch_padding_percent,
+        prepare_all: args.batch_max_requests.is_some(),
         ..Default::default()
     };
     for context in &engines {
-        context.eval(
-            &make_request(
-                args.questions,
-                args.long_state,
-                args.workload,
-                warmup_case,
-                &context.manifest().name,
-            ),
+        let requests = (0..usize::from(args.batch_max_requests.unwrap_or(1)).min(args.iterations))
+            .map(|_| {
+                make_request(
+                    args.questions,
+                    args.long_state,
+                    args.workload,
+                    warmup_case,
+                    &context.manifest().name,
+                )
+            })
+            .collect();
+        evaluate_group(
+            context,
+            requests,
             &options,
+            args.batch_max_requests.is_some(),
+            &mut Default::default(),
         )?;
     }
     let n = args.iterations;
@@ -198,20 +222,39 @@ pub fn run(args: BenchArgs) -> anyhow::Result<()> {
                         let mut latencies = Vec::new();
                         let mut work = EvalStats::default();
                         barrier.wait();
-                        for iteration in (worker..n).step_by(workers) {
-                            let case = if args.repeat_inputs { 0 } else { iteration };
-                            let request = make_request(
-                                args.questions,
-                                args.long_state,
-                                args.workload,
-                                case,
-                                &engine.manifest().name,
-                            );
+                        let iterations: Vec<_> = (worker..n).step_by(workers).collect();
+                        for group in
+                            iterations.chunks(usize::from(args.batch_max_requests.unwrap_or(1)))
+                        {
+                            let requests = group
+                                .iter()
+                                .map(|&iteration| {
+                                    let case = if args.repeat_inputs { 0 } else { iteration };
+                                    make_request(
+                                        args.questions,
+                                        args.long_state,
+                                        args.workload,
+                                        case,
+                                        &engine.manifest().name,
+                                    )
+                                })
+                                .collect();
                             let start = Instant::now();
                             let mut stats = EvalStats::default();
-                            engine.eval_with_stats(&request, options, &mut stats)?;
+                            evaluate_group(
+                                engine,
+                                requests,
+                                options,
+                                args.batch_max_requests.is_some(),
+                                &mut stats,
+                            )?;
                             work.accumulate(&stats);
-                            latencies.push(start.elapsed().as_secs_f64() * 1000.0);
+                            // Every request completes with its group. Do not
+                            // divide latency by batch size or hide preparation.
+                            latencies.extend(
+                                std::iter::repeat(start.elapsed().as_secs_f64() * 1000.0)
+                                    .take(group.len()),
+                            );
                         }
                         Ok((replica, latencies, work))
                     },
@@ -241,6 +284,12 @@ pub fn run(args: BenchArgs) -> anyhow::Result<()> {
         })?;
 
     latencies.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    anyhow::ensure!(
+        args.batch_max_requests.is_none()
+            || work.cross_request_batches > 0
+            || work.result_cache_hits > 0,
+        "cross-request benchmark submitted no actual batch; use more iterations per client or a larger token budget"
+    );
     let p50 = percentile(&latencies, 0.50);
     let p95 = percentile(&latencies, 0.95);
     let p99 = percentile(&latencies, 0.99);
@@ -260,10 +309,10 @@ pub fn run(args: BenchArgs) -> anyhow::Result<()> {
             "repeat_inputs": args.repeat_inputs, "long_state": args.long_state,
             "result_cache_bytes": args.result_cache_bytes,
             "reference_readout": args.reference_readout,
-            "prefix_cache": args.prefix_cache, "persistent_prefix_bytes": args.persistent_prefix_bytes, "max_batch_tokens": args.max_batch_tokens, "max_batch_padding_percent": args.max_batch_padding_percent, "work": work,
+            "prefix_cache": args.prefix_cache, "persistent_prefix_bytes": args.persistent_prefix_bytes, "max_batch_tokens": args.max_batch_tokens, "max_batch_padding_percent": args.max_batch_padding_percent, "batch_max_requests": args.batch_max_requests, "work": work,
                 "mean_ms": mean, "p50_ms": p50, "p95_ms": p95, "p99_ms": p99,
                 "requests_per_second": qps, "questions_per_second": qps * args.questions as f64,
-                "measurement": "warm closed-loop in-process engine evaluation"
+                "measurement": if args.batch_max_requests.is_some() { "warm closed-loop client groups; each request's latency is its entire group's completion time" } else { "warm closed-loop in-process engine evaluation" }
             }))?
         );
         return Ok(());
@@ -305,6 +354,30 @@ struct ReplicaWork {
     index: usize,
     requests: usize,
     work: EvalStats,
+}
+
+fn evaluate_group(
+    engine: &Engine,
+    requests: Vec<SystemOneRequest>,
+    options: &EvalOptions,
+    grouped: bool,
+    work: &mut EvalStats,
+) -> huncho_core::Result<()> {
+    if grouped {
+        let packets = requests
+            .into_iter()
+            .map(|request| {
+                engine.prepare_eval_with_stats(request, options.clone(), &mut Default::default())
+            })
+            .collect::<huncho_core::Result<Vec<_>>>()?;
+        let budget = options.max_batch_tokens.ok_or_else(|| {
+            huncho_core::Error::Request("cross-request benchmark needs a token budget".into())
+        })?;
+        engine.eval_prepared_batch_with_stats(packets, budget, work)?;
+    } else {
+        engine.eval_with_stats(&requests[0], options, work)?;
+    }
+    Ok(())
 }
 
 fn percentile(sorted: &[f64], q: f64) -> f64 {
@@ -441,6 +514,7 @@ mod tests {
             persistent_prefix_bytes: 0,
             max_batch_tokens: None,
             max_batch_padding_percent: 0,
+            batch_max_requests: None,
             long_state: false,
             mock_model: "mock".into(),
         };

@@ -1,0 +1,13 @@
+   Compiling huncho-core v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-core)
+   Compiling huncho-backend v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-backend)
+   Compiling huncho-api v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-api)
+   Compiling huncho-hub v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-hub)
+   Compiling huncho-cli v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-cli)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.88s
+     Running tests/clef_batch.rs (target/debug/deps/clef_batch-5dd44fb387ed99d6)
+
+running 2 tests
+test real_cpu_benchmark_collates_whole_requests_on_independent_replicas ... ok
+test real_cpu_joint_serving_collates_complete_schemas_and_binds_fresh_qualification_receipts ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 28.53s

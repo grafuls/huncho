@@ -246,8 +246,10 @@ lengths. `bench`, `conform` and `serve` opt in with a positive
 `--max-batch-tokens` and `--max-batch-padding-percent 1..100` (default zero).
 The latter bounds padding as a percentage of physical positions, not logical
 API usage. Right padding retains causal valid readouts and uses each real final
-decision row. No prefix handles/retention enter these native batches. GPU,
-ModernBERT/Laya and F5 padding are rejected pending their masks/qualification.
+decision row. No prefix handles/retention enter these native batches. GPU padding is unsupported. CPU ModernBERT/Laya and masked native ONNX feature
+graphs have separate original-length/masked paths. CPU Clef F5 now collates
+complete schemas with `--batch-max-requests`; each causal backbone row is
+unpadded before its bidirectional joint head. F5 never splits a schema.
 Mixed-length serving requires fresh complete labeled external/paired conformance
 and actual mixed-batch/padding coverage. Token, padded-token and mixed-batch
 counters describe submitted work; they do not demonstrate a speedup.

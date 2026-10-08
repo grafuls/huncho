@@ -51,8 +51,9 @@ impl ModelHandle {
             (2..=64).contains(rows) && *tokens > 0 && engine.supports_batch()
         });
         let max_prepared = batch.map_or(max_prepared, |(rows, _, _)| max_prepared.max(rows));
-        let preparation = (max_prepared > 0 && engine.family() != huncho_core::Family::F5)
-            .then(|| Arc::new(Semaphore::new(usize::from(max_prepared))));
+        let preparation =
+            (max_prepared > 0 && (engine.family() != huncho_core::Family::F5 || batch.is_some()))
+                .then(|| Arc::new(Semaphore::new(usize::from(max_prepared))));
         Self {
             capacity,
             engine,

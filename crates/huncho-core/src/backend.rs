@@ -26,6 +26,25 @@ pub struct RequestOutput {
     pub input_tokens: u64,
 }
 
+/// One complete joint schema. Batching must never split its questions.
+#[derive(Clone, Copy)]
+pub struct RequestBatchInput<'a> {
+    pub request: &'a SystemOneRequest,
+    pub max_context: usize,
+}
+
+/// Attempted native work for a group of whole requests, including failures.
+/// Token usage in each output excludes padding; physical work includes it.
+#[derive(Debug, Default)]
+pub struct RequestBatchWork {
+    pub forward_calls: u64,
+    pub processed_tokens: u64,
+    pub batch_calls: u64,
+    pub padded_batch_calls: u64,
+    pub padded_tokens: u64,
+    pub prepared_questions: u64,
+}
+
 /// The input to a single [`Backend::forward`] call.
 ///
 /// Processes one sequence per call. Concurrent calls are not a batch; a future
@@ -232,7 +251,34 @@ pub trait Backend: Send + Sync {
         ))
     }
 
-    /// Encode and score all questions jointly (F5). Calibration stays in core.
+    /// Whether this backend collates complete joint schemas in a native forward.
+    fn supports_request_batch(&self) -> bool {
+        false
+    }
+
+    /// Whether whole schemas with different lengths can share a native call.
+    /// Original-length joint heads must exclude padding completely.
+    fn supports_padded_request_batch(&self) -> bool {
+        false
+    }
+
+    /// Prepare every complete request before inference, collate equal lengths
+    /// (or bounded padding), and return outputs in the original request order.
+    /// Charge B*max_length against budget and at most max_padding_percent of
+    /// that rectangle to padding. An oversized singleton stays independent.
+    /// Unsupported backends must fail; serial fallback is not native batching.
+    fn forward_request_batch(
+        &mut self,
+        _inputs: &[RequestBatchInput<'_>],
+        _budget: usize,
+        _max_padding_percent: usize,
+        _work: &mut RequestBatchWork,
+    ) -> Result<Vec<RequestOutput>> {
+        Err(crate::error::Error::Unsupported(
+            "backend does not expose whole-request native batching".into(),
+        ))
+    }
+
     fn forward_request(
         &mut self,
         _request: &SystemOneRequest,

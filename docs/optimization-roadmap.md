@@ -23,7 +23,7 @@ also show drift. Packed CPU fitting/held-out evaluation is still running.
 | O09 fused/bounded compute | CPU SiLU/multiply, causal query blocks and unexpanded grouped K/V available | FlashAttention and further fused native/device kernels |
 | O10 precision/calibration gates | Every real serving runtime requires fresh labeled conformance | Released CPU acceptance remains rejected/pending; no GPU checks |
 | O11 native Kev prefix forks | Available | Released CPU paired/labeled acceptance |
-| O12 dynamic batching | Equal-length collation and bounded CPU Qwen/ModernBERT/masked ONNX feature right-padding available | F5 and integrated-head graph batching, device qualification and cached-branch batching |
+| O12 dynamic batching | Equal-length collation and bounded CPU Qwen/ModernBERT/masked ONNX feature/whole-schema Clef right-padding available | Integrated-head graph batching, device qualification and cached-branch batching |
 | O13 family head work | CPU Clef vectorized heads/grouped spans, optional Laya final marker queries and integrated ONNX F1 heads available | Released graph exports and Clef/Laya labeled qualification |
 | O14 concurrent execution contexts | CPU shared-weight replicas, including optional ONNX initializers, available | Released concurrent workloads, memory and affinity measurements |
 | O15 device buffers/graph replay | Open | CUDA implementation and later device qualification |
@@ -41,6 +41,41 @@ also show drift. Packed CPU fitting/held-out evaluation is still running.
 | O27 browser WASM/WebGPU | Separate CPU WASM F1 integrated-head SDK, packaging and fresh labeled gates available | Released exports/calibration, other families and browser scheduling; WebGPU deferred |
 
 ## Implemented increments
+
+### Whole-schema CPU Clef request batches
+
+O12 now includes actual CPU Clef/F5 backbone collation of complete schemas.
+All requests are encoded before the first model call, length-bucketed within
+physical token/padding bounds and scattered in original order. Every row is
+unpacked to its original length **before** the bidirectional joint head.
+Questions within one schema are never split. Raw typed heads, temperatures,
+logical usage and wire extensions stay in their existing paths. CPU replicas
+share immutable weights and own execution state; HTTP replica routing and
+cross-request collation still cannot be combined.
+
+`--batch-max-requests 2..64 --max-batch-tokens B` enables this opt-in serving
+path. Optional padding percent permits mixed lengths. The bounded preparation
+queue freezes whole requests; F5 tokenization occurs inside the backend before
+execution, so this increment does not move F5 tokenization onto a parallel
+worker. Oversized singletons run whole and do not count as native batches.
+`request_batch_execution=cpu-causal-right-pad-unpad-joint-v1` records CPU
+availability. Actual forwarding/padding/preparation work is retained even on
+failure, and new result-cache entries publish only after all outputs validate.
+
+Frozen independent synthetic PyTorch fixtures cover FP32, FP16, grouped/vector
+heads, equal and mixed lengths, malformed groups/context limits, typed answers,
+cache/replica ownership and unchanged fixed numerical, argmax, paired 1e-4 and
+complete labeled gates. A padded FP16 raw score differs by about 0.000131; its
+raw check uses the fixture's existing FP16 tolerance (0.005), while probability
+and conformance thresholds are unchanged. Synthetic labels prove gate plumbing,
+not released calibration. Actual CPU CLI processes check fresh receipts, HTTP
+collation/physical counters, absent/unlabeled qualification refusal and grouped
+benchmarking across two replicas. Bench reports each request's full group
+completion latency; it refuses a requested benchmark with no actual batch
+unless exact result reuse avoided the work. Default workspace and affected
+CPU checks are recorded with this increment. Released held-out acceptance,
+performance measurements, GPU execution and cached-branch batching remain open.
+[CPU verification and its limits](verification/clef-batching-cpu-20261008/README.md).
 
 ### Masked CPU ONNX feature batches
 

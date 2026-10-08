@@ -225,3 +225,150 @@ fn rejects_incomplete_mislabelled_and_nonfinite_backend_outputs() {
             .is_err());
     }
 }
+
+// Malformed native reports must fail before any newly produced result is cached.
+struct BatchJointBackend {
+    fault: Arc<AtomicUsize>,
+}
+impl Backend for BatchJointBackend {
+    fn id(&self) -> BackendId {
+        BackendId::Clef
+    }
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            id: self.id(),
+            families: vec![Family::F5],
+            max_context: 512,
+            ..Default::default()
+        }
+    }
+    fn forward(&mut self, _: ForwardInput) -> Result<ForwardOutput> {
+        panic!("whole schemas only")
+    }
+    fn fork(&mut self, _: CacheHandle) -> Result<CacheHandle> {
+        panic!("no prefix cache")
+    }
+    fn forward_request(&mut self, _: &SystemOneRequest, _: usize) -> Result<RequestOutput> {
+        Ok(output())
+    }
+    fn supports_request_batch(&self) -> bool {
+        true
+    }
+    fn forward_request_batch(
+        &mut self,
+        inputs: &[huncho_core::backend::RequestBatchInput<'_>],
+        _: usize,
+        _: usize,
+        work: &mut huncho_core::backend::RequestBatchWork,
+    ) -> Result<Vec<RequestOutput>> {
+        *work = huncho_core::backend::RequestBatchWork {
+            forward_calls: 1,
+            processed_tokens: 42 * inputs.len() as u64,
+            batch_calls: u64::from(inputs.len() > 1),
+            prepared_questions: inputs
+                .iter()
+                .map(|i| i.request.questions.len() as u64)
+                .sum(),
+            ..Default::default()
+        };
+        let mut outputs = vec![output(); inputs.len()];
+        match self.fault.load(Ordering::SeqCst) {
+            1 => {
+                outputs.pop();
+            }
+            2 => {
+                work.processed_tokens += 1;
+            }
+            3 => {
+                outputs[1]
+                    .logits
+                    .get_mut("a")
+                    .unwrap()
+                    .insert("z".into(), f32::NAN);
+            }
+            4 => {
+                work.batch_calls = 2;
+            }
+            5 => {
+                work.padded_tokens = 1;
+                work.processed_tokens += 1;
+            }
+            6 => {
+                work.prepared_questions = 0;
+            }
+            7 => {
+                outputs[1].logits.remove("b");
+            }
+            _ => {}
+        }
+        Ok(outputs)
+    }
+}
+#[test]
+fn malformed_native_joint_groups_never_publish_partial_results() {
+    use huncho_core::engine::EvalStats;
+    let (reference, _) = engine(output());
+    for fault_code in 1..=7 {
+        let fault = Arc::new(AtomicUsize::new(fault_code));
+        let engine = Engine::new(
+            reference.manifest().clone(),
+            Box::new(BatchJointBackend {
+                fault: fault.clone(),
+            }),
+            Box::new(SimpleTokenizer::new(32768)),
+            HeadParams::default(),
+            BackendId::Clef,
+            "bf16",
+        )
+        .unwrap()
+        .with_result_cache(1 << 20);
+        let options = EvalOptions {
+            prepare_all: true,
+            max_batch_tokens: Some(256),
+            extensions: true,
+            ..Default::default()
+        };
+        let mut second = request();
+        second.state = huncho_core::contract::StateValue::from("another complete request");
+        let requests = [request(), second];
+        let prepare = || {
+            requests
+                .iter()
+                .cloned()
+                .map(|r| {
+                    engine
+                        .prepare_eval_with_stats(r, options.clone(), &mut Default::default())
+                        .unwrap()
+                })
+                .collect()
+        };
+        let mut work = EvalStats::default();
+        assert!(
+            engine
+                .eval_prepared_batch_with_stats(prepare(), 256, &mut work)
+                .is_err(),
+            "fault {fault_code}"
+        );
+        assert_eq!(work.forward_calls, 1);
+        fault.store(0, Ordering::SeqCst);
+        let answers = engine
+            .eval_prepared_batch_with_stats(prepare(), 256, &mut work)
+            .unwrap();
+        assert_eq!(answers.len(), 2);
+        assert_eq!(
+            work.result_cache_hits, 0,
+            "partial cache escaped fault {fault_code}"
+        );
+        assert_eq!(work.forward_calls, 1);
+        assert_eq!(work.prepared_questions, 6);
+        let cached = engine
+            .eval_prepared_batch_with_stats(prepare(), 256, &mut work)
+            .unwrap();
+        assert_eq!(work.result_cache_hits, 2);
+        assert_eq!(work.forward_calls, 0);
+        assert_eq!(
+            serde_json::to_value(cached).unwrap(),
+            serde_json::to_value(answers).unwrap()
+        );
+    }
+}

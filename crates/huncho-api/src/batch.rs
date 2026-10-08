@@ -151,6 +151,15 @@ async fn run(
             let start = Instant::now();
             let mut stats = EvalStats::default();
             let result = backend.eval_prepared_batch_with_stats(packets, tokens, &mut stats);
+            if backend.family() == huncho_core::Family::F5 {
+                // Joint schemas encode inside the execution backend before its
+                // first forward. Preparation workers only froze/validated them;
+                // their cache hits were already recorded, so count just the
+                // actual schema preparation here.
+                job_metrics
+                    .questions_prepared
+                    .inc_by(stats.prepared_questions);
+            }
             // All names resolve to this same immutable engine. Physical work is
             // counted once, under its registry name; per-caller usage is logical.
             let name = backend.manifest().name.as_str();

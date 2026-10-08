@@ -3,7 +3,10 @@ use crate::qwen3_5::{load_base_tensors, Config, Model};
 use candle::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use huncho_core::{
-    backend::{Backend, CacheHandle, Capabilities, ForwardInput, ForwardOutput, RequestOutput},
+    backend::{
+        Backend, CacheHandle, Capabilities, ForwardInput, ForwardOutput, RequestBatchInput,
+        RequestBatchWork, RequestOutput,
+    },
     contract::SystemOneRequest,
     error::{Error, Result},
     manifest::{BackendId, Family, ModelManifest},
@@ -344,6 +347,83 @@ impl ClefBackend {
         }
         self
     }
+
+    fn readout_record(
+        &self,
+        hidden: &Tensor,
+        record: &clef::EncodedRecord,
+    ) -> Result<RequestOutput> {
+        let hidden = hidden.to_dtype(self.head_dtype).map_err(backend_error)?;
+        let scores = self
+            .head
+            .forward(
+                &hidden,
+                &self.lexical_weight,
+                record,
+                self.vectorized_head,
+                self.grouped_pooling,
+            )
+            .map_err(backend_error)?;
+        if scores.len() != record.questions.len() {
+            return Err(Error::Backend(
+                "Clef joint head returned the wrong number of questions".into(),
+            ));
+        }
+        let mut logits = BTreeMap::new();
+        for (q, scores) in record.questions.iter().zip(scores) {
+            if scores.len() != q.option_ids.len() || scores.iter().any(|x| !x.is_finite()) {
+                return Err(Error::Backend(
+                    "Clef returned non-finite or incomplete logits".into(),
+                ));
+            }
+            logits.insert(
+                q.question_id.clone(),
+                q.option_ids.iter().cloned().zip(scores).collect(),
+            );
+        }
+        Ok(RequestOutput {
+            logits,
+            input_tokens: record.input_ids.len() as u64,
+        })
+    }
+}
+
+// Sort by complete schema length, retain original indices, and bound each real
+// backbone rectangle. Never split a schema or truncate an oversized singleton.
+fn request_groups(
+    records: &[clef::EncodedRecord],
+    budget: usize,
+    percent: usize,
+) -> Vec<Vec<usize>> {
+    let mut order: Vec<_> = (0..records.len()).collect();
+    order.sort_by_key(|&i| records[i].input_ids.len());
+    let mut groups = Vec::new();
+    let mut group = Vec::new();
+    let mut longest = 0usize;
+    let mut logical = 0usize;
+    for index in order {
+        let length = records[index].input_ids.len();
+        let max = longest.max(length);
+        let fits = max
+            .checked_mul(group.len() + 1)
+            .zip(logical.checked_add(length))
+            .is_some_and(|(physical, logical)| {
+                physical <= budget
+                    && (physical - logical) as u128 * 100 <= physical as u128 * percent as u128
+            });
+        if !group.is_empty() && (group.len() == 64 || !fits) {
+            groups.push(std::mem::take(&mut group));
+            longest = 0;
+            logical = 0;
+        }
+        longest = longest.max(length);
+        logical += length;
+        group.push(index);
+    }
+    if !group.is_empty() {
+        groups.push(group);
+    }
+    groups
 }
 
 impl Backend for ClefBackend {
@@ -372,6 +452,12 @@ impl Backend for ClefBackend {
     fn capabilities(&self) -> Capabilities {
         let mut capabilities = self.capabilities.clone();
         crate::cpu_profile::record(&mut capabilities.extra);
+        if self.device.is_cpu() {
+            capabilities.extra.insert(
+                "request_batch_execution".into(),
+                "cpu-causal-right-pad-unpad-joint-v1".into(),
+            );
+        }
         capabilities
     }
     fn forward(&mut self, _input: ForwardInput) -> Result<ForwardOutput> {
@@ -396,32 +482,93 @@ impl Backend for ClefBackend {
             .model
             .forward(&ids)
             .and_then(|t| t.squeeze(0))
-            .and_then(|t| t.to_dtype(self.head_dtype))
             .map_err(backend_error)?;
-        let scores = self
-            .head
-            .forward(
-                &hidden,
-                &self.lexical_weight,
-                &record,
-                self.vectorized_head,
-                self.grouped_pooling,
-            )
-            .map_err(backend_error)?;
-        let mut logits = BTreeMap::new();
-        for (q, scores) in record.questions.iter().zip(scores) {
-            if scores.iter().any(|x| !x.is_finite()) {
-                return Err(Error::Backend("Clef returned non-finite logits".into()));
-            }
-            logits.insert(
-                q.question_id.clone(),
-                q.option_ids.iter().cloned().zip(scores).collect(),
-            );
+        self.readout_record(&hidden, &record)
+    }
+    fn supports_request_batch(&self) -> bool {
+        self.device.is_cpu()
+    }
+    fn supports_padded_request_batch(&self) -> bool {
+        self.device.is_cpu()
+    }
+    fn forward_request_batch(
+        &mut self,
+        inputs: &[RequestBatchInput<'_>],
+        budget: usize,
+        max_padding_percent: usize,
+        work: &mut RequestBatchWork,
+    ) -> Result<Vec<RequestOutput>> {
+        *work = RequestBatchWork::default();
+        if !self.device.is_cpu() {
+            return Err(Error::Unsupported(
+                "Clef whole-request batches currently support CPU only".into(),
+            ));
         }
-        Ok(RequestOutput {
-            logits,
-            input_tokens: record.input_ids.len() as u64,
-        })
+        if inputs.is_empty() || inputs.len() > 64 || budget == 0 || max_padding_percent > 100 {
+            return Err(Error::Request("Clef whole-request batching requires 1..64 requests, a positive token budget and padding percent 0..100".into()));
+        }
+        let mut records = Vec::with_capacity(inputs.len());
+        for input in inputs {
+            input.request.validate()?;
+            let record = clef::encode(
+                input.request,
+                self.tokenizer.as_ref(),
+                input.max_context.min(self.capabilities.max_context),
+            )?;
+            if record.input_ids.is_empty() {
+                return Err(Error::Backend("Clef encoded an empty schema".into()));
+            }
+            work.prepared_questions += record.questions.len() as u64;
+            records.push(record);
+        }
+        let groups = request_groups(&records, budget, max_padding_percent);
+        let mut outputs: Vec<Option<RequestOutput>> = vec![None; inputs.len()];
+        for group in groups {
+            let seq = group
+                .iter()
+                .map(|&i| records[i].input_ids.len())
+                .max()
+                .unwrap();
+            let count = seq
+                .checked_mul(group.len())
+                .ok_or_else(|| Error::Backend("Clef batch shape overflow".into()))?;
+            let logical: usize = group.iter().map(|&i| records[i].input_ids.len()).sum();
+            let mut tokens = vec![0u32; count];
+            for (row, &index) in group.iter().enumerate() {
+                let begin = row * seq;
+                tokens[begin..begin + records[index].input_ids.len()]
+                    .copy_from_slice(&records[index].input_ids);
+            }
+            let ids = Tensor::from_vec(tokens, (group.len(), seq), &self.device)
+                .map_err(backend_error)?;
+            work.forward_calls += 1;
+            work.processed_tokens += count as u64;
+            work.padded_tokens += (count - logical) as u64;
+            if group.len() > 1 {
+                work.batch_calls += 1;
+            }
+            if count > logical {
+                work.padded_batch_calls += 1;
+            }
+            // Qwen's backbone is causal, including GDN/conv; trailing rows
+            // cannot influence valid earlier tokens. Restore the actual length
+            // BEFORE the bidirectional joint head and final-decision pooling.
+            let hidden = self.model.forward(&ids).map_err(backend_error)?;
+            for (row, &index) in group.iter().enumerate() {
+                let original = hidden
+                    .narrow(0, row, 1)
+                    .and_then(|t| t.narrow(1, 0, records[index].input_ids.len()))
+                    .and_then(|t| t.squeeze(0))
+                    .map_err(backend_error)?;
+                outputs[index] = Some(self.readout_record(&original, &records[index])?);
+            }
+        }
+        outputs
+            .into_iter()
+            .map(|output| {
+                output.ok_or_else(|| Error::Backend("Clef batch omitted a request".into()))
+            })
+            .collect()
     }
     fn fork(&mut self, _handle: CacheHandle) -> Result<CacheHandle> {
         Err(Error::Unsupported("Clef does not expose a KV cache".into()))

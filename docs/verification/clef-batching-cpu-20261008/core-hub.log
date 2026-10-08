@@ -1,0 +1,195 @@
+   Compiling darling_core v0.20.11
+   Compiling serde v1.0.229
+   Compiling h2 v0.4.19
+   Compiling tower-http v0.6.11
+   Compiling spm_precompiled v0.1.4
+   Compiling tracing-serde v0.2.0
+   Compiling serde_urlencoded v0.7.1
+   Compiling compact_str v0.9.1
+   Compiling dary_heap v0.3.9
+   Compiling ahash v0.8.12
+   Compiling safetensors v0.8.0
+   Compiling serde_plain v1.0.2
+   Compiling tracing-subscriber v0.3.23
+   Compiling darling_macro v0.20.11
+   Compiling tracing-appender v0.2.5
+   Compiling darling v0.20.11
+   Compiling derive_builder_core v0.20.2
+   Compiling derive_builder_macro v0.20.2
+   Compiling hyper v1.11.1
+   Compiling derive_builder v0.20.2
+   Compiling tokenizers v0.20.4
+   Compiling tokenizers v0.22.2
+   Compiling hyper-util v0.1.21
+   Compiling hyper-rustls v0.27.10
+   Compiling reqwest v0.13.5
+   Compiling xet-runtime v1.6.0
+   Compiling reqwest-middleware v0.5.2
+   Compiling huncho-core v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-core)
+   Compiling candle-core v0.11.0
+   Compiling xet-core-structures v1.6.0
+   Compiling xet-client v1.6.0
+   Compiling candle-nn v0.11.0
+   Compiling candle-transformers v0.11.0
+   Compiling xet-data v1.6.0
+   Compiling hf-xet v1.6.0
+   Compiling hf-hub v1.0.0
+   Compiling huncho-backend v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-backend)
+   Compiling huncho-hub v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-hub)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 41.19s
+     Running unittests src/lib.rs (target/debug/deps/huncho_core-1dd84aef055c50d5)
+
+running 74 tests
+test calibration::tests::ece_basic ... ok
+test calibration::tests::ece_uses_actual_confidence_and_includes_endpoints ... ok
+test calibration::tests::entropy_confidence ... ok
+test calibration::tests::fit_temperature_recovers_true ... ok
+test calibration::tests::jev_confidence_values ... ok
+test calibration::tests::rejects_invalid_inference_and_fit_inputs ... ok
+test calibration::tests::softmax_sums_to_one ... ok
+test calibration::tests::temperature_flattens ... ok
+test contract::tests::parses_all_question_types ... ok
+test contract::tests::rejects_bad_state ... ok
+test contract::tests::rejects_too_many_options ... ok
+test contract::tests::response_round_trips ... ok
+test engine::batching::tests::groups_bound_actual_rectangles_padding_and_rows_without_truncation ... ok
+test engine::batching::tests::native_readout_and_sequence_limits_split_without_dropping_candidates ... ok
+test engine::external_scores::tests::external_conformance_requires_complete_observed_vectors_and_fresh_work ... ok
+test engine::external_scores::tests::integrated_marker_scores_preserve_native_typed_calibration_answers_and_usage ... ok
+test engine::external_scores::tests::malformed_foreign_nonfinite_and_unsupported_external_inputs_fail_closed ... ok
+test engine::tests::batch_buckets_preserve_typed_answers_and_enforce_token_budgets ... ok
+test engine::tests::conformance_bypasses_populated_result_cache ... ok
+test engine::tests::eval_returns_typed_answers ... ok
+test engine::tests::exact_result_reuse_preserves_all_fields_and_submits_no_work ... ok
+test engine::tests::extensions_off_by_default ... ok
+test engine::tests::f3_compact_and_legacy_readouts_have_identical_typed_probabilities ... ok
+test engine::tests::prepared_evaluation_freezes_inputs_and_is_bound_to_its_engine ... ok
+test engine::tests::prepared_prompt_reuse_preserves_model_work_options_and_field_order ... ok
+test engine::tests::prepared_result_retention_and_qualification_have_nonvacuous_work ... ok
+test engine::tests::prompt_preparation_errors_and_oversize_entries_are_not_retained ... ok
+test engine::tests::rejects_oversized_input ... ok
+test engine::tests::replicas_share_immutable_preparation_and_bounded_exact_caches_only_within_the_group ... ok
+test engine::tests::result_reuse_distinguishes_absent_and_explicit_null_descriptions ... ok
+test engine::tests::result_reuse_keys_include_order_inputs_and_execution_options ... ok
+test engine::tests::score_distribution_sums_to_one ... ok
+test error::tests::code_and_body ... ok
+test head::tests::candidate_logit_features_with_linear ... ok
+test head::tests::candidate_logit_reads_logits ... ok
+test head::tests::compact_logits_preserve_candidate_order_and_reject_missing_codes ... ok
+test head::tests::reused_linear_and_scalar_projection_preserve_accumulation_order ... ok
+test head::tests::row_lookup_preserves_first_match_for_sorted_and_unordered_outputs ... ok
+test manifest::tests::automatic_backend_does_not_fall_back_for_missing_or_incompatible_artifacts ... ok
+test manifest::tests::automatic_backend_uses_available_artifacts_and_requested_dtype ... ok
+test manifest::tests::llamacpp_selection_is_limited_to_implemented_decision_families ... ok
+test manifest::tests::loads_and_validates ... ok
+test manifest::tests::rejects_family_head_mismatch ... ok
+test manifest::tests::resolves_calibration ... ok
+test prompt::clef::tests::python_json_numbers_and_sorted_nested_keys ... ok
+test prompt::kev::tests::nested_state_matches_reference_rendering ... ok
+test prompt::kev::tests::numeric_state_matches_python_float_rendering ... ok
+test prompt::kev::tests::user_text_cannot_forge_delimiters ... ok
+test prompt::tests::f1_builds_choice ... ok
+test prompt::tests::f1_builds_score_legend ... ok
+test prompt::tests::f1_prefix_len_is_option_marker_boundary ... ok
+test prompt::tests::f2_builds_choice_at_distinct_positions ... ok
+test prompt::tests::f2_builds_noul_yes_no ... ok
+test prompt::tests::f2_builds_score_levels ... ok
+test prompt::tests::f3_builds_noul_same_position ... ok
+test prompt::tests::f4_builds_slot_choice ... ok
+test prompt::tests::f4_builds_slot_noul ... ok
+test prompt::tests::nimble_builds_choice_all_at_last_position ... ok
+test prompt::tests::nimble_builds_noul_yes_no ... ok
+test prompt::tests::nimble_builds_score_levels_with_legend ... ok
+test prompt_cache::tests::eviction_oversize_bounds_and_owned_return ... ok
+test response_cache::tests::budget_eviction_oversize_and_entry_limit ... ok
+test response_cache::tests::key_preserves_each_optional_noul_description ... ok
+test tensor::tests::row_access ... ok
+test tensor::tests::shape_mismatch ... ok
+test tokenizer::tests::cached_hf_encoding_preserves_exact_normalization_and_special_token_policy ... ok
+test tokenizer::tests::concurrent_encoding_cache_keeps_exact_results_and_a_bounded_budget ... ok
+test tokenizer::tests::deterministic_encode ... ok
+test tokenizer::tests::encoding_cache_evicts_bypasses_large_entries_and_never_retains_errors ... ok
+test tokenizer::tests::exact_encoding_cache_isolates_flags_instances_and_caller_mutation ... ok
+test tokenizer::tests::markers_in_reserved_range ... ok
+test tokenizer::tests::token_id_cache_is_shared_safely_across_threads ... ok
+test tokenizer::tests::token_id_cache_preserves_encoding_and_is_bounded ... ok
+test tokenizer::tests::tokenizer_bytes_preserve_file_encodings_and_special_ids ... ok
+
+test result: ok. 74 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+     Running tests/hf_tokenizer.rs (target/debug/deps/hf_tokenizer-0b0e9c7c0f78bfe6)
+
+running 3 tests
+test hf_tokenizer_builds_deterministic_prompt ... ok
+test hf_tokenizer_decodes_round_trip ... ok
+test hf_tokenizer_matches_reference_ids ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/joint_schema.rs (target/debug/deps/joint_schema-76a1104f7076e2f6)
+
+running 4 tests
+test joint_forward_preserves_labels_types_calibration_and_usage ... ok
+test joint_result_reuse_requires_the_complete_ordered_schema ... ok
+test malformed_native_joint_groups_never_publish_partial_results ... ok
+test rejects_incomplete_mislabelled_and_nonfinite_backend_outputs ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (target/debug/deps/huncho_hub-9523e9f4eae8332a)
+
+running 40 tests
+test clef::tests::cached_hub_release_pins_shards_and_rejects_missing_weights ... ok
+test clef::tests::local_release_preserves_calibration_and_needs_no_python ... ok
+test clef::tests::shards_must_be_real_local_weight_files ... ok
+test http::tests::commit_hash_check ... ok
+test http::tests::content_range_total_is_parsed ... ok
+test http::tests::falls_back_to_revision_when_it_is_a_sha ... ok
+test http::tests::repo_folder_replaces_slash ... ok
+test http::tests::resolve_redirect_joins_relative_location ... ok
+test http::tests::resolve_redirect_keeps_absolute_location ... ok
+test http::tests::resolve_url_builds_endpoint_and_revision ... ok
+test http::tests::resolves_full_commit_from_headers ... ok
+test http::tests::snapshot_dir_matches_hf_layout ... ok
+test http::tests::temp_path_sits_next_to_dest ... ok
+test progress::tests::eta_formats_minutes_and_seconds ... ok
+test progress::tests::eta_requires_progress_and_rate ... ok
+test progress::tests::handler_survives_a_download_lifecycle ... ok
+test progress::tests::human_bytes_formats ... ok
+test progress::tests::human_pair_shares_a_unit ... ok
+test progress::tests::progress_line_handles_unknown_size ... ok
+test progress::tests::progress_line_includes_bar_rate_and_eta ... ok
+test progress::tests::rate_uses_bytes_per_sec ... ok
+test progress::tests::truncate_long_label_adds_ellipsis ... ok
+test progress::tests::truncate_short_label_unchanged ... ok
+test resolver::tests::auto_hub_resolution_fetches_only_the_selected_backend_and_dtype ... ok
+test resolver::tests::auto_raw_modernbert_resolves_and_reopens_from_cache ... ok
+test resolver::tests::kev_adapter_is_not_treated_as_nimble ... ok
+test resolver::tests::local_directory_without_manifest_fails ... ok
+test resolver::tests::parses_existing_path_as_local ... ok
+test resolver::tests::parses_hf_repo_when_not_a_path ... ok
+test resolver::tests::required_files_omits_backend_artifact_for_mock ... ok
+test resolver::tests::required_files_select_artifact_and_head ... ok
+test resolver::tests::resolves_local_directory ... ok
+test resolver::tests::snapshot_root_finds_commit_dir_when_config_is_nested ... ok
+test resolver::tests::snapshot_root_handles_config_at_the_root ... ok
+test resolver::tests::synthesize_f3_defaults_temperature_and_contract_hash ... ok
+test resolver::tests::synthesize_f3_manifest ... ok
+test resolver::tests::synthesize_f3_rejects_mismatched_codebook ... ok
+test resolver::tests::synthesize_laya_sets_laya_contract_and_calibration ... ok
+test resolver::tests::synthesize_modernbert_manifest ... ok
+test resolver::tests::synthesize_rejects_non_modernbert ... ok
+
+test result: ok. 40 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+   Doc-tests huncho_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests huncho_hub
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

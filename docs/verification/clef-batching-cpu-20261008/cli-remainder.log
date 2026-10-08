@@ -1,0 +1,29 @@
+   Compiling huncho-cli v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-cli)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.73s
+     Running tests/lazy_serving.rs (target/debug/deps/lazy_serving-6f304ef3fcb35a78)
+
+running 2 tests
+test actual_cpu_cold_reloads_requalify_frozen_vectors_and_fail_closed_on_changed_inputs ... ok
+test lazy_registration_and_preload_reject_incomplete_or_drifted_observed_vectors ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 64.00s
+
+     Running tests/native_gates.rs (target/debug/deps/native_gates-59a1ce8cb4b0d11a)
+
+running 1 test
+test unoptimized_fitted_cpu_kev_and_clef_require_complete_labeled_startup_suites ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running tests/qualification_records.rs (target/debug/deps/qualification_records-1e9a8a5fe83a881c)
+
+running 1 test
+test real_cpu_receipts_reject_stale_inputs_options_goldens_and_outcome_substitution ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 60.19s
+
+     Running tests/shared_base.rs (target/debug/deps/shared_base-6c1500fd6adb7e09)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

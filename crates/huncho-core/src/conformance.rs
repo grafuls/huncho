@@ -528,7 +528,7 @@ fn run_suite_impl(
     }
     if options.prepare_all && work.prepared_questions == 0 {
         return Err(Error::Conformance(
-            "prepared qualification requires actual F1–F4 prompt preparation".into(),
+            "prepared qualification requires actual prompt or whole-schema preparation".into(),
         ));
     }
     let total = cases.len().max(1);

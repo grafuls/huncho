@@ -1,6 +1,7 @@
 # Operations
 
-CPU ModernBERT F1 and Qwen F2/F3 batching can merge different prompt lengths:
+CPU ModernBERT F1, Qwen F2/F3 and masked native ONNX feature batching can
+merge different prompt lengths:
 
 ```sh
 huncho conform --model /path/to/kev-package --golden /path/to/pinned-heldout.json \
@@ -12,7 +13,7 @@ huncho serve --model /path/to/kev-package --max-batch-tokens 2048 \
 
 Zero padding percent keeps exact lengths. The limit counts padded positions
 within the complete physical tensor; logical wire usage excludes padding.
-Every served model must support CPU ModernBERT F1 or Qwen F2/F3 padding. Prefix reuse cannot
+Every served model must support the selected CPU padding algorithm. Prefix reuse cannot
 combine with these batches. Cross-request collation uses the same policy and
 existing request/wait bounds. Qualification needs actual mixed lengths as well
 as unchanged numerical/paired and complete observed-label gates.
@@ -29,8 +30,8 @@ records the available CPU algorithm; requested options and actual padded work
 are required in conformance evidence. Every native serving context still needs
 fresh complete observed labels and unchanged external/independent gates.
 Padding adds physical work and may increase attention memory; throughput and
-released Laya calibration need workload qualification. F5 padding and
-actual device checks remain open/deferred.
+released Laya calibration need workload qualification. CPU Clef F5 can also
+collate whole schemas as described below; actual device checks remain deferred.
 
 CPU Kev can opt into fair scheduling between prefix chunks with
 `HUNCHO_PREFILL_CHUNK_TOKENS=64 huncho serve ... --prefix-cache --cooperative-prefill`.
@@ -205,7 +206,9 @@ certificates and equivalent enforcement for library callers remain open.
 model execution on blocking workers. One slot covers a running preparation or
 ready request; it is released when execution starts, allowing the next request
 to prepare concurrently. The existing admission bound still covers all jobs.
-F5 ignores this knob and keeps joint preparation in its backend. Packets own
+F5 keeps joint tokenization in its backend. When cross-request batching is
+enabled, a bounded worker freezes/validates its whole-request packets; the
+standalone preparation knob does not move F5 tokenization. Packets own
 frozen inputs/options and stay within their immutable model/replica group. Model forwards,
 heads, temperatures and logical usage retain their existing arithmetic.
 Preparation validates every question before any forward; a later invalid
@@ -549,11 +552,26 @@ while the existing admission limit still bounds all active/waiting callers.
 Startup requires a pinned suite that actually combines rows from multiple
 requests and passes independent probability parity. Qualify with
 `huncho conform --batch-max-requests N --max-batch-tokens B ...`. Equal-length
-questions share tensors without padding; F5 remains whole-request execution.
+questions share tensors without padding. Supported CPU padding can merge mixed
+lengths. CPU Clef F5 batches **whole requests**, retaining the complete joint
+schema per row and removing backbone padding before the bidirectional head.
+F5 batching requires `--batch-max-requests`; a per-question token budget alone
+is rejected. Its all-group encoding finishes before the first model forward,
+inside the backend. Complete observed labels and actual whole-request batches
+(and actual padding when requested) remain mandatory.
 `huncho_cross_request_batch_count` counts actual mixed batches. Group failures
 reach every affected caller; disconnected queued callers submit no work, while
 running jobs retain admission until completion. CPU fixture success does not
 qualify full released checkpoints or GPU paths.
+
+`huncho bench --batch-max-requests N --max-batch-tokens B ...` measures
+actual groups per client for native backends, including CPU Clef. This combines
+with CPU replicas; each client binds to one context and submits complete groups.
+Each request's latency is its **entire group's completion time**, including
+preparation, and throughput counts original requests. A requested grouped run
+with no real mixed-request batch fails unless exact cached results avoided
+execution. Oversized singletons remain intact. These microbenchmarks do not
+establish released calibration or a general speedup.
 
 ### Execution receipts
 

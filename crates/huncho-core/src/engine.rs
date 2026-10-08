@@ -4,7 +4,9 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use crate::backend::{Backend, CacheHandle, ForwardInput};
+use crate::backend::{
+    Backend, CacheHandle, ForwardInput, RequestBatchInput, RequestBatchWork, RequestOutput,
+};
 use crate::cache_key;
 use crate::calibration::{self, bucket_size, confidence};
 use crate::contract::{Answer, Question, StateValue, SystemOneRequest, SystemOneResponse, Usage};
@@ -19,12 +21,12 @@ use crate::tensor::Tensor;
 use crate::tokenizer::Tokenizer;
 
 mod batching;
-mod resumable;
 #[cfg(feature = "external-scores")]
 mod external_scores;
+mod resumable;
+use batching::padded_groups;
 #[cfg(feature = "external-scores")]
 pub use external_scores::{ExternalEvaluation, MarkerReadout};
-use batching::padded_groups;
 pub use resumable::ResumableEvaluation;
 
 /// Options controlling a single evaluation.
@@ -43,14 +45,16 @@ pub struct EvalOptions {
     /// Charged bytes for exact native cross-request prefix snapshots. Zero
     /// disables retention; positive values require qualified prefix fan-out.
     pub persistent_prefix_bytes: usize,
-    /// Opt-in equal-length per-question batches, bounded by total input tokens.
+    /// Opt-in native batches, bounded by physical input tokens. F5 collates
+    /// whole schemas across requests; other families collate questions.
     /// Mutually exclusive with prefix reuse; F5 still owns the whole request.
     pub max_batch_tokens: Option<usize>,
     /// Maximum padded positions as a percentage of physical batch positions.
     /// Zero keeps exact lengths. 1..=100 requires native padded support.
     pub max_batch_padding_percent: usize,
-    /// Prepare all F1–F4 prompts before submitting model work. This changes
-    /// scheduling only; serving can prepare while another request executes.
+    /// Prepare all prompts before submitting model work. F1–F4 can prepare
+    /// while another request executes; F5 encodes a whole group inside its
+    /// backend before the first forward, without splitting any schema.
     pub prepare_all: bool,
     /// CPU Kev only: release execution capacity after each prefix chunk and
     /// question. Requires prefix reuse and a configured backend chunk size.
@@ -87,6 +91,16 @@ pub struct EvalStats {
 }
 
 impl EvalStats {
+    fn accumulate_request_batch(&mut self, work: &RequestBatchWork) {
+        self.forward_calls += work.forward_calls;
+        self.processed_tokens += work.processed_tokens;
+        self.batch_calls += work.batch_calls;
+        self.cross_request_batches += work.batch_calls;
+        self.padded_batch_calls += work.padded_batch_calls;
+        self.padded_tokens += work.padded_tokens;
+        self.prepared_questions += work.prepared_questions;
+    }
+
     pub fn accumulate(&mut self, work: &Self) {
         self.forward_calls += work.forward_calls;
         self.prefill_calls += work.prefill_calls;
@@ -182,8 +196,16 @@ impl Engine {
             .resolve(&backend_id.to_string(), &dtype);
         let mut capabilities = backend.capabilities();
         let supports_fork = capabilities.supports_fork;
-        let supports_batch = backend.supports_batch();
-        let supports_padded_batch = backend.supports_padded_batch();
+        let supports_batch = if manifest.family == Family::F5 {
+            backend.supports_request_batch()
+        } else {
+            backend.supports_batch()
+        };
+        let supports_padded_batch = if manifest.family == Family::F5 {
+            backend.supports_padded_request_batch()
+        } else {
+            backend.supports_padded_batch()
+        };
         let batch_limits = backend.batch_limits();
         if !(1..=64).contains(&batch_limits.max_rows) || batch_limits.max_readouts == Some(0) {
             return Err(Error::Backend("invalid native batch limits".into()));
@@ -237,6 +259,8 @@ impl Engine {
             || actual.supports_lora != expected.supports_lora
             || backend.supports_batch() != original.supports_batch()
             || backend.supports_padded_batch() != original.supports_padded_batch()
+            || backend.supports_request_batch() != original.supports_request_batch()
+            || backend.supports_padded_request_batch() != original.supports_padded_request_batch()
             || backend.batch_limits() != original.batch_limits()
             || backend.supports_resumable_prefill() != original.supports_resumable_prefill()
         {
@@ -340,11 +364,11 @@ impl Engine {
     }
 
     pub fn supports_batch(&self) -> bool {
-        self.family() != Family::F5 && self.supports_batch
+        self.supports_batch
     }
 
     pub fn supports_padded_batch(&self) -> bool {
-        self.family() != Family::F5 && self.supports_padded_batch
+        self.supports_padded_batch
     }
 
     pub fn supports_resumable_prefill(&self) -> bool {
@@ -473,10 +497,11 @@ impl Engine {
         Ok(response)
     }
 
-    /// Collate opaque F1–F4 preparations from this engine into bounded,
-    /// equal-length native batches. Each request keeps its own IDs, usage and
+    /// Collate opaque preparations from this engine into bounded native batches.
+    /// F5 batches complete schemas; other families batch questions.
+    /// Each request keeps its own IDs, usage and
     /// extensions; prompt boundaries and trained heads remain unchanged.
-    /// A backend failure fails this entire collated group. F5 is never collated.
+    /// A backend failure fails this entire collated group.
     pub fn eval_prepared_batch_with_stats(
         &self,
         packets: Vec<PreparedEvaluation>,
@@ -508,6 +533,9 @@ impl Engine {
                     "collated requests require identical execution options and token budgets without prefix reuse".into(),
                 ));
             }
+        }
+        if self.family() == Family::F5 && self.supports_batch() {
+            return self.eval_prepared_joint_batch(packets, budget, stats);
         }
         if !self.supports_batch() {
             let mut responses = Vec::with_capacity(packets.len());
@@ -542,7 +570,9 @@ impl Engine {
             stats.accumulate(&packet.stats);
             match packet.kind {
                 PreparedKind::Cached(response) => responses[index] = Some(response),
-                PreparedKind::Joint => unreachable!("F5 does not support collation"),
+                PreparedKind::Joint => {
+                    unreachable!("whole schemas are dispatched before question collation")
+                }
                 PreparedKind::Prompts(prepared) => {
                     let tokens = prepared.iter().map(|p| p.token_len() as u64).sum();
                     let mut keys = Vec::with_capacity(prepared.len());
@@ -702,7 +732,8 @@ impl Engine {
         }
         if opts.max_batch_padding_percent > 0 && !self.supports_padded_batch() {
             return Err(Error::Unsupported(
-                "padded batching currently requires a CPU ModernBERT F1, masked native ONNX F1 or Qwen F2/F3 backend".into(),
+                "padded batching requires a supported CPU backend with original-length readouts"
+                    .into(),
             ));
         }
         Ok(())
@@ -908,7 +939,8 @@ impl Engine {
         };
         if opts.max_batch_padding_percent > 0 && !self.supports_padded_batch() {
             return Err(Error::Unsupported(
-                "padded batching currently requires a CPU ModernBERT F1, masked native ONNX F1 or Qwen F2/F3 backend".into(),
+                "padded batching requires a supported CPU backend with original-length readouts"
+                    .into(),
             ));
         }
         let max_context = opts
@@ -1080,19 +1112,11 @@ impl Engine {
         }
     }
 
-    /// Joint-schema models own tokenization and score every question together.
-    fn eval_joint(
+    fn joint_candidates_checked(
         &self,
         req: &SystemOneRequest,
-        opts: &EvalOptions,
-        stats: &mut EvalStats,
-    ) -> Result<SystemOneResponse> {
-        let max_context = opts
-            .max_context
-            .unwrap_or(self.manifest.backbone.max_context)
-            .min(self.manifest.backbone.max_context);
-        let candidates: BTreeMap<_, _> = req
-            .questions
+    ) -> Result<BTreeMap<String, Vec<Candidate>>> {
+        req.questions
             .iter()
             .map(|(id, question)| {
                 let values = joint_candidates(question);
@@ -1103,14 +1127,163 @@ impl Engine {
                 }
                 Ok((id.clone(), values))
             })
-            .collect::<Result<_>>()?;
-        stats.forward_calls += 1;
-        let output = self
+            .collect()
+    }
+
+    fn joint_max_context(&self, opts: &EvalOptions) -> usize {
+        opts.max_context
+            .unwrap_or(self.manifest.backbone.max_context)
+            .min(self.manifest.backbone.max_context)
+    }
+
+    fn eval_prepared_joint_batch(
+        &self,
+        packets: Vec<PreparedEvaluation>,
+        budget: usize,
+        stats: &mut EvalStats,
+    ) -> Result<Vec<SystemOneResponse>> {
+        let percent = packets[0].options.max_batch_padding_percent;
+        let mut responses = vec![None; packets.len()];
+        let mut jobs = Vec::new();
+        for (index, packet) in packets.into_iter().enumerate() {
+            stats.accumulate(&packet.stats);
+            match &packet.kind {
+                PreparedKind::Cached(response) => responses[index] = Some(response.clone()),
+                PreparedKind::Joint => {
+                    packet.request.validate()?;
+                    let candidates = self.joint_candidates_checked(&packet.request)?;
+                    jobs.push((index, packet, candidates));
+                }
+                PreparedKind::Prompts(_) => {
+                    return Err(Error::Request(
+                        "joint batches require whole-schema preparations".into(),
+                    ))
+                }
+            }
+        }
+        if !jobs.is_empty() {
+            let inputs: Vec<_> = jobs
+                .iter()
+                .map(|(_, packet, _)| RequestBatchInput {
+                    request: &packet.request,
+                    max_context: self.joint_max_context(&packet.options),
+                })
+                .collect();
+            let mut work = RequestBatchWork::default();
+            let result = self
+                .backend
+                .lock()
+                .map_err(|_| Error::Backend("backend lock poisoned".into()))?
+                .forward_request_batch(&inputs, budget, percent, &mut work);
+            stats.accumulate_request_batch(&work);
+            let outputs = result?;
+            let logical: u64 = outputs
+                .iter()
+                .map(|output| output.input_tokens)
+                .try_fold(0u64, |a, b| a.checked_add(b))
+                .ok_or_else(|| Error::Backend("joint batch token count overflow".into()))?;
+            if outputs.len() != jobs.len()
+                || work.forward_calls == 0
+                || work.forward_calls > jobs.len() as u64
+                || work.batch_calls > work.forward_calls
+                || work.batch_calls > jobs.len() as u64 / 2
+                || work.padded_batch_calls > work.batch_calls
+                || (work.padded_tokens > 0) != (work.padded_batch_calls > 0)
+                || work.prepared_questions
+                    != jobs
+                        .iter()
+                        .map(|(_, packet, _)| packet.request.questions.len() as u64)
+                        .sum::<u64>()
+                || logical.checked_add(work.padded_tokens) != Some(work.processed_tokens)
+            {
+                return Err(Error::Backend(
+                    "joint batch returned inconsistent outputs or physical work".into(),
+                ));
+            }
+            let completed = jobs
+                .into_iter()
+                .zip(outputs)
+                .map(|((index, packet, candidates), output)| {
+                    let response =
+                        self.joint_response(&packet.request, &packet.options, output, &candidates)?;
+                    Ok((index, packet.result_key, response))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            // Publish retained results only after every raw output has passed
+            // schema, usage, finite-score and shared calibration checks.
+            for (index, key, response) in completed {
+                if let (Some(key), Some(cache)) = (key, &self.response_cache) {
+                    if let Ok(mut cache) = cache.lock() {
+                        cache.insert(key, &response);
+                    }
+                }
+                responses[index] = Some(response);
+            }
+        }
+        responses
+            .into_iter()
+            .map(|response| {
+                response.ok_or_else(|| Error::Backend("joint batch omitted a response".into()))
+            })
+            .collect()
+    }
+
+    /// Joint-schema models own tokenization and score every question together.
+    fn eval_joint(
+        &self,
+        req: &SystemOneRequest,
+        opts: &EvalOptions,
+        stats: &mut EvalStats,
+    ) -> Result<SystemOneResponse> {
+        let max_context = self.joint_max_context(opts);
+        let candidates = self.joint_candidates_checked(req)?;
+        let mut backend = self
             .backend
             .lock()
-            .map_err(|_| Error::Backend("backend lock poisoned".into()))?
-            .forward_request(req, max_context)?;
-        stats.processed_tokens += output.input_tokens;
+            .map_err(|_| Error::Backend("backend lock poisoned".into()))?;
+        let output = if opts.prepare_all && self.supports_batch() {
+            let mut work = RequestBatchWork::default();
+            let result = backend.forward_request_batch(
+                &[RequestBatchInput {
+                    request: req,
+                    max_context,
+                }],
+                opts.max_batch_tokens.unwrap_or(usize::MAX),
+                opts.max_batch_padding_percent,
+                &mut work,
+            );
+            stats.accumulate_request_batch(&work);
+            let mut outputs = result?;
+            if outputs.len() != 1
+                || work.forward_calls != 1
+                || work.batch_calls != 0
+                || work.padded_batch_calls != 0
+                || work.padded_tokens != 0
+                || outputs[0].input_tokens != work.processed_tokens
+            {
+                return Err(Error::Backend(
+                    "joint singleton returned inconsistent outputs or work".into(),
+                ));
+            }
+            outputs.remove(0)
+        } else {
+            stats.forward_calls += 1;
+            let output = backend.forward_request(req, max_context)?;
+            stats.processed_tokens += output.input_tokens;
+            output
+        };
+        drop(backend);
+        self.joint_response(req, opts, output, &candidates)
+    }
+
+    fn joint_response(
+        &self,
+        req: &SystemOneRequest,
+        opts: &EvalOptions,
+        output: RequestOutput,
+        candidates: &BTreeMap<String, Vec<Candidate>>,
+    ) -> Result<SystemOneResponse> {
+        let max_context = self.joint_max_context(opts);
         if output.input_tokens == 0 || output.input_tokens > max_context as u64 {
             return Err(Error::Backend(
                 "joint backend returned invalid token usage".into(),
