@@ -14,6 +14,7 @@
 
 #![cfg(feature = "onnx")]
 
+use huncho_backend::onnx::OnnxOptions;
 use huncho_backend::OnnxBackend;
 use huncho_core::backend::Backend;
 use huncho_core::conformance;
@@ -52,21 +53,60 @@ fn onnx_backend_passes_reference_golden() {
     .unwrap();
 
     let suite = conformance::load_suite(golden_path).unwrap();
-    let report =
-        conformance::run_suite(&engine, &suite, &conformance::ConformanceThresholds::default())
-            .unwrap();
+    let report = conformance::run_suite(
+        &engine,
+        &suite,
+        &conformance::ConformanceThresholds::default(),
+    )
+    .unwrap();
 
     assert_eq!(report.backend, "onnx");
     assert!(
         report.passed,
         "ONNX backend failed reference conformance: max_delta={} argmax={} ece={}",
-        report.max_prob_delta,
-        report.argmax_agreement,
-        report.ece,
+        report.max_prob_delta, report.argmax_agreement, report.ece,
     );
     assert!(
         report.max_prob_delta <= 1e-3,
         "max prob delta {:.6} exceeds 1e-3",
         report.max_prob_delta
     );
+}
+
+#[test]
+fn graph_side_readout_and_bound_buffer_pass_unchanged_probability_goldens() {
+    let suite = conformance::load_suite("../../examples/mock-model/golden.json").unwrap();
+    let manifest = ModelManifest::load("../../examples/mock-model/huncho-model.json").unwrap();
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/tiny_mock_readout.onnx"
+    );
+    for bytes in [0, 1024 * 1024] {
+        let engine = Engine::new(
+            manifest.clone(),
+            Box::new(
+                OnnxBackend::load_with_options(
+                    path,
+                    manifest.backbone.hidden_size,
+                    manifest.backbone.max_context,
+                    "fp32",
+                    OnnxOptions {
+                        compact_readout: true,
+                        output_buffer_bytes: bytes,
+                    },
+                )
+                .unwrap(),
+            ),
+            Box::new(SimpleTokenizer::new(32768)),
+            HeadParams::default(),
+            BackendId::Onnx,
+            "fp32",
+        )
+        .unwrap();
+        let report = conformance::run_suite(&engine, &suite, &Default::default()).unwrap();
+        assert!(report.passed);
+        assert_eq!(report.max_prob_delta, 0.);
+        assert_eq!(report.argmax_agreement, 1.);
+        assert_eq!(report.execution_metadata["onnx_readout"], "gather-v1");
+    }
 }

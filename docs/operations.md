@@ -541,3 +541,34 @@ counters exclude their avoided prefill positions. The budget covers snapshots,
 not live forks or peak inference memory. Library callers can clear retained
 state with `Engine::clear_prefix_cache`; otherwise unused snapshots live until
 eviction or model unload. Full released-model and GPU qualification remain open.
+### ONNX compact readouts and bounded output reuse
+
+The optional `onnx` build keeps its existing CPU/full-sequence output behavior by
+default. `HUNCHO_ONNX_COMPACT_READOUT=1` requires an explicit graph contract:
+`huncho_readout_positions: int64[rows]` and
+`huncho_features: float32[1,rows,hidden]` (or `[rows,hidden]`), with dynamic row
+count and fixed positive hidden width. Positions preserve order and duplicates.
+The backend checks bounds before inference and verifies the returned row count.
+This is an F1 feature readout; it does not interpret vocabulary logits as trained
+candidate scores.
+
+`scripts/compact_onnx_readout.py SOURCE DESTINATION --output last_hidden_state`
+adds a graph-side Gather and prunes unrelated outputs. It requires the optional
+Python `onnx` tooling, creates a new graph/external-data file without overwriting,
+and leaves manifest updates, temperatures and qualification to the operator.
+Select the new artifact explicitly and retain the original reference package.
+Large exports require enough host RAM to materialize their external tensors.
+
+`HUNCHO_ONNX_OUTPUT_BUFFER_BYTES=N` retains at most one exact-shape CPU output
+allocation through ORT I/O binding. Zero disables it. Changed shapes replace the
+buffer; unknown widths, empty outputs and allocations above the payload limit
+bypass retention and release the previous buffer. The limit covers retained
+output payload only, excluding ORT workspaces, input tensors and ordinary host
+readout copies. Graph-side gathering reduces the host output from sequence rows
+to selected rows; buffer reuse avoids repeated output allocation. Neither has a
+production latency claim or a device-resident head in this increment.
+
+Both profiles require fresh `--qualification-golden MODEL=PATH` at server startup
+and are included in persisted execution identity. Exact CPU fixture rows and
+unchanged mock probability goldens pass; real Laya exports still require their
+own pinned qualification. These profiles do not refit or enable rejected variants.

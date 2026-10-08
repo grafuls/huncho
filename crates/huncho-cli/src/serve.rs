@@ -413,12 +413,16 @@ fn qualify_optimizations(registry: &ModelRegistry, args: &ServeArgs) -> anyhow::
         .iter()
         .any(|key| engine.execution_metadata().contains_key(*key));
         let opts = evaluation_options(engine, args);
+        let onnx_readout_profile = ["onnx_readout", "onnx_output_buffer_bytes"]
+            .iter()
+            .any(|key| engine.execution_metadata().contains_key(*key));
         if !opts.prefix_cache
             && opts.max_batch_tokens.is_none()
             && !(args.candidate_readout && engine.family() == Family::F3)
             && !paths.contains_key(name.as_str())
             && !refit
             && !kernel_profile
+            && !onnx_readout_profile
             && !opts.prepare_all
         {
             continue;
@@ -794,6 +798,31 @@ mod qualification_tests {
             )
             .unwrap();
             assert_eq!(report.execution_metadata[key], value);
+        }
+    }
+
+    #[test]
+    fn onnx_readout_and_buffer_profiles_require_fresh_numerical_qualification() {
+        for (key, value) in [
+            ("onnx_readout", "gather-v1"),
+            ("onnx_output_buffer_bytes", "4096"),
+        ] {
+            let registry = registry_with_execution_metadata(
+                0.,
+                CalibrationStatus::Fit,
+                BTreeMap::from([(key.into(), value.into())]),
+            );
+            let mut args = args();
+            args.max_batch_tokens = None;
+            assert!(qualify_optimizations(&registry, &args)
+                .unwrap_err()
+                .to_string()
+                .contains("requires --qualification-golden"));
+            let tmp = tempfile::tempdir().unwrap();
+            let path = tmp.path().join("golden.json");
+            huncho_core::conformance::save_suite(&suite(), &path).unwrap();
+            args.qualification_golden = vec![format!("qual={}", path.display())];
+            qualify_optimizations(&registry, &args).unwrap();
         }
     }
 

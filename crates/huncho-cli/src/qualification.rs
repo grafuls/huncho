@@ -256,6 +256,8 @@ impl ExecutionIdentity {
             "HUNCHO_PROJECTION_CHUNK_ROWS",
             "HUNCHO_ATTENTION_FP32",
             "HUNCHO_CLEF_VECTOR_HEAD",
+            "HUNCHO_ONNX_COMPACT_READOUT",
+            "HUNCHO_ONNX_OUTPUT_BUFFER_BYTES",
             "ORT_DYLIB_PATH",
             "LD_LIBRARY_PATH",
             "LD_PRELOAD",

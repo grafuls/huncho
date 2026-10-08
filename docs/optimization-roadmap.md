@@ -338,3 +338,29 @@ not automatically unload snapshots created by earlier requests; call
 `Engine::clear_prefix_cache` or unload the engine to release them. No request
 text is retained, but token IDs and model state remain in memory until eviction,
 clear or unload.
+## ONNX readout and allocation increment (2026-10-08)
+
+O08 now includes an explicit F1 graph-side Gather contract and optional bounded
+CPU output-buffer reuse through real ORT I/O binding. `OnnxBackend::load` retains
+the previous defaults; `load_with_options` opts into `huncho_readout_positions`
+and `huncho_features`, or a single exact-shape CPU allocation. The exporter
+`scripts/compact_onnx_readout.py` creates a separate artifact, preserves input
+semantics and prunes unrelated output branches. It does not edit manifests or
+claim calibration acceptance.
+
+Validation uses ONNX Runtime 1.28.0 on CPU: repeated/reordered/empty selections
+preserve float bits, size caps and shape replacement hold, invalid input does not
+corrupt the next readout, and compact/mock probability goldens have zero delta
+and complete argmax agreement with and without retained output storage. Python
+tests cover schema rejection, graph pruning and create-new behavior. CPU fixture
+coverage establishes neither real Laya calibration nor production throughput.
+Both profiles default off and require fresh startup numerical conformance; their
+configuration is captured by qualification receipts. GPU checks remain deferred
+at the user's request, and Apple Silicon work is skipped for now.
+
+Remaining O08 work includes explicit execution-provider selection, native graph
+batching and device-resident heads. This CPU buffer path still copies selected
+features into the core host tensor. As documented by
+[ORT I/O binding](https://docs.rs/ort/2.0.0-rc.13/ort/session/struct.IoBinding.html),
+binding alone does not establish an acceleration benefit for CPU-to-GPU-to-CPU
+pipelines; no such benefit is claimed here.

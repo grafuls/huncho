@@ -372,7 +372,7 @@ fn fp32_attention_from_env() -> Result<bool> {
     bool_env("HUNCHO_ATTENTION_FP32")
 }
 
-#[cfg(feature = "candle")]
+#[cfg(any(feature = "candle", feature = "onnx"))]
 fn bool_env(name: &str) -> Result<bool> {
     match std::env::var(name) {
         Ok(value) if matches!(value.as_str(), "1" | "true") => Ok(true),
@@ -429,11 +429,21 @@ fn load_onnx(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<dy
             Error::Package(format!("no ONNX artifact for dtype `{dtype}`"))
         })?;
     let onnx_path = dir.join(&artifact.path);
-    let backend = OnnxBackend::load(
+    let output_buffer_bytes = match std::env::var("HUNCHO_ONNX_OUTPUT_BUFFER_BYTES") {
+        Ok(value) => value.parse::<usize>().map_err(|_| Error::Request(
+            "HUNCHO_ONNX_OUTPUT_BUFFER_BYTES must be a nonnegative integer".into()))?,
+        Err(std::env::VarError::NotPresent) => 0,
+        Err(_) => return Err(Error::Request("invalid HUNCHO_ONNX_OUTPUT_BUFFER_BYTES".into())),
+    };
+    let backend = OnnxBackend::load_with_options(
         onnx_path,
         manifest.backbone.hidden_size,
         manifest.backbone.max_context,
         dtype.to_string(),
+        huncho_backend::onnx::OnnxOptions {
+            compact_readout: bool_env("HUNCHO_ONNX_COMPACT_READOUT")?,
+            output_buffer_bytes,
+        },
     )
     .map_err(|e| Error::Package(format!("failed to load ONNX backend: {e}")))?;
     Ok(Box::new(backend) as Box<dyn Backend>)

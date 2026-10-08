@@ -8,7 +8,7 @@
 
 #![cfg(feature = "onnx")]
 
-use huncho_backend::OnnxBackend;
+use huncho_backend::{onnx::OnnxOptions, OnnxBackend};
 use huncho_core::backend::{Backend, ForwardInput};
 
 fn fixture() -> &'static str {
@@ -119,4 +119,93 @@ fn rejects_sequence_over_max_context() {
     let mut b = OnnxBackend::load(fixture(), 8, 4, "fp32").unwrap();
     let res = b.forward(ForwardInput::new(vec![1, 2, 3, 4, 5], vec![0]));
     assert!(res.is_err());
+}
+
+fn bits(row: &[f32]) -> Vec<u32> {
+    row.iter().map(|v| v.to_bits()).collect()
+}
+
+#[test]
+fn compact_graph_and_bound_output_reuse_preserve_exact_rows() {
+    let compact = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/tiny_encoder_readout.onnx"
+    );
+    let mut reference = OnnxBackend::load(fixture(), 8, 512, "fp32").unwrap();
+    for (path, compact_readout) in [(fixture(), false), (compact, true)] {
+        let mut backend = OnnxBackend::load_with_options(
+            path,
+            8,
+            512,
+            "fp32",
+            OnnxOptions {
+                compact_readout,
+                output_buffer_bytes: 128,
+            },
+        )
+        .unwrap();
+        for (tokens, positions) in [
+            (vec![3, 10, 5], vec![2, 0, 2]),
+            (vec![5, 3, 10], vec![0, 2, 1]),
+            (vec![1, 2], vec![1]),
+            (vec![1, 2, 3, 4, 5], vec![0, 1, 2, 3, 4]),
+            (vec![3], vec![]),
+            (vec![10, 5], vec![1, 0]),
+        ] {
+            let expected = reference
+                .forward(ForwardInput::new(tokens.clone(), positions.clone()))
+                .unwrap();
+            let actual = backend
+                .forward(ForwardInput::new(tokens, positions))
+                .unwrap();
+            assert_eq!(actual.values().shape(), expected.values().shape());
+            assert_eq!(bits(actual.values().data()), bits(expected.values().data()));
+            assert!(backend.retained_output_bytes() <= 128);
+        }
+        assert_eq!(backend.output_buffer_reuses(), 1);
+        assert!(backend
+            .forward(ForwardInput::new(vec![1], vec![1]))
+            .is_err());
+        let actual = backend
+            .forward(ForwardInput::new(vec![3, 10], vec![1, 0]))
+            .unwrap();
+        assert_eq!(actual.values().row(0).unwrap()[2], 10.5);
+        assert_eq!(backend.output_buffer_reuses(), 2);
+        assert_eq!(backend.retained_output_bytes(), 64);
+    }
+    assert!(OnnxBackend::load_with_options(
+        fixture(),
+        8,
+        512,
+        "fp32",
+        OnnxOptions {
+            compact_readout: true,
+            output_buffer_bytes: 0,
+        }
+    )
+    .is_err());
+}
+
+#[test]
+fn disabled_or_oversized_binding_retains_no_output_storage() {
+    for bytes in [0, 1] {
+        let mut backend = OnnxBackend::load_with_options(
+            fixture(),
+            8,
+            512,
+            "fp32",
+            OnnxOptions {
+                output_buffer_bytes: bytes,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        for _ in 0..2 {
+            backend
+                .forward(ForwardInput::new(vec![3, 10], vec![1]))
+                .unwrap();
+        }
+        assert_eq!(backend.retained_output_bytes(), 0);
+        assert_eq!(backend.output_buffer_reuses(), 0);
+    }
 }
