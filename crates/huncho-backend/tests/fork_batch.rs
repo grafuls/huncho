@@ -394,9 +394,33 @@ fn engine_branch_batches_preserve_original_goldens_usage_budgets_and_nonvacuous_
         assert!(report.work.fork_padded_batch_calls > 0);
         assert!(report.work.padded_tokens > 0);
         assert!(report.optimization_parity.unwrap().max_prob_delta <= 1e-4);
+        let cooperative = EvalOptions {
+            cooperative_prefill: true,
+            ..opts.clone()
+        };
+        let interleaved = engine
+            .eval_uncached_with_stats(request, &cooperative, &mut stats)
+            .unwrap();
+        assert_eq!(interleaved.usage.input_tokens, reference.usage.input_tokens);
+        assert_eq!(interleaved.usage.output_tokens, 0);
+        for (id, logits) in interleaved.extensions.unwrap().raw_logits.unwrap() {
+            parity(
+                &logits,
+                &reference
+                    .extensions
+                    .as_ref()
+                    .unwrap()
+                    .raw_logits
+                    .as_ref()
+                    .unwrap()[&id],
+                1e-4,
+            );
+        }
+        assert!(stats.fork_batch_calls > 0);
         for invalid in [
             EvalOptions {
                 cooperative_prefill: true,
+                prefix_cache: false,
                 ..opts.clone()
             },
             EvalOptions {
