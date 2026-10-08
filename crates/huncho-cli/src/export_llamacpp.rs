@@ -29,8 +29,11 @@ pub struct ExportArgs {
     /// Python environment with the upstream converter's CPU dependencies.
     #[arg(long)]
     python: PathBuf,
-    #[arg(long, default_value = "gguf-f32", value_parser = ["gguf-f32", "gguf-f16"])]
+    #[arg(long, default_value = "gguf-f32", value_parser = ["gguf-f32", "gguf-f16", "gguf-q8_0", "gguf-q4_0"])]
     dtype: String,
+    /// CPU quantizer workers (1–256), applied only to Q8_0/Q4_0 export.
+    #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u16).range(1..=256))]
+    quantization_threads: u16,
 }
 fn new_file(path: &Path) -> anyhow::Result<std::fs::File> {
     Ok(std::fs::OpenOptions::new()
@@ -190,13 +193,23 @@ pub fn run(args: ExportArgs) -> anyhow::Result<()> {
         .map(|name| Ok((name, hash_file(&staging.join(name))?)))
         .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
     let artifact_path = "backbone.gguf";
+    let quantized = matches!(args.dtype.as_str(), "gguf-q8_0" | "gguf-q4_0");
+    let conversion_path = if quantized {
+        "merged-f32.gguf"
+    } else {
+        artifact_path
+    };
     let converted = Command::new(&python)
         .arg(tool_dir.join("convert_hf_to_gguf.py"))
         .arg(staging.canonicalize()?)
         .arg("--outtype")
-        .arg(args.dtype.trim_start_matches("gguf-"))
+        .arg(if quantized {
+            "f32"
+        } else {
+            args.dtype.trim_start_matches("gguf-")
+        })
         .arg("--outfile")
-        .arg(args.output.canonicalize()?.join(artifact_path))
+        .arg(args.output.canonicalize()?.join(conversion_path))
         .arg("--no-mtp")
         .env("CUDA_VISIBLE_DEVICES", "")
         .env("HF_HUB_OFFLINE", "1")
@@ -211,6 +224,22 @@ pub fn run(args: ExportArgs) -> anyhow::Result<()> {
         converted.status.success(),
         "pinned converter failed; inspect conversion.log in the unpublished output package"
     );
+    let quantization_source = quantized
+        .then(|| hash_file(&args.output.join(conversion_path)))
+        .transpose()?;
+    let quantizer = if quantized {
+        Some(huncho_backend::llamacpp::quantize_gguf_cpu(
+            &args.output.join(conversion_path),
+            &args.output.join(artifact_path),
+            &args.dtype,
+            usize::from(args.quantization_threads),
+        )?)
+    } else {
+        None
+    };
+    if let Some(expected) = &quantization_source {
+        anyhow::ensure!(*expected == hash_file(&args.output.join(conversion_path))?, "FP32 quantization source changed during export");
+    }
     std::fs::File::open(args.output.join(artifact_path))?.sync_all()?;
     if manifest.family == Family::F2 {
         asset(source, &args.output, &manifest.head.weights)?;
@@ -233,7 +262,12 @@ pub fn run(args: ExportArgs) -> anyhow::Result<()> {
         vec![ArtifactRef {
             path: artifact_path.into(),
             dtype: args.dtype.clone(),
-            quantization: None,
+            quantization: quantized.then(|| {
+                format!(
+                    "llamacpp-qwen35-{}-v1",
+                    args.dtype.trim_start_matches("gguf-")
+                )
+            }),
         }],
     )]);
     if manifest.family == Family::F3 {
@@ -264,16 +298,20 @@ pub fn run(args: ExportArgs) -> anyhow::Result<()> {
         "schema_version": 1, "source_manifest": source_manifest, "source_files": inputs.file_digests(),
         "converter_revision": LLAMA_CPP_REVISION, "converter_files": tool_files,
         "converter_python": python_digest, "converter_python_versions": String::from_utf8(python_version.stdout)?,
+        "quantizer": quantizer, "quantization_source": quantization_source,
         "exporter_binary": hash_file(&std::env::current_exe()?)?, "merged_hf_files": merged_files, "merged_hf_payload_bytes": dense_bytes,
         "tokenizer_auxiliaries": auxiliaries.iter().map(|(name,(_,digest))| (*name,digest)).collect::<BTreeMap<_,_>>(),
         "artifact": hash_file(&args.output.join(artifact_path))?, "runtime_capabilities": capabilities.extra,
         "qualified": false,
-        "limits": ["CPU FP32 LoRA merge and pinned upstream Qwen3.5 tensor/normalization/value-head conversion.", "F2 uses the original external pointer head; its unused auxiliary vocabulary projection is tied to embeddings.", "No fitting or held-out acceptance. Temperatures start pending, and serving requires fresh complete observed-outcome conformance.", "Conversion temporarily retains dense HF staging and GGUF; payload bytes do not measure peak RSS."]
+        "limits": ["CPU FP32 LoRA merge and pinned upstream Qwen3.5 tensor/normalization/value-head conversion.", "F2 uses the original external pointer head; its unused auxiliary vocabulary projection is tied to embeddings.", "Q8/Q4 keep embeddings, vocabulary output, norms, convolution and block-incompatible projections FP32; no re-quantization or importance matrix.", "No fitting or held-out acceptance. Temperatures start pending; quantized serving requires an exact backend:dtype refit and fresh complete observed-outcome conformance.", "Conversion temporarily retains dense HF staging and GGUF; payload bytes do not measure peak RSS."]
     });
     let mut provenance_file = new_file(&args.output.join("llamacpp-provenance.json"))?;
     provenance_file.write_all(&serde_json::to_vec_pretty(&provenance)?)?;
     provenance_file.sync_all()?;
     std::fs::remove_dir_all(&staging)?;
+    if quantized {
+        std::fs::remove_file(args.output.join(conversion_path))?;
+    }
     let mut published = new_file(&args.output.join("huncho-model.json"))?;
     published.write_all(&serde_json::to_vec_pretty(&manifest)?)?;
     published.write_all(b"\n")?;

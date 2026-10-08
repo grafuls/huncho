@@ -126,14 +126,7 @@ impl LlamaCppBackend {
         let kernel_build = cpu_kernels()?;
         // Only the CPU device is given to the loader. No device enumeration or
         // GPU capability/driver probing is needed by this adapter.
-        let cpu = unsafe { ffi::ggml_backend_dev_by_type(ffi::GGML_BACKEND_DEVICE_TYPE_CPU) };
-        if cpu.is_null() {
-            return Err(Error::Backend("llama.cpp CPU backend unavailable".into()));
-        }
-        // Establish the statically linked CPU registry before initialization:
-        // otherwise llama_backend_init may search for external device plugins.
-        static INIT: Once = Once::new();
-        INIT.call_once(|| unsafe { ffi::llama_backend_init() });
+        let cpu = initialize_cpu()?;
         let mut devices = Box::new([cpu, ptr::null_mut()]);
         let path = CString::new(
             path.to_str()
@@ -431,6 +424,156 @@ impl Backend for LlamaCppBackend {
 
 fn candle_error(error: candle::Error) -> Error {
     Error::Backend(format!("llama.cpp pointer readout: {error}"))
+}
+
+fn initialize_cpu() -> Result<*mut ffi::ggml_backend_device> {
+    // Establish the statically linked CPU registry before initialization so
+    // llama_backend_init does not search for external device plugins.
+    let cpu = unsafe { ffi::ggml_backend_dev_by_type(ffi::GGML_BACKEND_DEVICE_TYPE_CPU) };
+    if cpu.is_null() {
+        return Err(Error::Backend("llama.cpp CPU backend unavailable".into()));
+    }
+    static INIT: Once = Once::new();
+    INIT.call_once(|| unsafe { ffi::llama_backend_init() });
+    Ok(cpu)
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct QuantizationStats {
+    pub dtype: String,
+    pub threads: usize,
+    pub packed_tensors: usize,
+    pub shape_retained_f32: Vec<String>,
+    pub cpu_kernels: String,
+    pub runtime: String,
+}
+
+/// Produce a new CPU Q8_0/Q4_0 GGUF using the exact pinned native quantizer.
+/// Source must be unquantized FP32. Embeddings, vocabulary output, norms,
+/// convolution and block-incompatible projections stay FP32. No calibration
+/// data/temperature is read here; the caller must publish a pending variant.
+pub fn quantize_gguf_cpu(
+    input: &Path,
+    output: &Path,
+    dtype: &str,
+    threads: usize,
+) -> Result<QuantizationStats> {
+    let ftype = match dtype {
+        "gguf-q8_0" => ffi::LLAMA_FTYPE_MOSTLY_Q8_0,
+        "gguf-q4_0" => ffi::LLAMA_FTYPE_MOSTLY_Q4_0,
+        _ => {
+            return Err(Error::Unsupported(
+                "CPU GGUF quantization requires gguf-q8_0 or gguf-q4_0".into(),
+            ))
+        }
+    };
+    if !(1..=256).contains(&threads) {
+        return Err(Error::Request(
+            "GGUF quantization threads must be 1..256".into(),
+        ));
+    }
+    validate_gguf(input, "gguf-f32")?;
+    let kernels = cpu_kernels()?;
+    initialize_cpu()?;
+    let content =
+        gguf_file::Content::read(&mut std::fs::File::open(input)?).map_err(candle_error)?;
+    let mut retained: Vec<_> = content
+        .tensor_infos
+        .iter()
+        .filter(|(_, info)| {
+            info.shape.rank() >= 2
+                && info
+                    .shape
+                    .dims()
+                    .last()
+                    .is_some_and(|width| width % 32 != 0)
+        })
+        .map(|(name, _)| name.clone())
+        .collect();
+    retained.sort();
+    let patterns: Vec<_> = retained
+        .iter()
+        .map(|name| {
+            let mut pattern = String::from("^");
+            for ch in name.chars() {
+                if "\\.^$|?*+()[]{}".contains(ch) {
+                    pattern.push('\\');
+                }
+                pattern.push(ch);
+            }
+            pattern.push('$');
+            CString::new(pattern).map_err(|_| Error::Package("invalid GGUF tensor name".into()))
+        })
+        .collect::<Result<_>>()?;
+    let mut overrides: Vec<_> = patterns
+        .iter()
+        .map(|pattern| ffi::llama_model_tensor_override {
+            pattern: pattern.as_ptr(),
+            type_: ffi::GGML_TYPE_F32,
+        })
+        .collect();
+    overrides.push(ffi::llama_model_tensor_override {
+        pattern: ptr::null(),
+        type_: ffi::GGML_TYPE_F32,
+    });
+    let c_path = |path: &Path| {
+        CString::new(
+            path.to_str()
+                .ok_or_else(|| Error::Package("GGUF paths must be UTF-8".into()))?,
+        )
+        .map_err(|_| Error::Package("invalid GGUF path".into()))
+    };
+    let source = c_path(input)?;
+    let destination = c_path(output)?;
+    // Reserve a new destination. The native writer truncates this owned file,
+    // never an existing user's artifact. Failed output remains unpublished.
+    std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(output)?
+        .sync_all()?;
+    let mut params = unsafe { ffi::llama_model_quantize_default_params() };
+    params.nthread = threads as i32;
+    params.ftype = ftype;
+    params.pure_ = true;
+    params.token_embedding_type = ffi::GGML_TYPE_F32;
+    params.output_tensor_type = ffi::GGML_TYPE_F32;
+    params.quantize_output_tensor = false;
+    params.allow_requantize = false;
+    params.keep_split = false;
+    params.max_buf_size = 64 * 1024 * 1024;
+    params.tt_overrides = overrides.as_ptr();
+    // Strings and sentinel-terminated overrides remain owned until the
+    // synchronous call returns. This routine uses only CPU quantization code.
+    let status =
+        unsafe { ffi::llama_model_quantize(source.as_ptr(), destination.as_ptr(), &params) };
+    if status != 0 {
+        return Err(Error::Backend(format!(
+            "CPU GGUF quantizer failed with status {status}"
+        )));
+    }
+    std::fs::File::open(output)?.sync_all()?;
+    validate_gguf(output, dtype)?;
+    let converted =
+        gguf_file::Content::read(&mut std::fs::File::open(output)?).map_err(candle_error)?;
+    let packed_type = if dtype == "gguf-q8_0" {
+        GgmlDType::Q8_0
+    } else {
+        GgmlDType::Q4_0
+    };
+    let packed_tensors = converted
+        .tensor_infos
+        .values()
+        .filter(|info| info.ggml_dtype == packed_type)
+        .count();
+    Ok(QuantizationStats {
+        dtype: dtype.into(),
+        threads,
+        packed_tensors,
+        shape_retained_f32: retained,
+        cpu_kernels: kernels,
+        runtime: PIN.into(),
+    })
 }
 fn embedding(context: &Context, position: usize) -> Result<Vec<f32>> {
     let pointer =

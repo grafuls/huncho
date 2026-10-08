@@ -99,6 +99,96 @@ fn native_cpu_pointer_matches_frozen_upstream_and_resets_state() {
 }
 
 #[test]
+fn pinned_cpu_quantization_preserves_fp32_readouts_and_runs_actual_packed_tensors() {
+    use candle::quantized::{gguf_file, GgmlDType};
+    use huncho_backend::llamacpp::quantize_gguf_cpu;
+    let root = Path::new("tests/fixtures/tiny_kev");
+    let source = Path::new("tests/fixtures/llamacpp/kev-f32.gguf");
+    let original = std::fs::read(source).unwrap();
+    let golden: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(root.join("golden.json")).unwrap()).unwrap();
+    for dtype in ["gguf-q8_0", "gguf-q4_0"] {
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("backbone.gguf");
+        let stats = quantize_gguf_cpu(source, &output, dtype, 1).unwrap();
+        assert!(stats.packed_tensors > 0);
+        assert!(!stats.shape_retained_f32.is_empty());
+        let content = gguf_file::Content::read(&mut std::fs::File::open(&output).unwrap()).unwrap();
+        assert_eq!(
+            content.tensor_infos["token_embd.weight"].ggml_dtype,
+            GgmlDType::F32
+        );
+        assert!(content
+            .tensor_infos
+            .values()
+            .all(|info| info.ggml_dtype == GgmlDType::F32
+                || info.ggml_dtype
+                    == if dtype == "gguf-q8_0" {
+                        GgmlDType::Q8_0
+                    } else {
+                        GgmlDType::Q4_0
+                    }));
+        let bytes = std::fs::read(&output).unwrap();
+        assert!(quantize_gguf_cpu(source, &output, dtype, 1).is_err());
+        assert_eq!(std::fs::read(&output).unwrap(), bytes);
+        std::fs::copy(root.join("head.pt"), dir.path().join("head.pt")).unwrap();
+        let mut m = manifest();
+        m.backbone.artifacts = BTreeMap::from([(
+            BackendId::LlamaCpp,
+            vec![ArtifactRef {
+                path: "backbone.gguf".into(),
+                dtype: dtype.into(),
+                quantization: Some(format!(
+                    "llamacpp-qwen35-{}-v1",
+                    dtype.trim_start_matches("gguf-")
+                )),
+            }],
+        )]);
+        let mut native =
+            LlamaCppBackend::load(dir.path(), &m, dtype, LlamaOptions::default()).unwrap();
+        let mut replica = native.replica().unwrap();
+        assert!(native
+            .capabilities()
+            .extra
+            .contains_key("weight_quantization"));
+        let mut delta = 0.0f32;
+        for case in golden["cases"].as_array().unwrap() {
+            for row in case["rows"].as_array().unwrap() {
+                let input = ForwardInput::new(
+                    serde_json::from_value(row["tokens"].clone()).unwrap(),
+                    serde_json::from_value(row["positions"].clone()).unwrap(),
+                );
+                let out = native.forward(input.clone()).unwrap();
+                assert_eq!(
+                    out.values().data(),
+                    replica.forward(input.clone()).unwrap().values().data()
+                );
+                assert_eq!(
+                    out.values().data(),
+                    native.forward(input).unwrap().values().data()
+                );
+                let actual = calibrate(out.values().data(), 2.40605).unwrap();
+                let expected: Vec<f32> =
+                    serde_json::from_value(row["probabilities"].clone()).unwrap();
+                for (a, b) in actual.iter().zip(expected) {
+                    delta = delta.max((a - b).abs());
+                }
+            }
+        }
+        eprintln!("{dtype}: unrefitted fixture maximum probability delta={delta}; no observed-label acceptance");
+    }
+    assert_eq!(std::fs::read(source).unwrap(), original);
+    assert!(quantize_gguf_cpu(Path::new("absent.gguf"), Path::new("unused"), "int8", 1).is_err());
+    assert!(quantize_gguf_cpu(
+        Path::new("absent.gguf"),
+        Path::new("unused"),
+        "gguf-q8_0",
+        0
+    )
+    .is_err());
+}
+
+#[test]
 fn native_candidate_logits_and_independent_contexts_share_immutable_weights() {
     let root = Path::new("tests/fixtures/tiny_kev");
     let mut m = manifest();

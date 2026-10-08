@@ -1,6 +1,6 @@
 # CPU llama.cpp decision backend
 
-The optional `llamacpp` feature loads standard dense Qwen3.5 GGUF weights for
+The optional `llamacpp` feature loads standard Qwen3.5 GGUF weights for
 Kev F2 pointer scoring and F3 candidate logits. It runs one finite prompt prefill,
 returns raw scores and leaves temperature/softmax to the existing core. It has no
 sampler or text-generation loop. The default build gains no native dependencies.
@@ -67,9 +67,16 @@ huncho export-llamacpp --model /path/to/original-kev-package \
   --tool-dir /path/to/pinned-llama.cpp --python /path/to/cpu-venv/bin/python
 ```
 
-`gguf-f16` is also supported by this command. Q8/Q4 conversion through this
-runtime is still open; accepting an externally prepared artifact does not qualify
-it. Source pins, the original tokenizer and prompt contract remain in the new
+`gguf-f16`, `gguf-q8_0` and `gguf-q4_0` are also supported. Q8/Q4 exports first
+produce FP32 GGUF, then call the same pinned native CPU quantizer with
+`--quantization-threads 1..256` (default 1). Embeddings, vocabulary output, norms,
+convolution and projections whose rows do not fit a 32-element block remain
+FP32. Exact per-tensor overrides prevent an implicit FP16 fallback. Eligible
+projections use only the declared Q8_0 or Q4_0 type; there is no importance matrix,
+layer pruning or re-quantization. Native quantizer parameters request a 64 MiB
+slab target; a complete row is the minimum unit and total RSS is not bounded
+by that parameter. Source pins, the original
+tokenizer and prompt contract remain in the new
 manifest. F2 copies the trained pointer head; Bias-bearing projections, unequal linear key/value head dimensions and an F3
 LM-head bias are outside this pinned export profile. F3 retains its trained vocabulary
 weights inside GGUF. The exporter uses the existing CPU FP32 LoRA merge, then
@@ -81,10 +88,13 @@ retokenization.
 
 The destination must not exist. Source/base/adapter/tokenizer inputs and tracked
 converter files are hashed before and checked after conversion. Provenance also
-records Python package versions, exporter/interpreter identities and artifact
+records Python package versions, exporter/interpreter identities, native
+quantizer/runtime/kernel identity, retained shape overrides, FP32 intermediate
+hash and final artifact
 hashes. These are unsigned audit records; they do not prove the integrity of
 every installed Python module. Dense temporary HF staging is removed after a
-successful native load check. On failure partial output and `conversion.log`
+successful native load check, together with the owned intermediate FP32 GGUF
+for quantized exports. On failure partial output and `conversion.log`
 remain for inspection, without a published manifest. Conversion can temporarily
 retain both dense weights and GGUF; payload bytes are not peak RSS.
 
@@ -118,6 +128,16 @@ load checks with the released Kev tokenizer and a synthetic tiny backbone whose
 embedding table is padded to that vocabulary. Both packages retain pending
 calibration and unchanged source hashes; [CPU export evidence](verification/llamacpp-cpu-20261008/summary.json)
 records identities. This is a packaging check, not released-model inference.
+
+CPU Q8/Q4 tests quantize the original FP32 fixture through the real native
+routine, run actual packed projections with the untouched pointer head, and
+verify deterministic independent calls/replicas and rejection of overwrite,
+invalid precision and thread bounds. Block-incompatible matrices stay FP32.
+These unrefitted numerical diagnostics do not establish observed calibration.
+[Q8/Q4 export evidence](verification/llamacpp-quant-cpu-20261008/summary.json)
+also records successful official conversion/native loads with the synthetic
+backbone and released tokenizer, pending entries and rejection of unrefitted
+serving. This is a packaging check with only two packed fixture projections.
 
 No full released-model fit/held-out qualification, CPU performance claim or
 GPU/Apple check is included. Larger contexts, prefix/fork ownership, graph-side

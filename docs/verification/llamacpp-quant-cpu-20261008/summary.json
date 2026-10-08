@@ -1,0 +1,112 @@
+{
+  "scope": "CPU native quantized export integration only; synthetic two-layer H16 backbone with original fixture LoRA/pointer head and zero-padded embedding table for released Kev tokenizer",
+  "qualified": false,
+  "hidden_size": 16,
+  "vocab_size": 248096,
+  "profiles": {
+    "q8_0": {
+      "native_load_succeeded": true,
+      "calibration_status": "pending",
+      "artifact": {
+        "bytes": 26827872,
+        "sha256": "a5f989280b1a34559d0e88983191313b66e28e63f32e5c0533a012af8a54d00b"
+      },
+      "quantizer": {
+        "dtype": "gguf-q8_0",
+        "threads": 2,
+        "packed_tensors": 2,
+        "shape_retained_f32": [
+          "blk.0.attn_gate.weight",
+          "blk.0.attn_qkv.weight",
+          "blk.0.ffn_gate.weight",
+          "blk.0.ffn_up.weight",
+          "blk.0.ssm_alpha.weight",
+          "blk.0.ssm_beta.weight",
+          "blk.0.ssm_conv1d.weight",
+          "blk.0.ssm_out.weight",
+          "blk.1.attn_k.weight",
+          "blk.1.attn_output.weight",
+          "blk.1.attn_q.weight",
+          "blk.1.attn_v.weight",
+          "blk.1.ffn_gate.weight",
+          "blk.1.ffn_up.weight",
+          "token_embd.weight"
+        ],
+        "cpu_kernels": "avx,avx2,fma,f16c",
+        "runtime": "llama-cpp-sys-2=0.1.159;llama.cpp=26394b4e6749a41c3633db040e0987500a5f7013"
+      },
+      "runtime": {
+        "device": "CPU",
+        "kv_dtype": "fp32",
+        "llamacpp_cpu_kernels": "avx,avx2,fma,f16c",
+        "llamacpp_execution": "cpu-qwen35-masked-prefill-v1",
+        "llamacpp_threads": "1",
+        "pointer_head_dtype": "fp32",
+        "recurrent_state_dtype": "fp32",
+        "runtime": "llama-cpp-sys-2=0.1.159;llama.cpp=26394b4e6749a41c3633db040e0987500a5f7013",
+        "runtime_version": "0.4.1-dev",
+        "weight_load_mode": "copy",
+        "weight_quantization": "llamacpp-qwen35-q8_0-v1"
+      },
+      "dense_staging_removed": true,
+      "temporary_fp32_gguf_removed": true,
+      "fit_entry_serving_rejected": true,
+      "observed_outcome_gate": null
+    },
+    "q4_0": {
+      "native_load_succeeded": true,
+      "calibration_status": "pending",
+      "artifact": {
+        "bytes": 26827360,
+        "sha256": "87c3d94ed6ec5e6ca974b37b666f6819ce54db4b12288fe77d0786f500d9e133"
+      },
+      "quantizer": {
+        "dtype": "gguf-q4_0",
+        "threads": 2,
+        "packed_tensors": 2,
+        "shape_retained_f32": [
+          "blk.0.attn_gate.weight",
+          "blk.0.attn_qkv.weight",
+          "blk.0.ffn_gate.weight",
+          "blk.0.ffn_up.weight",
+          "blk.0.ssm_alpha.weight",
+          "blk.0.ssm_beta.weight",
+          "blk.0.ssm_conv1d.weight",
+          "blk.0.ssm_out.weight",
+          "blk.1.attn_k.weight",
+          "blk.1.attn_output.weight",
+          "blk.1.attn_q.weight",
+          "blk.1.attn_v.weight",
+          "blk.1.ffn_gate.weight",
+          "blk.1.ffn_up.weight",
+          "token_embd.weight"
+        ],
+        "cpu_kernels": "avx,avx2,fma,f16c",
+        "runtime": "llama-cpp-sys-2=0.1.159;llama.cpp=26394b4e6749a41c3633db040e0987500a5f7013"
+      },
+      "runtime": {
+        "device": "CPU",
+        "kv_dtype": "fp32",
+        "llamacpp_cpu_kernels": "avx,avx2,fma,f16c",
+        "llamacpp_execution": "cpu-qwen35-masked-prefill-v1",
+        "llamacpp_threads": "1",
+        "pointer_head_dtype": "fp32",
+        "recurrent_state_dtype": "fp32",
+        "runtime": "llama-cpp-sys-2=0.1.159;llama.cpp=26394b4e6749a41c3633db040e0987500a5f7013",
+        "runtime_version": "0.4.1-dev",
+        "weight_load_mode": "copy",
+        "weight_quantization": "llamacpp-qwen35-q4_0-v1"
+      },
+      "dense_staging_removed": true,
+      "temporary_fp32_gguf_removed": true,
+      "fit_entry_serving_rejected": true,
+      "observed_outcome_gate": null
+    }
+  },
+  "limits": [
+    "Only two down projections pack in this H16 fixture; other matrices are intentionally FP32.",
+    "No released Kev-4B inference, fitting, held-out acceptance, performance or RSS claim.",
+    "Original package calibration is not inherited. Exact refit and fresh labeled gates remain mandatory.",
+    "No actual GPU or Apple checks performed."
+  ]
+}

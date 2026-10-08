@@ -897,3 +897,25 @@ sessions; CLI checks exercise per-context benchmark work and refuse unlabeled
 serving. Released Laya graph calibration, controlled pool throughput/RSS and
 GPU replicas/device I/O remain open. See [operation and limits](operations.md#isolated-cpu-onnx-sessions-with-shared-initializers).
 No Apple or actual GPU checks were performed.
+
+## Pinned CPU llama.cpp Q8/Q4 export (2026-10-08)
+
+O18/O21 now include new-package `export-llamacpp --dtype gguf-q8_0|gguf-q4_0`.
+Conversion merges the original LoRA in CPU FP32, performs pinned official GGUF
+mapping to an FP32 intermediate, then calls the same bundled native CPU
+quantizer. Embeddings, vocabulary output, norms, convolution and matrices with
+block-incompatible rows stay FP32. Explicit exact-name overrides prevent an
+implicit FP16 fallback; eligible projections use the declared Q8_0/Q4_0 type.
+Quantizer worker count, runtime/kernel identity, retained shapes, intermediate
+hash and final artifact are retained in provenance. New destinations cannot
+overwrite existing artifacts; successful export removes owned staging only.
+
+Calibration starts pending without inherited temperatures, strata, evaluation
+hashes or golden vectors. Serving requires an exact backend:dtype refit plus
+fresh complete observed-label conformance at unchanged gates. Real CPU fixture
+conversion and packed projection execution retain the original pointer head,
+deterministic independent/replica behavior and source bytes. The fixture is
+unrefitted and supplies no observed calibration acceptance. Released model
+conversion/fitting/held-out acceptance, controlled CPU performance/RSS and
+other quantizers remain open. See [conversion and limits](llamacpp.md#new-package-conversion).
+No actual GPU or Apple checks were performed.
