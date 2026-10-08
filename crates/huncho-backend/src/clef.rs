@@ -225,6 +225,24 @@ impl ClefBackend {
         Ok(self)
     }
 
+    /// Fuse CPU backbone SiLU/multiply without changing the joint head.
+    pub fn with_cpu_fused_gate(mut self, enabled: bool) -> Result<Self> {
+        if enabled && !self.device.is_cpu() {
+            return Err(Error::Unsupported("fused MLP gate is CPU-only".into()));
+        }
+        if enabled != self.capabilities.extra.contains_key("mlp_gate_execution") {
+            self.model_mut()?.set_cpu_fused_gate(enabled);
+        }
+        if enabled {
+            self.capabilities
+                .extra
+                .insert("mlp_gate_execution".into(), "cpu-fused-silu-mul-v1".into());
+        } else {
+            self.capabilities.extra.remove("mlp_gate_execution");
+        }
+        Ok(self)
+    }
+
     /// Optional CPU convolution buffers; attention/head arithmetic is unchanged.
     pub fn with_cpu_causal_conv(mut self, enabled: bool) -> Result<Self> {
         if enabled && !self.device.is_cpu() {

@@ -295,6 +295,13 @@ means, candidate order and complete-request F5 routing are preserved. It adds
 labeled qualification. Both options default off; grouped gathers can increase
 temporary memory and have no released-model speed claim.
 
+Native CPU Qwen/F2/F3 and Clef/F5 can optionally fuse the backbone SiLU/multiply
+with `HUNCHO_CPU_FUSED_GATE=1`. The default is off. This saves a tensor
+intermediate and retains the tested FP32/FP16 typed operations, including FP16
+intermediate rounding. Receipts identify the kernel; fresh complete labeled
+startup gates still apply. See [operation and limits](operations.md#fused-cpu-mlp-gate).
+It is not FlashAttention or a released-model speed/calibration acceptance.
+
 Optional `shared-base` builds provide immutable CPU Qwen base residency before
 adapter merging. `HUNCHO_BASE_CACHE_BYTES` defaults to zero; positive budgets
 retain at most sixteen content-hashed bases and share untargeted tensor storage

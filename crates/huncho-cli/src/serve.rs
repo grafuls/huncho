@@ -394,6 +394,7 @@ fn changed_arithmetic_profile(engine: &huncho_core::engine::Engine) -> bool {
         "onnx_native_batch",
         "delta_rule_execution",
         "causal_conv_execution",
+        "mlp_gate_execution",
         "prefill_chunk_tokens",
         "weight_quantization",
         "cpu_kernel_build",
@@ -922,6 +923,7 @@ mod qualification_tests {
             ("onnx_native_batch", "equal-length-v1"),
             ("delta_rule_execution", "cpu-buffered-v1"),
             ("causal_conv_execution", "cpu-buffered-v1"),
+            ("mlp_gate_execution", "cpu-fused-silu-mul-v1"),
             ("cpu_kernel_build", "x86_64:avx,avx2,f16c,fma"),
             ("llamacpp_execution", "cpu-qwen35-masked-prefill-v1"),
         ] {

@@ -164,12 +164,18 @@ fn grouped_clef_pooling_preserves_mixed_cardinalities_and_span_boundaries_on_cpu
 
 #[test]
 fn buffered_clef_cpu_kernels_match_independent_joint_logits() {
-    for (delta, conv) in [(true, false), (false, true), (true, true)] {
-        assert_buffered_clef_profile(delta, conv);
+    for (delta, conv, gate) in [
+        (true, false, false),
+        (false, true, false),
+        (true, true, false),
+        (false, false, true),
+        (true, true, true),
+    ] {
+        assert_buffered_clef_profile(delta, conv, gate);
     }
 }
 
-fn assert_buffered_clef_profile(delta: bool, conv: bool) {
+fn assert_buffered_clef_profile(delta: bool, conv: bool, gate: bool) {
     let root = Path::new(FIXTURE);
     let manifest = ModelManifest::load(root.join("huncho-model.json")).unwrap();
     let golden: Value =
@@ -181,6 +187,8 @@ fn assert_buffered_clef_profile(delta: bool, conv: bool) {
             .with_cpu_delta_rule(delta)
             .unwrap()
             .with_cpu_causal_conv(conv)
+            .unwrap()
+            .with_cpu_fused_gate(gate)
             .unwrap();
         assert_eq!(
             buffered
@@ -189,6 +197,14 @@ fn assert_buffered_clef_profile(delta: bool, conv: bool) {
                 .get("delta_rule_execution")
                 .map(String::as_str),
             delta.then_some("cpu-buffered-v1")
+        );
+        assert_eq!(
+            buffered
+                .capabilities()
+                .extra
+                .get("mlp_gate_execution")
+                .map(String::as_str),
+            gate.then_some("cpu-fused-silu-mul-v1")
         );
         for case in golden["cases"].as_array().unwrap() {
             let request: SystemOneRequest =
@@ -215,11 +231,17 @@ fn assert_buffered_clef_profile(delta: bool, conv: bool) {
             .with_cpu_delta_rule(false)
             .unwrap()
             .with_cpu_causal_conv(false)
+            .unwrap()
+            .with_cpu_fused_gate(false)
             .unwrap();
         assert!(!reference_again
             .capabilities()
             .extra
             .contains_key("delta_rule_execution"));
+        assert!(!reference_again
+            .capabilities()
+            .extra
+            .contains_key("mlp_gate_execution"));
     }
 }
 

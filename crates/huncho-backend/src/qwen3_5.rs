@@ -883,6 +883,7 @@ struct Mlp {
     up_proj: BackboneLinear,
     down_proj: BackboneLinear,
     act: Activation,
+    cpu_fused_gate: bool,
 }
 
 impl Mlp {
@@ -900,10 +901,16 @@ impl Mlp {
             up_proj,
             down_proj,
             act: Activation::Silu,
+            cpu_fused_gate: false,
         })
     }
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        if self.cpu_fused_gate {
+            let gate = self.gate_proj.forward(x)?;
+            let up = self.up_proj.forward(x)?;
+            return self.down_proj.forward(&crate::gate_cpu::silu_mul(&gate, &up)?);
+        }
         let gate = self.gate_proj.forward(x)?.apply(&self.act)?;
         let up = self.up_proj.forward(x)?;
         self.down_proj.forward(&gate.broadcast_mul(&up)?)
@@ -1131,6 +1138,7 @@ pub struct Model {
     fp32_attention: bool,
     cpu_delta_rule: bool,
     cpu_causal_conv: bool,
+    cpu_fused_gate: bool,
 }
 
 impl Model {
@@ -1180,6 +1188,7 @@ impl Model {
             fp32_attention: false,
             cpu_delta_rule: false,
             cpu_causal_conv: false,
+            cpu_fused_gate: false,
         })
     }
 
@@ -1232,6 +1241,13 @@ impl Model {
             if let Some(attention) = &mut layer.linear_attn {
                 attention.cpu_delta_rule = enabled;
             }
+        }
+    }
+
+    pub(crate) fn set_cpu_fused_gate(&mut self, enabled: bool) {
+        self.cpu_fused_gate = enabled;
+        for layer in &mut self.layers {
+            layer.mlp.cpu_fused_gate = enabled;
         }
     }
 
@@ -1516,6 +1532,24 @@ impl Qwen3_5Backend {
             ));
         }
         self.prefill_chunk_tokens = tokens;
+        Ok(self)
+    }
+    /// Fuse CPU SiLU and gate multiplication with the original typed rounding.
+    /// Configure before replicas or retained prefixes; qualification is required.
+    pub fn with_cpu_fused_gate(mut self, enabled: bool) -> CoreResult<Self> {
+        if enabled && !self.device.is_cpu() {
+            return Err(Error::Unsupported("fused MLP gate is CPU-only".into()));
+        }
+        if enabled != self.model.cpu_fused_gate
+            && (!self.caches.is_empty() || !self.prefixes.values.is_empty())
+        {
+            return Err(Error::Unsupported(
+                "release retained Qwen caches before changing gate kernels".into(),
+            ));
+        }
+        if enabled != self.model.cpu_fused_gate {
+            self.model_mut()?.set_cpu_fused_gate(enabled);
+        }
         Ok(self)
     }
     /// Optional CPU convolution buffers, with unchanged FP32 tap reduction.
@@ -2056,6 +2090,9 @@ impl Backend for Qwen3_5Backend {
         }
         if self.model.cpu_causal_conv {
             extra.insert("causal_conv_execution".into(), "cpu-buffered-v1".into());
+        }
+        if self.model.cpu_fused_gate {
+            extra.insert("mlp_gate_execution".into(), "cpu-fused-silu-mul-v1".into());
         }
         if self.prefill_chunk_tokens > 0 {
             extra.insert(

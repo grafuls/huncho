@@ -826,3 +826,30 @@ Kev fitting/held-out acceptance and controlled runtime benchmarks remain open.
 Native prefix fan-out, native batching, graph-side decision-only projection,
 Q8/Q4 conversion and GPU execution are later increments. No Apple or actual GPU
 checks were performed.
+
+## CPU SiLU/multiply fusion (2026-10-08)
+
+O02/O09 now include an optional fused CPU Qwen3.5 MLP gate for F2/F3 and
+whole-request Clef/F5. One output buffer replaces the separate SiLU tensor and
+multiply output. The public Candle typed operations retain FP32/FP16 rounding,
+with strided views supported and no broadcast/approximate math. This removes
+one allocation and intermediate write/read; projection cost and peak activation
+memory remain workload dependent.
+
+`HUNCHO_CPU_FUSED_GATE=1` defaults off, rejects non-CPU devices and cannot change
+after shared replicas or retained native prefixes are created. Execution
+metadata and receipts bind `cpu-fused-silu-mul-v1`; serving requires fresh
+complete observed-label gates even for fitted packages. Scalar/strided kernel,
+Kev raw/batch/prefix and whole-request Clef fixture comparisons preserve original
+float bits at FP32/FP16. Concurrent replica and packed Kev paths retain their
+profile semantics. FlashAttention, other fused ops, downstream vector math
+providers and released-model calibration/performance remain open. No actual
+GPU or Apple checks were performed.
+
+The [CPU gate microbenchmark](verification/gate-cpu-20261008/microbenchmark.json)
+retains twelve alternating pairs at 256 x 4096 elements on a local Core Ultra
+7 CPU, with identical float bits. FP32's separate/fused median ratio is about
+1.32; FP16's is about 0.88 (fusion is slower). This is a shape-specific kernel
+pilot without frequency isolation, excludes all projection/head/serving work,
+and supplies no peak-RSS or released-model acceptance. The flag stays off by
+default; allocation savings alone do not imply lower latency for every dtype.

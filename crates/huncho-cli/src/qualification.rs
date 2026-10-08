@@ -280,6 +280,7 @@ impl ExecutionIdentity {
             "HUNCHO_ONNX_NATIVE_BATCH",
             "HUNCHO_CPU_DELTA_RULE",
             "HUNCHO_CPU_CAUSAL_CONV",
+            "HUNCHO_CPU_FUSED_GATE",
             "HUNCHO_PREFILL_CHUNK_TOKENS",
             "ORT_DYLIB_PATH",
             "LD_LIBRARY_PATH",

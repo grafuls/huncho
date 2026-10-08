@@ -1,0 +1,131 @@
+{
+  "scope": "CPU kernel microbenchmark only; no released-model calibration or throughput acceptance",
+  "qualified": false,
+  "parent_commit": "205efc5f4734721547aa1b755c6a3a2e4ce1bc2b",
+  "binary_sha256": "fb635ee2063a864ee12d296a8d65b0a3979c4533c7d28d397f6fc5397837e05c",
+  "source_sha256": {
+    "crates/huncho-backend/src/gate_cpu.rs": "6ec95c86e0f4f80c8bd4fb0ce78e809ee440350c528b36f45b5d121eb8ea3b89",
+    "crates/huncho-backend/src/qwen3_5.rs": "82fe04e2fb5a1bd45c1511b21afa836e96494dee954d12d54d019fd5a088a9f7",
+    "crates/huncho-backend/Cargo.toml": "a387f472d6b5453080df0a0b9dfa9c3c70a7b02ebe8f00b17e0005334a99f9a8",
+    "Cargo.lock": "c140a598d21430a3b78e19914b29ea72f7dbc2f92f319a5c719c59e82c202f41"
+  },
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Fedora 1.97.1-1.fc44)",
+  "kernel": "6.19.10-300.fc44.x86_64",
+  "cpu_models": [
+    "Intel(R) Core(TM) Ultra 7 165H"
+  ],
+  "cpu_affinity": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21
+  ],
+  "runs": [
+    {
+      "scope": "CPU SiLU/multiply only; excludes projections/tokenization/heads",
+      "shape": [
+        256,
+        4096
+      ],
+      "dtype": "F32",
+      "separate_ms": [
+        3.757562,
+        2.303138,
+        2.417969,
+        2.2626560000000002,
+        2.268256,
+        3.706344,
+        3.5117030000000002,
+        3.581532,
+        3.4388330000000003,
+        3.355531,
+        3.389895,
+        3.711721
+      ],
+      "fused_ms": [
+        2.6588499999999997,
+        1.95487,
+        1.940455,
+        1.963837,
+        1.9545259999999998,
+        1.9594930000000002,
+        2.59423,
+        2.688383,
+        2.615849,
+        2.618623,
+        2.5671980000000003,
+        2.676983
+      ],
+      "output_float_bits_equal": true,
+      "qualified_release": false,
+      "median_separate_ms": 3.414364,
+      "median_fused_ms": 2.5807140000000004,
+      "separate_over_fused_median_ratio": 1.323030758154526
+    },
+    {
+      "scope": "CPU SiLU/multiply only; excludes projections/tokenization/heads",
+      "shape": [
+        256,
+        4096
+      ],
+      "dtype": "F16",
+      "separate_ms": [
+        13.211214,
+        13.678439000000001,
+        12.871716,
+        13.113961999999999,
+        13.274682,
+        12.993985,
+        13.346353,
+        12.997783,
+        12.896981,
+        12.879489,
+        12.527102,
+        13.10517
+      ],
+      "fused_ms": [
+        15.084916999999999,
+        14.990052,
+        15.184752,
+        15.040811,
+        15.297416,
+        14.871172999999999,
+        14.37347,
+        14.898887,
+        14.719423,
+        14.581812,
+        14.01108,
+        14.322376
+      ],
+      "output_float_bits_equal": true,
+      "qualified_release": false,
+      "median_separate_ms": 13.0514765,
+      "median_fused_ms": 14.88503,
+      "separate_over_fused_median_ratio": 0.8768189583763015
+    }
+  ],
+  "limits": [
+    "Twelve alternating pairs on one local CPU, without frequency isolation.",
+    "FP32 is faster in this kernel pilot; FP16 is slower. Defaults remain off.",
+    "Shape is 256 x 4096; projections, tokenization, heads, serving and peak RSS are excluded.",
+    "Float bits match the separate typed operations; this does not qualify any released checkpoint."
+  ]
+}

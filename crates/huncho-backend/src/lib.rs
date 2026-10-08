@@ -26,6 +26,8 @@ mod cpu_profile;
 #[cfg(feature = "candle")]
 mod delta_cpu;
 #[cfg(feature = "candle")]
+mod gate_cpu;
+#[cfg(feature = "candle")]
 pub mod device;
 #[cfg(feature = "candle")]
 pub mod kev;

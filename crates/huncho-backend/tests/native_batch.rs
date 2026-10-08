@@ -91,12 +91,12 @@ fn qwen_pointer_batches_preserve_probabilities_and_reject_cache_branches() {
 
 #[test]
 fn buffered_cpu_kernels_preserve_kev_reference_batches_and_prefixes() {
-    for (delta, conv) in [(true, false), (false, true), (true, true)] {
-        assert_buffered_kev_profile(delta, conv);
+    for (delta, conv, gate) in [(true, false, false), (false, true, false), (true, true, false), (false, false, true), (true, true, true)] {
+        assert_buffered_kev_profile(delta, conv, gate);
     }
 }
 
-fn assert_buffered_kev_profile(delta: bool, conv: bool) {
+fn assert_buffered_kev_profile(delta: bool, conv: bool, gate: bool) {
     let root = Path::new("tests/fixtures/tiny_kev");
     let golden: serde_json::Value =
         serde_json::from_slice(&std::fs::read(root.join("golden.json")).unwrap()).unwrap();
@@ -108,6 +108,8 @@ fn assert_buffered_kev_profile(delta: bool, conv: bool) {
             .with_cpu_delta_rule(delta)
             .unwrap()
             .with_cpu_causal_conv(conv)
+            .unwrap()
+            .with_cpu_fused_gate(gate)
             .unwrap();
         assert_eq!(
             buffered
@@ -157,6 +159,18 @@ fn assert_buffered_kev_profile(delta: bool, conv: bool) {
             }
             buffered.release_cache(parent).unwrap();
         }
+        assert_eq!(
+            buffered
+                .capabilities()
+                .extra
+                .get("mlp_gate_execution")
+                .map(String::as_str),
+            gate.then_some("cpu-fused-silu-mul-v1")
+        );
+        let mut retained_gate = load();
+        let prefix = retained_gate.prefill_cached(&[1, 2], 1 << 20).unwrap();
+        retained_gate.release_cache(prefix.handle).unwrap();
+        assert!(retained_gate.with_cpu_fused_gate(true).is_err());
         assert!(buffered.with_cpu_delta_rule(!delta).is_err());
         let mut retained_conv = load();
         let parent = retained_conv

@@ -323,7 +323,8 @@ fn load_clef(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<dy
     )?.with_vectorized_head(bool_env("HUNCHO_CLEF_VECTOR_HEAD")?)
         .with_grouped_pooling(bool_env("HUNCHO_CLEF_GROUPED_POOL")?)?
         .with_cpu_delta_rule(bool_env("HUNCHO_CPU_DELTA_RULE")?)?
-        .with_cpu_causal_conv(bool_env("HUNCHO_CPU_CAUSAL_CONV")?)?))
+        .with_cpu_causal_conv(bool_env("HUNCHO_CPU_CAUSAL_CONV")?)?
+        .with_cpu_fused_gate(bool_env("HUNCHO_CPU_FUSED_GATE")?)?))
 }
 
 #[cfg(not(feature = "clef"))]
@@ -371,6 +372,7 @@ fn load_candle(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<
             .with_fp32_attention(fp32_attention_from_env()?)?
             .with_cpu_delta_rule(bool_env("HUNCHO_CPU_DELTA_RULE")?)?
             .with_cpu_causal_conv(bool_env("HUNCHO_CPU_CAUSAL_CONV")?)?
+            .with_cpu_fused_gate(bool_env("HUNCHO_CPU_FUSED_GATE")?)?
             .with_prefill_chunk_tokens(prefill_chunk_tokens_from_env()?)?;
             return Ok(Box::new(backend));
         }
@@ -388,6 +390,7 @@ fn load_candle(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<
         .with_fp32_attention(fp32_attention_from_env()?)?
         .with_cpu_delta_rule(bool_env("HUNCHO_CPU_DELTA_RULE")?)?
         .with_cpu_causal_conv(bool_env("HUNCHO_CPU_CAUSAL_CONV")?)?
+        .with_cpu_fused_gate(bool_env("HUNCHO_CPU_FUSED_GATE")?)?
         .with_prefill_chunk_tokens(prefill_chunk_tokens_from_env()?)?;
         return Ok(Box::new(backend));
     }
@@ -419,6 +422,7 @@ fn load_candle(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<
             .with_fp32_attention(fp32_attention_from_env()?)?
             .with_cpu_delta_rule(bool_env("HUNCHO_CPU_DELTA_RULE")?)?
             .with_cpu_causal_conv(bool_env("HUNCHO_CPU_CAUSAL_CONV")?)?
+            .with_cpu_fused_gate(bool_env("HUNCHO_CPU_FUSED_GATE")?)?
             .with_prefill_chunk_tokens(prefill_chunk_tokens_from_env()?)?;
         return Ok(Box::new(backend) as Box<dyn Backend>);
     }

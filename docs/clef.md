@@ -80,9 +80,12 @@ template `clef-native-v1`.
 - Confidence is the maximum option probability. Temperature defaults to 1.0
   with calibration status `pending`; fit temperatures on your own evaluation
   data. Existing `clef:<dtype>` entries are honored.
-- This initial port uses unfused attention and a per-token DeltaNet recurrence.
-  It does not provide quantization, a KV cache, multimodal processing, or
-  performance parity with optimized PyTorch/CUDA kernels.
+- Dense attention remains unfused. Optional CPU buffered DeltaNet/convolution
+  and `HUNCHO_CPU_FUSED_GATE=1` profiles reduce intermediate allocations;
+  each defaults off and requires fresh labeled startup conformance. The fused
+  gate preserves tested FP32/FP16 typed rounding. F5 still does not provide
+  persistent KV reuse, quantization or multimodal processing. Fixture parity
+  does not establish performance parity with optimized PyTorch/CUDA kernels.
 
 ## Validation
 

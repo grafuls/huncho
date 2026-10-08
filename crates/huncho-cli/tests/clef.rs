@@ -119,4 +119,32 @@ fn native_clef_resolves_benchmarks_and_conforms_without_python() {
         "--json",
     ]);
     assert!(conform.contains("\"passed\": true"));
+    let fused = Command::new(env!("CARGO_BIN_EXE_huncho"))
+        .current_dir(root)
+        .env("PATH", root)
+        .env("HUNCHO_DEVICE", "cpu")
+        .env("HUNCHO_CPU_FUSED_GATE", "1")
+        .args([
+            "conform",
+            "--model",
+            ".",
+            "--dtype",
+            "fp32",
+            "--golden",
+            "golden.json",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        fused.status.success(),
+        "{}",
+        String::from_utf8_lossy(&fused.stderr)
+    );
+    let fused: Value = serde_json::from_slice(&fused.stdout).unwrap();
+    assert_eq!(
+        fused["execution_metadata"]["mlp_gate_execution"],
+        "cpu-fused-silu-mul-v1"
+    );
+    assert_eq!(fused["passed"], true);
 }

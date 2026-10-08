@@ -643,6 +643,34 @@ cargo test --offline --release -p huncho-backend --features candle --lib \
 ```
 
 
+### Fused CPU MLP gate
+
+`HUNCHO_CPU_FUSED_GATE=1` opts the native Candle Qwen3.5 backbone into a fused
+SiLU/multiply operation for Kev/F2, Qwen/F3 and Clef/F5. It defaults off. The
+kernel allocates one output instead of a separate SiLU intermediate and output,
+and uses the original typed scalar SiLU and multiply operations. FP16 preserves
+the intermediate FP16 rounding; there is no approximate exponential, FMA or
+reduced precision introduced by this kernel. Noncontiguous equal-shape inputs
+are supported; broadcasting and BF16 are rejected.
+
+Configure it before creating replicas or retaining prefix state. Non-CPU devices
+are rejected. Execution receipts record `mlp_gate_execution=cpu-fused-silu-mul-v1`
+and the environment flag. Serving requires fresh complete labeled startup
+conformance with the existing thresholds, even for a fitted source package.
+Typed kernel and native fp32/fp16 fixture tests preserve original float bits,
+including Kev batches/prefixes and whole-request Clef logits. These comparisons
+cover Huncho's default Candle scalar CPU build; enabling a downstream vector
+math provider is a separate execution profile and needs its own comparison.
+
+The operation removes one allocation and one intermediate memory write/read.
+It does not eliminate projection matmuls, establish a lower peak RSS, or qualify
+released-model latency/calibration. An optional kernel-only comparison is:
+
+```sh
+cargo test --release -p huncho-backend --features candle --lib \
+  gate_cpu::tests::gate_cpu_timing -- --ignored --nocapture
+```
+
 ## Bounded shared-weight CPU replicas
 
 `--replicas N` leases one independently locked context per complete model job,

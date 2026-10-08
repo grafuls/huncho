@@ -26,6 +26,8 @@ fn cpu_clef_replicas_preserve_whole_request_joint_logits_concurrently() {
             .unwrap()
             .with_cpu_causal_conv(true)
             .unwrap()
+            .with_cpu_fused_gate(true)
+            .unwrap()
             .with_grouped_pooling(true)
             .unwrap()
             .with_vectorized_head(true);
@@ -145,6 +147,8 @@ fn cpu_modernbert_and_native_kev_replicas_preserve_independent_float_bits_concur
             .with_cpu_delta_rule(true)
             .unwrap()
             .with_cpu_causal_conv(true)
+            .unwrap()
+            .with_cpu_fused_gate(true)
             .unwrap();
         concurrent_unchanged_outputs(
             Box::new(backend),
