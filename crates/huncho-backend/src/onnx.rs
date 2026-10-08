@@ -84,16 +84,23 @@ impl OnnxBackend {
             .find(|n| n.contains("input_ids") || n.contains("input"))
             .or_else(|| input_names.first())
             .cloned()
-            .ok_or_else(|| Error::Backend(OnnxError::Init("model declares no inputs".into()).to_string()))?;
+            .ok_or_else(|| {
+                Error::Backend(OnnxError::Init("model declares no inputs".into()).to_string())
+            })?;
         let mask_name = input_names.iter().find(|n| n.contains("mask")).cloned();
         let output_name = output_names
             .iter()
             .find(|n| {
-                n.contains("last_hidden_state") || n.contains("hidden_states") || n.contains("hidden") || n.contains("logits")
+                n.contains("last_hidden_state")
+                    || n.contains("hidden_states")
+                    || n.contains("hidden")
+                    || n.contains("logits")
             })
             .or_else(|| output_names.first())
             .cloned()
-            .ok_or_else(|| Error::Backend(OnnxError::Init("model declares no outputs".into()).to_string()))?;
+            .ok_or_else(|| {
+                Error::Backend(OnnxError::Init("model declares no outputs".into()).to_string())
+            })?;
 
         Ok(OnnxBackend {
             session,
@@ -109,8 +116,9 @@ impl OnnxBackend {
         })
     }
 
-    /// Run one sequence and return `(seq_len, hidden_size, flat)` row-major.
-    fn run_sequence(&mut self, tokens: &[u32]) -> Result<(usize, usize, Vec<f32>)> {
+    /// Copy requested rows directly from ORT-owned CPU output storage. Avoid
+    /// allocating a second complete sequence-by-hidden host buffer.
+    fn run_readout(&mut self, tokens: &[u32], positions: &[usize]) -> Result<CoreTensor> {
         if tokens.len() > self.max_context {
             return Err(Error::Backend(format!(
                 "sequence length {} exceeds max_context {}",
@@ -119,6 +127,11 @@ impl OnnxBackend {
             )));
         }
         let seq = tokens.len();
+        if let Some(pos) = positions.iter().find(|&&pos| pos >= seq) {
+            return Err(Error::Backend(format!(
+                "position {pos} out of range for sequence of length {seq}"
+            )));
+        }
 
         // Build one owned tensor per declared input so we never borrow temporaries.
         let mut inputs: Vec<(String, Tensor<i64>)> = Vec::with_capacity(self.input_names.len());
@@ -127,7 +140,14 @@ impl OnnxBackend {
                 tokens.iter().map(|&t| t as i64).collect()
             } else {
                 // Attention mask (ones) or a best-effort zeros tensor for the rest.
-                vec![if self.mask_name.as_deref() == Some(name.as_str()) { 1 } else { 0 }; seq]
+                vec![
+                    if self.mask_name.as_deref() == Some(name.as_str()) {
+                        1
+                    } else {
+                        0
+                    };
+                    seq
+                ]
             };
             let t = Tensor::from_array(([1usize, seq], data))
                 .map_err(|e| Error::Backend(OnnxError::Inference(e.to_string()).to_string()))?;
@@ -149,14 +169,37 @@ impl OnnxBackend {
             .map_err(|e| Error::Backend(OnnxError::Inference(e.to_string()).to_string()))?;
 
         // Output layout: `[1, seq, hidden]` (or `[seq, hidden]`). Batch is 1.
-        let hidden = if shape.len() >= 3 {
-            shape[2] as usize
-        } else if shape.len() == 2 {
-            shape[1] as usize
-        } else {
-            self.hidden_size
+        let (output_seq, hidden) = match &shape[..] {
+            [1, seq, hidden] | [seq, hidden] if *seq >= 0 && *hidden > 0 => {
+                (*seq as usize, *hidden as usize)
+            }
+            _ => {
+                return Err(Error::Backend(format!(
+                "unsupported ONNX feature shape {shape:?}; expected [1,seq,hidden] or [seq,hidden]"
+            )))
+            }
         };
-        Ok((seq, hidden, data.to_vec()))
+        if output_seq != seq || seq.checked_mul(hidden) != Some(data.len()) {
+            return Err(Error::Backend(format!(
+                "ONNX feature shape {shape:?} does not cover the input sequence of length {seq}"
+            )));
+        }
+        let count = positions
+            .len()
+            .checked_mul(hidden)
+            .ok_or_else(|| Error::Backend("ONNX readout size overflow".into()))?;
+        let mut selected = Vec::with_capacity(count);
+        for &pos in positions {
+            selected.extend_from_slice(&data[pos * hidden..(pos + 1) * hidden]);
+        }
+        // Preserve the legacy empty-readout metadata hint; nonempty readouts
+        // use the actual graph width, as before. Trained heads validate width.
+        let width = if positions.is_empty() {
+            self.hidden_size
+        } else {
+            hidden
+        };
+        CoreTensor::new(vec![positions.len(), width], selected)
     }
 }
 
@@ -179,28 +222,7 @@ impl Backend for OnnxBackend {
     }
 
     fn forward(&mut self, input: ForwardInput) -> Result<ForwardOutput> {
-        let (seq_len, hidden, flat) = self.run_sequence(&input.tokens)?;
-
-        if input.positions.is_empty() {
-            // Prefill-only; no outputs requested.
-            return Ok(ForwardOutput::Features {
-                positions: Vec::new(),
-                values: CoreTensor::zeros(vec![0, self.hidden_size]),
-            });
-        }
-
-        let mut data = vec![0.0f32; input.positions.len() * hidden];
-        for (row, &pos) in input.positions.iter().enumerate() {
-            let start = pos * hidden;
-            let end = start + hidden;
-            if end > flat.len() {
-                return Err(Error::Backend(format!(
-                    "position {pos} out of range for sequence of length {seq_len} (hidden {hidden})"
-                )));
-            }
-            data[row * hidden..(row + 1) * hidden].copy_from_slice(&flat[start..end]);
-        }
-        let values = CoreTensor::new(vec![input.positions.len(), hidden], data)?;
+        let values = self.run_readout(&input.tokens, &input.positions)?;
         Ok(ForwardOutput::Features {
             positions: input.positions,
             values,

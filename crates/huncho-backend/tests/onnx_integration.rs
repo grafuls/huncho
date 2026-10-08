@@ -12,7 +12,10 @@ use huncho_backend::OnnxBackend;
 use huncho_core::backend::{Backend, ForwardInput};
 
 fn fixture() -> &'static str {
-    concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/tiny_encoder.onnx")
+    concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/tiny_encoder.onnx"
+    )
 }
 
 #[test]
@@ -29,24 +32,79 @@ fn loads_and_reports_capabilities() {
 #[test]
 fn forward_returns_hidden_states_at_positions() {
     let mut b = OnnxBackend::load(fixture(), 8, 512, "fp32").unwrap();
-    let out = b.forward(ForwardInput::new(vec![3, 10, 5], vec![0, 1, 2])).unwrap();
+    let out = b
+        .forward(ForwardInput::new(vec![3, 10, 5], vec![0, 1, 2]))
+        .unwrap();
     let v = out.values();
     assert_eq!(v.shape(), &[3, 8]);
     // token 3 -> col 3 = 3.5 ; token 10 -> col 2 = 10.5 ; token 5 -> col 5 = 5.5
     assert_eq!(v.row(0).unwrap(), &[0.0, 0.0, 0.0, 3.5, 0.0, 0.0, 0.0, 0.0]);
-    assert_eq!(v.row(1).unwrap(), &[0.0, 0.0, 10.5, 0.0, 0.0, 0.0, 0.0, 0.0]);
+    assert_eq!(
+        v.row(1).unwrap(),
+        &[0.0, 0.0, 10.5, 0.0, 0.0, 0.0, 0.0, 0.0]
+    );
     assert_eq!(v.row(2).unwrap(), &[0.0, 0.0, 0.0, 0.0, 0.0, 5.5, 0.0, 0.0]);
 }
 
 #[test]
 fn forward_slices_subset_of_positions() {
     let mut b = OnnxBackend::load(fixture(), 8, 512, "fp32").unwrap();
-    let out = b.forward(ForwardInput::new(vec![3, 10, 5], vec![2, 0])).unwrap();
+    let out = b
+        .forward(ForwardInput::new(vec![3, 10, 5], vec![2, 0]))
+        .unwrap();
     let v = out.values();
     assert_eq!(v.shape(), &[2, 8]);
     // position 2 = token 5 -> col 5 = 5.5 ; position 0 = token 3 -> col 3 = 3.5
     assert_eq!(v.row(0).unwrap()[5], 5.5);
     assert_eq!(v.row(1).unwrap()[3], 3.5);
+}
+
+#[test]
+fn selected_rows_preserve_repeated_positions_and_exact_float_bits() {
+    let mut b = OnnxBackend::load(fixture(), 8, 512, "fp32").unwrap();
+    let tokens = vec![3, 10, 5];
+    let full = b
+        .forward(ForwardInput::new(tokens.clone(), vec![0, 1, 2]))
+        .unwrap();
+    let positions = vec![2, 0, 2, 1];
+    let selected = b
+        .forward(ForwardInput::new(tokens, positions.clone()))
+        .unwrap();
+    assert_eq!(selected.positions(), positions);
+    for (row, &position) in positions.iter().enumerate() {
+        let bits = |row: &[f32]| row.iter().map(|value| value.to_bits()).collect::<Vec<_>>();
+        assert_eq!(
+            bits(selected.values().row(row).unwrap()),
+            bits(full.values().row(position).unwrap())
+        );
+    }
+}
+
+#[test]
+fn rejects_invalid_positions_and_retains_graph_width_semantics() {
+    let mut b = OnnxBackend::load(fixture(), 8, 512, "fp32").unwrap();
+    for position in [3, usize::MAX] {
+        assert!(b
+            .forward(ForwardInput::new(vec![3, 10, 5], vec![position]))
+            .is_err());
+    }
+    let mut hinted_width = OnnxBackend::load(fixture(), 16, 512, "fp32").unwrap();
+    assert_eq!(
+        hinted_width
+            .forward(ForwardInput::new(vec![3], vec![0]))
+            .unwrap()
+            .values()
+            .shape(),
+        &[1, 8]
+    );
+    assert_eq!(
+        hinted_width
+            .forward(ForwardInput::new(vec![3], vec![]))
+            .unwrap()
+            .values()
+            .shape(),
+        &[0, 16]
+    );
 }
 
 #[test]
