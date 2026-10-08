@@ -146,6 +146,19 @@ impl ClefBackend {
             .max_context
             .min(config.max_position_embeddings)
             .min(manifest.prompt_contract.max_len);
+        let extra = BTreeMap::from([
+            ("runtime".into(), "candle".into()),
+            ("device".into(), crate::device_label(&device)),
+            ("media".into(), "text-json-only".into()),
+        ]);
+        #[cfg(feature = "shared-base")]
+        let extra = {
+            let mut extra = extra;
+            if crate::shared_base::configured()?.is_some() {
+                extra.insert("base_weight_cache".into(), "content-checked-cpu-v1".into());
+            }
+            extra
+        };
         Ok(Self {
             model: Arc::new(model),
             head: Arc::new(head),
@@ -160,11 +173,7 @@ impl ClefBackend {
                 dtype: dtype.into(),
                 max_context,
                 families: vec![Family::F5],
-                extra: BTreeMap::from([
-                    ("runtime".into(), "candle".into()),
-                    ("device".into(), crate::device_label(&device)),
-                    ("media".into(), "text-json-only".into()),
-                ]),
+                extra,
                 ..Default::default()
             },
         })

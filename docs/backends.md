@@ -293,3 +293,11 @@ means, candidate order and complete-request F5 routing are preserved. It adds
 `joint_pool_execution=grouped-spans-summary-v1` and requires fresh complete
 labeled qualification. Both options default off; grouped gathers can increase
 temporary memory and have no released-model speed claim.
+
+Optional `shared-base` builds provide immutable CPU Qwen base residency before
+adapter merging. `HUNCHO_BASE_CACHE_BYTES` defaults to zero; positive budgets
+retain at most sixteen content-hashed bases and share untargeted tensor storage
+across independently merged models. Metadata `base_weight_cache=content-checked-cpu-v1`
+requires fresh numerical startup qualification. It does not share adapters,
+KV/recurrence state, temperatures or packed artifacts. Retaining unmerged target
+weights can increase single-adapter memory; see [operations](operations.md#immutable-cpu-base-residency-across-adapters).

@@ -279,6 +279,7 @@ mod tests {
                 caches: BTreeMap::new(),
                 prefixes: PrefixSnapshots::default(),
                 prefill_chunk_tokens: 0,
+                base_weight_cache: false,
             };
             let mut direct = Qwen3_5Backend::load_quantized_kev(
                 &path,
@@ -427,6 +428,7 @@ impl Qwen3_5Backend {
             caches: BTreeMap::new(),
             prefixes: PrefixSnapshots::default(),
             prefill_chunk_tokens: 0,
+            base_weight_cache: false,
         })
     }
 }

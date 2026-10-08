@@ -1384,6 +1384,7 @@ pub struct Qwen3_5Backend {
     caches: BTreeMap<u64, ModelCache>,
     prefixes: PrefixSnapshots,
     prefill_chunk_tokens: usize,
+    base_weight_cache: bool,
 }
 
 enum Readout {
@@ -1531,6 +1532,8 @@ impl Qwen3_5Backend {
             max_context,
             dtype.into(),
             device,
+            #[cfg(feature = "shared-base")]
+            None,
         )
     }
 
@@ -1575,6 +1578,36 @@ impl Qwen3_5Backend {
             max_context,
             dtype,
             device,
+            #[cfg(feature = "shared-base")]
+            None,
+        )
+    }
+
+    /// Share immutable CPU base tensors across independently merged adapters.
+    /// Head, LoRA merge, activations and native cache handles remain isolated.
+    #[cfg(feature = "shared-base")]
+    pub fn load_kev_with_base_cache(
+        base_dir: &Path,
+        adapter_dir: &Path,
+        head_path: &Path,
+        max_context: usize,
+        dtype: impl Into<String>,
+        cache: &crate::shared_base::BaseWeightCache,
+    ) -> CoreResult<Self> {
+        let dtype = dtype.into();
+        if !matches!(dtype.as_str(), "fp32" | "fp16" | "f16") {
+            return Err(Error::Unsupported(format!(
+                "Kev's Candle backend supports fp32 or fp16, not `{dtype}`"
+            )));
+        }
+        Self::load_with_head(
+            base_dir,
+            Some(adapter_dir),
+            Some(head_path),
+            max_context,
+            dtype,
+            Device::Cpu,
+            Some(cache),
         )
     }
 
@@ -1585,6 +1618,7 @@ impl Qwen3_5Backend {
         max_context: usize,
         dtype: String,
         device: Device,
+        #[cfg(feature = "shared-base")] cache: Option<&crate::shared_base::BaseWeightCache>,
     ) -> CoreResult<Self> {
         let dtype_str = dtype;
         let dtype = match dtype_str.as_str() {
@@ -1609,12 +1643,32 @@ impl Qwen3_5Backend {
         // Stage weights and merge LoRA on CPU. Turing cannot cast BF16
         // source tensors on CUDA, and staging avoids GPU merge temporaries.
         let weight_device = Device::Cpu;
+        #[cfg(feature = "shared-base")]
+        let base_weight_cache = match cache {
+            Some(cache) => cache.enabled(),
+            None => crate::shared_base::configured()?.is_some(),
+        };
+        #[cfg(not(feature = "shared-base"))]
+        let base_weight_cache = false;
         #[cfg(feature = "clef")]
         if device.is_cuda() && dtype == DType::BF16 && !crate::device::supports_bf16(&device)? {
             return Err(Error::Unsupported(
                 "Qwen BF16 execution requires a GPU with BF16 support; choose fp16 or fp32".into(),
             ));
         }
+        #[cfg(feature = "shared-base")]
+        let mut tensors = if let Some(cache) = cache {
+            load_base_tensors_with_cache(
+                base_dir,
+                &weight_device,
+                dtype,
+                pointer_path.is_none(),
+                cache,
+            )?
+        } else {
+            load_base_tensors_filtered(base_dir, &weight_device, dtype, pointer_path.is_none())?
+        };
+        #[cfg(not(feature = "shared-base"))]
         let mut tensors =
             load_base_tensors_filtered(base_dir, &weight_device, dtype, pointer_path.is_none())?;
         if tensors.is_empty() {
@@ -1695,6 +1749,7 @@ impl Qwen3_5Backend {
             caches: BTreeMap::new(),
             prefixes: PrefixSnapshots::default(),
             prefill_chunk_tokens: 0,
+            base_weight_cache,
         })
     }
 }
@@ -1746,12 +1801,45 @@ fn load_base_tensors_filtered(
     dtype: DType,
     include_lm_head: bool,
 ) -> CoreResult<HashMap<String, Tensor>> {
-    let mut map = HashMap::new();
-    let entries: Vec<_> = std::fs::read_dir(dir)
+    #[cfg(feature = "shared-base")]
+    if let Some(cache) = crate::shared_base::configured()? {
+        return load_base_tensors_with_cache(dir, device, dtype, include_lm_head, cache);
+    }
+    #[cfg(not(feature = "shared-base"))]
+    if std::env::var_os("HUNCHO_BASE_CACHE_BYTES").is_some_and(|value| value != "0") {
+        return Err(Error::Unsupported(
+            "HUNCHO_BASE_CACHE_BYTES requires feature shared-base".into(),
+        ));
+    }
+    load_base_tensor_files(&base_tensor_files(dir)?, device, dtype, include_lm_head)
+}
+
+#[cfg(feature = "shared-base")]
+fn load_base_tensors_with_cache(
+    dir: &Path,
+    device: &Device,
+    dtype: DType,
+    include_lm_head: bool,
+    cache: &crate::shared_base::BaseWeightCache,
+) -> CoreResult<HashMap<String, Tensor>> {
+    if !device.is_cpu() {
+        return Err(Error::Unsupported(
+            "shared bases currently support CPU storage only".into(),
+        ));
+    }
+    let files = base_tensor_files(dir)?;
+    cache.load(&files, dtype, include_lm_head, || {
+        load_base_tensor_files(&files, device, dtype, include_lm_head)
+    })
+}
+
+fn base_tensor_files(dir: &Path) -> CoreResult<Vec<std::path::PathBuf>> {
+    let mut entries: Vec<_> = std::fs::read_dir(dir)
         .map_err(|e| {
             Error::Backend(QwenError::Load(dir.display().to_string(), e.to_string()).to_string())
         })?
-        .filter_map(|e| e.ok())
+        .collect::<std::io::Result<Vec<_>>>()?
+        .into_iter()
         .map(|e| e.path())
         .filter(|p| p.extension().map(|x| x == "safetensors").unwrap_or(false))
         .filter(|p| {
@@ -1762,10 +1850,21 @@ fn load_base_tensors_filtered(
                 .unwrap_or(true)
         })
         .collect();
+    entries.sort();
+    Ok(entries)
+}
+
+fn load_base_tensor_files(
+    entries: &[std::path::PathBuf],
+    device: &Device,
+    dtype: DType,
+    include_lm_head: bool,
+) -> CoreResult<HashMap<String, Tensor>> {
+    let mut map = HashMap::new();
     for p in entries {
         // Model files must remain unchanged while loading. Map the shard so
         // excluded vision/MTP weights are never materialized on the device.
-        let raw = unsafe { candle::safetensors::MmapedSafetensors::new(&p) }.map_err(|e| {
+        let raw = unsafe { candle::safetensors::MmapedSafetensors::new(p) }.map_err(|e| {
             Error::Backend(QwenError::Load(p.display().to_string(), e.to_string()).to_string())
         })?;
         for (name, _) in raw.tensors() {
@@ -1788,7 +1887,11 @@ fn load_base_tensors_filtered(
                 .map_err(|e| {
                     Error::Backend(QwenError::Load(k.clone(), e.to_string()).to_string())
                 })?;
-            map.insert(k, v);
+            if map.insert(k.clone(), v).is_some() {
+                return Err(Error::Package(format!(
+                    "duplicate canonical base tensor `{k}`"
+                )));
+            }
         }
     }
     Ok(map)
@@ -1832,6 +1935,7 @@ impl Backend for Qwen3_5Backend {
             caches: BTreeMap::new(),
             prefixes: PrefixSnapshots::default(),
             prefill_chunk_tokens: self.prefill_chunk_tokens,
+            base_weight_cache: self.base_weight_cache,
         }))
     }
 
@@ -1841,6 +1945,9 @@ impl Backend for Qwen3_5Backend {
 
     fn capabilities(&self) -> Capabilities {
         let mut extra = BTreeMap::from([("device".into(), crate::device_label(&self.device))]);
+        if self.base_weight_cache {
+            extra.insert("base_weight_cache".into(), "content-checked-cpu-v1".into());
+        }
         crate::cpu_profile::record(&mut extra);
         if self.model.projection_chunk_rows > 0 {
             extra.insert(
@@ -2249,6 +2356,47 @@ fn core_from_tensor(t: &Tensor) -> CoreResult<CoreTensor> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "shared-base")]
+    #[test]
+    fn separate_adapter_models_keep_shared_untargeted_embedding_storage_after_base_eviction() {
+        let root = Path::new("tests/fixtures/tiny_kev");
+        let cache = crate::shared_base::BaseWeightCache::new(8 << 20);
+        let a = Qwen3_5Backend::load_kev_with_base_cache(
+            root,
+            root,
+            &root.join("head.pt"),
+            512,
+            "fp32",
+            &cache,
+        )
+        .unwrap();
+        let b = Qwen3_5Backend::load_kev_with_base_cache(
+            root,
+            root,
+            &root.join("head.pt"),
+            512,
+            "fp32",
+            &cache,
+        )
+        .unwrap();
+        assert!(!Arc::ptr_eq(&a.model, &b.model));
+        assert!(!Arc::ptr_eq(&a.head, &b.head));
+        let (first, _) = a.model.embed_tokens.embeddings().storage_and_layout();
+        let (second, _) = b.model.embed_tokens.embeddings().storage_and_layout();
+        assert!(std::ptr::eq(&*first, &*second));
+        assert_eq!(
+            a.capabilities().extra["base_weight_cache"],
+            "content-checked-cpu-v1"
+        );
+        assert_eq!(
+            b.capabilities().extra["base_weight_cache"],
+            "content-checked-cpu-v1"
+        );
+        cache.clear().unwrap();
+        assert_eq!(cache.stats().unwrap().charged_bytes, 0);
+        assert!(std::ptr::eq(&*first, &*second));
+    }
+
     #[test]
     fn cpu_replicas_share_loaded_weights_but_never_copy_active_or_retained_state() {
         let root = Path::new("tests/fixtures/tiny_kev");
@@ -2582,6 +2730,7 @@ mod tests {
             caches: BTreeMap::new(),
             prefixes: PrefixSnapshots::default(),
             prefill_chunk_tokens: 0,
+            base_weight_cache: false,
         };
         let out = backend
             .forward(ForwardInput::new(vec![1, 2, 3, 4], vec![3]))

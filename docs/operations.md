@@ -693,3 +693,45 @@ exact prompt/result caches remain shared. Changing N while keeping a fixed
 host thread budget can expose oversubscription. This is a warm closed-loop
 engine benchmark, with no HTTP admission, idle-context dispatch, CPU affinity
 management, peak-RSS measurement or calibration approval.
+
+## Immutable CPU base residency across adapters
+
+Build with `--features shared-base` and set `HUNCHO_BASE_CACHE_BYTES` to opt into
+one process-wide charged-byte budget (default zero). Safetensors Qwen loaders
+retain immutable CPU base tensors before LoRA merging. Separate adapters clone
+tensor references, share untargeted storage and allocate their own merged target
+weights. Kev/F2, Qwen/F3 and CPU Clef/F5 use this loader; ModernBERT and already
+packed GGUF artifacts do not. This differs from execution replicas, which share
+one complete already-merged model.
+
+Every lookup hashes full base-shard bytes, dtype and vocabulary-head inclusion.
+Identical relocated shards can share; changed files cannot select stale weights.
+Sources are checked again before returning hits or publishing a materialized
+base. Shard enumeration is deterministic and duplicate canonical names fail.
+Source files must remain immutable while loading/qualifying. SHA-256 I/O remains
+on the startup path, and concurrent startup materialization is serialized; this
+cache does not hold a lock during inference.
+
+At most sixteen bases are retained with LRU eviction. The byte charge includes
+loaded tensor payloads and conservative per-entry metadata; it does not bound
+allocator overhead, activations, live models or load/merge temporaries. An
+oversized base bypasses retention. Eviction/clear releases only cache-owned
+references. Keeping an unmerged base plus merged targets can increase memory
+for a single adapter, so size this option against your actual adapter mix.
+The CLI budget is fixed after first use; restart to change it.
+
+The backend records `base_weight_cache=content-checked-cpu-v1`, which requires
+fresh numerical startup qualification against pinned goldens. Existing refit,
+arithmetic-profile and replica rules still require complete observed outcomes.
+The cache does not change head math, tensors or temperatures and does not grant
+calibration approval. Receipts bind the option and source artifacts. Library
+callers can use `BaseWeightCache`, `Qwen3_5Backend::load_kev_with_base_cache`,
+`stats()` and `clear()` with explicit budgets/lifetimes.
+
+CPU tests prove actual shared embedding storage, independent adapter merges and
+cache handles, bit-identical fp32/fp16 raw/probability outputs, concurrent miss
+deduplication, source-change rejection, eviction and budget bypass. CLI tests
+exercise relocated sharing and keep pending calibration rejected. Full released
+adapter-mix RSS/startup measurements, lazy model-registry loading/eviction,
+on-the-fly multi-LoRA batches and device residency remain open. Actual GPU
+checks and Apple work are deferred.

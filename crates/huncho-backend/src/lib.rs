@@ -35,6 +35,8 @@ pub mod null;
 pub mod onnx;
 #[cfg(feature = "candle")]
 pub mod qwen3_5;
+#[cfg(feature = "shared-base")]
+pub mod shared_base;
 
 #[cfg(feature = "candle")]
 pub use candle::CandleBackend;

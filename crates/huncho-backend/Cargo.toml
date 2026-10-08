@@ -19,6 +19,7 @@ candle = { package = "candle-core", version = "0.11", optional = true, default-f
 candle-nn = { version = "0.11", optional = true, default-features = false }
 candle-transformers = { version = "0.11", optional = true, default-features = false }
 zip = { version = "8.6", optional = true, default-features = false }
+sha2 = { version = "0.10.9", optional = true }
 
 [features]
 default = []
@@ -26,6 +27,7 @@ onnx = ["dep:ort"]
 onnx-cuda = ["onnx", "ort/cuda"]
 candle = ["dep:candle", "dep:candle-nn", "dep:candle-transformers", "dep:zip"]
 quantization = ["candle"]
+shared-base = ["candle", "dep:sha2"]
 clef = ["candle", "huncho-core/tokenizers"]
 cuda = ["clef", "candle/cuda", "candle-nn/cuda"]
 

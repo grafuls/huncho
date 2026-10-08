@@ -451,16 +451,20 @@ fn qualify_optimizations(registry: &ModelRegistry, args: &ServeArgs) -> anyhow::
         let opts = evaluation_options(engine, args);
         anyhow::ensure!(!engine.execution_metadata().contains_key("prefill_chunk_tokens") || opts.prefix_cache,
             "chunked prefill serving for `{name}` requires --prefix-cache and an actual split-prefix qualification");
-        let onnx_readout_profile = ["onnx_readout", "onnx_output_buffer_bytes"]
-            .iter()
-            .any(|key| engine.execution_metadata().contains_key(*key));
+        let readout_storage_profile = [
+            "onnx_readout",
+            "onnx_output_buffer_bytes",
+            "base_weight_cache",
+        ]
+        .iter()
+        .any(|key| engine.execution_metadata().contains_key(*key));
         if !opts.prefix_cache
             && opts.max_batch_tokens.is_none()
             && !(args.candidate_readout && engine.family() == Family::F3)
             && !paths.contains_key(name.as_str())
             && !refit
             && !kernel_profile
-            && !onnx_readout_profile
+            && !readout_storage_profile
             && !opts.prepare_all
             && !replicated
         {
@@ -954,10 +958,11 @@ mod qualification_tests {
     }
 
     #[test]
-    fn onnx_readout_and_buffer_profiles_require_fresh_numerical_qualification() {
+    fn readout_and_storage_profiles_require_fresh_numerical_qualification() {
         for (key, value) in [
             ("onnx_readout", "gather-v1"),
             ("onnx_output_buffer_bytes", "4096"),
+            ("base_weight_cache", "content-checked-cpu-v1"),
         ] {
             let registry = registry_with_execution_metadata(
                 0.,

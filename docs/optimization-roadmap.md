@@ -748,3 +748,32 @@ The measurement includes wait on each statically assigned context; it does not
 simulate HTTP admission/idle-context dispatch or certify probability quality.
 Fixed-affinity released-model throughput/RSS and fresh per-context labeled
 acceptance remain open. Actual GPU checks remain deferred.
+
+## Immutable CPU bases across adapter models (2026-10-08)
+
+O22 now includes optional `shared-base` builds and
+`HUNCHO_BASE_CACHE_BYTES` (default zero). Safetensors Qwen/F2/F3 and CPU F5
+loaders retain immutable unmerged CPU tensors. Different adapters share
+untargeted storage, while every LoRA target is merged into a new tensor with
+the original arithmetic. Trained heads, temperatures, model activations and
+native prefix state remain independent. This extends the earlier shared-weight
+replicas without claiming dynamic multi-LoRA inference.
+
+Cache keys hash every base-shard byte plus dtype and LM-head inclusion; file
+contents are checked again around hits/materialization. Identical relocated
+shards share; source changes cannot select stale base tensors. Deterministic
+enumeration rejects duplicate canonical tensor names. LRU retention is bounded
+by charged payload/metadata and sixteen bases, with oversized bypass and explicit
+library clear/stats. A mutex prevents duplicate concurrent miss loads and never
+covers inference. SHA-256 startup I/O and the extra unmerged target residency
+are real costs; the cache budget is not a live-model or peak-RSS bound.
+
+`base_weight_cache=content-checked-cpu-v1` requires fresh numerical startup
+conformance and is retained in execution receipts. Temperature/refit/changed
+kernel/replica rules remain strict. Tests prove shared native embedding storage,
+independent models/heads/handles, two distinct actual adapter merges with
+bit-identical independent fp32/fp16 logits and probabilities, source mutations,
+concurrent miss deduplication, eviction, bypass and pending CLI rejection.
+The default build adds no active runtime dependency. Full released adapter-mix
+RSS/startup qualification, lazy registry residency, on-the-fly multi-LoRA
+scheduling and GPU residency remain open; actual GPU checks remain deferred.
