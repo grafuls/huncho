@@ -2,7 +2,7 @@
 //!
 //! * [`mock::MockBackend`] — deterministic, dependency-free backend used for
 //!   offline tests, demonstrations, and the CI conformance harness.
-//! * [`onnx::OnnxBackend`] — ONNX Runtime (CPU/CUDA/WebGPU) backend, behind the
+//! * [`onnx::OnnxBackend`] — ONNX Runtime CPU backend, behind the
 //!   `onnx` feature. Targets F1.
 //! * [`candle::CandleBackend`] — loads HF `safetensors` ModernBERT directly with
 //!   candle (no ONNX/Python), behind the `candle` feature. The primary
@@ -17,12 +17,12 @@
 
 #[cfg(feature = "candle")]
 pub mod candle;
+#[cfg(feature = "clef")]
+pub mod clef;
 #[cfg(feature = "candle")]
 pub mod device;
 #[cfg(feature = "candle")]
 pub mod kev;
-#[cfg(feature = "clef")]
-pub mod clef;
 pub mod mock;
 pub mod null;
 #[cfg(feature = "onnx")]
@@ -32,14 +32,25 @@ pub mod qwen3_5;
 
 #[cfg(feature = "candle")]
 pub use candle::CandleBackend;
-pub use mock::MockBackend;
 #[cfg(feature = "clef")]
 pub use clef::ClefBackend;
+pub use mock::MockBackend;
 pub use null::NullBackend;
 #[cfg(feature = "onnx")]
 pub use onnx::OnnxBackend;
 #[cfg(feature = "candle")]
 pub use qwen3_5::Qwen3_5Backend;
+
+/// Process-unique handles prevent an ID from one model accidentally selecting
+/// another model's live prefix. Allocation never wraps and reuses an old ID.
+fn next_cache_handle() -> huncho_core::error::Result<huncho_core::backend::CacheHandle> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    let id = NEXT
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+        .map_err(|_| huncho_core::error::Error::Backend("cache handle space exhausted".into()))?;
+    Ok(huncho_core::backend::CacheHandle { id })
+}
 
 #[cfg(feature = "candle")]
 fn device_label(device: &::candle::Device) -> String {

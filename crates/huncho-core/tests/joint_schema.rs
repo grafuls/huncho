@@ -17,6 +17,7 @@ use serde_json::json;
 struct JointBackend {
     calls: Arc<AtomicUsize>,
     output: RequestOutput,
+    check_order: bool,
 }
 
 impl Backend for JointBackend {
@@ -42,14 +43,16 @@ impl Backend for JointBackend {
         max_context: usize,
     ) -> Result<RequestOutput> {
         assert_eq!(request.questions.len(), 3);
-        assert_eq!(
-            request
-                .questions
-                .keys()
-                .map(String::as_str)
-                .collect::<Vec<_>>(),
-            vec!["c", "a", "b"]
-        );
+        if self.check_order {
+            assert_eq!(
+                request
+                    .questions
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+                vec!["c", "a", "b"]
+            );
+        }
         assert_eq!(max_context, 512);
         self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(self.output.clone())
@@ -74,6 +77,10 @@ fn output() -> RequestOutput {
 }
 
 fn engine(output: RequestOutput) -> (Engine, Arc<AtomicUsize>) {
+    engine_with_order_check(output, true)
+}
+
+fn engine_with_order_check(output: RequestOutput, check_order: bool) -> (Engine, Arc<AtomicUsize>) {
     let manifest: ModelManifest = serde_json::from_value(json!({
         "schema_version": "1.0", "name": "clef", "family": "F5",
         "backbone": {"source": {"kind": "local", "path": "."}, "hidden_size": 16, "max_context": 512},
@@ -88,14 +95,49 @@ fn engine(output: RequestOutput) -> (Engine, Arc<AtomicUsize>) {
         Box::new(JointBackend {
             calls: calls.clone(),
             output,
+            check_order,
         }),
         Box::new(SimpleTokenizer::new(32768)),
         HeadParams::default(),
         BackendId::Clef,
         "bf16",
     )
-    .unwrap();
+    .unwrap()
+    .with_prompt_cache(1024 * 1024);
     (engine, calls)
+}
+
+#[test]
+fn joint_result_reuse_requires_the_complete_ordered_schema() {
+    let (engine, calls) = engine_with_order_check(output(), false);
+    let engine = engine.with_result_cache(1024 * 1024);
+    let opts = EvalOptions {
+        extensions: true,
+        ..Default::default()
+    };
+    let mut request = request();
+    let original = engine.eval(&request, &opts).unwrap();
+    let cached = engine.eval(&request, &opts).unwrap();
+    assert_eq!(
+        serde_json::to_vec(&original).unwrap(),
+        serde_json::to_vec(&cached).unwrap()
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    request.questions.reverse();
+    engine.eval(&request, &opts).unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    if let huncho_core::contract::Question::Choice { criteria, .. } = &mut request.questions["a"] {
+        criteria.reverse();
+    }
+    let changed = engine.eval(&request, &opts).unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
+    assert!(matches!(&changed.answers["a"], Answer::Choice { choice, .. } if choice == "b"));
+    let repeated = engine.eval(&request, &opts).unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
+    assert_eq!(
+        serde_json::to_vec(&changed).unwrap(),
+        serde_json::to_vec(&repeated).unwrap()
+    );
 }
 
 #[test]

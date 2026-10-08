@@ -31,8 +31,8 @@ pub fn softmax(logits: &[f32]) -> Vec<f32> {
 
 /// Softmax with temperature scaling.
 ///
-/// `temperature <= 0` is rejected by the caller via [`softmax_temperature`];
-/// this function panics only on NaN/Inf inputs.
+/// This unchecked helper requires a positive finite temperature and finite
+/// logits. Use [`calibrate`] to validate model outputs before serving them.
 pub fn softmax_temperature(logits: &[f32], temperature: f32) -> Vec<f32> {
     if logits.is_empty() {
         return Vec::new();
@@ -156,14 +156,23 @@ pub fn confidence(probs: &[f32], def: &ConfidenceDef) -> f32 {
 }
 
 /// Apply temperature and softmax to a logit vector, returning calibrated
-/// probabilities. Validates temperature is positive.
+/// probabilities. Rejects nonfinite logits and invalid temperatures.
 pub fn calibrate(logits: &[f32], temperature: f32) -> Result<Vec<f32>> {
     if !temperature.is_finite() || temperature <= 0.0 {
         return Err(Error::Calibration(format!(
             "temperature must be positive and finite, got {temperature}"
         )));
     }
-    Ok(softmax_temperature(logits, temperature))
+    if logits.iter().any(|value| !value.is_finite()) {
+        return Err(Error::Calibration("logits must be finite".into()));
+    }
+    let probabilities = softmax_temperature(logits, temperature);
+    if probabilities.iter().any(|value| !value.is_finite()) {
+        return Err(Error::Calibration(
+            "temperature scaling produced nonfinite probabilities".into(),
+        ));
+    }
+    Ok(probabilities)
 }
 
 /// Fit a single scalar temperature that minimizes NLL on `(logits, target)`
@@ -175,6 +184,13 @@ pub fn fit_temperature(rows: &[Vec<f32>], targets: &[usize]) -> Result<(f32, f64
         return Err(Error::Calibration(
             "fit_temperature requires matching non-empty rows/targets".into(),
         ));
+    }
+    for (index, (row, &target)) in rows.iter().zip(targets).enumerate() {
+        if row.is_empty() || target >= row.len() || row.iter().any(|value| !value.is_finite()) {
+            return Err(Error::Calibration(format!(
+                "invalid logits or target in fit row {index}"
+            )));
+        }
     }
     // Scalar search over log-space temperature.
     let nll = |t: f64| -> f64 {
@@ -229,10 +245,12 @@ pub fn ece(preds: &[f32], correct: &[bool], bins: usize) -> f32 {
     }
     let bins = bins.max(1);
     let mut bin_acc = vec![0.0f64; bins];
+    let mut bin_conf = vec![0.0f64; bins];
     let mut bin_cnt = vec![0usize; bins];
     for (p, &c) in preds.iter().zip(correct) {
         let idx = ((*p as f64 * bins as f64) as usize).min(bins - 1);
         bin_cnt[idx] += 1;
+        bin_conf[idx] += *p as f64;
         if c {
             bin_acc[idx] += 1.0;
         }
@@ -243,7 +261,7 @@ pub fn ece(preds: &[f32], correct: &[bool], bins: usize) -> f32 {
             continue;
         }
         let accuracy = bin_acc[i] / bin_cnt[i] as f64;
-        let confidence = (i as f64 + 0.5) / bins as f64;
+        let confidence = bin_conf[i] / bin_cnt[i] as f64;
         total += (bin_cnt[i] as f64 / preds.len() as f64) * (accuracy - confidence).abs();
     }
     total as f32
@@ -347,5 +365,27 @@ mod tests {
         }
         let e = ece(&preds, &correct, 10);
         assert!(e < 0.1, "ece={e}");
+    }
+
+    #[test]
+    fn ece_uses_actual_confidence_and_includes_endpoints() {
+        assert!((ece(&[0.52, 0.54], &[true, false], 10) - 0.03).abs() < 1e-6);
+        assert!((ece(&[0.99], &[false], 10) - 0.99).abs() < 1e-6);
+        assert_eq!(ece(&[0.0, 1.0], &[false, true], 10), 0.0);
+    }
+
+    #[test]
+    fn rejects_invalid_inference_and_fit_inputs() {
+        for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert!(calibrate(&[1.0, invalid], 1.0).is_err());
+            assert!(fit_temperature(&[vec![1.0, invalid]], &[0]).is_err());
+        }
+        assert!(calibrate(&[1.0, 2.0], f32::from_bits(1)).is_err());
+        assert!(fit_temperature(&[vec![]], &[0]).is_err());
+        assert!(fit_temperature(&[vec![1.0, 2.0]], &[2]).is_err());
+        assert_eq!(
+            calibrate(&[1.0, -2.0, 3.0], 2.40605).unwrap(),
+            softmax_temperature(&[1.0, -2.0, 3.0], 2.40605)
+        );
     }
 }

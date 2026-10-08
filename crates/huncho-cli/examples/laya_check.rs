@@ -40,15 +40,16 @@ fn to_question(q: &serde_json::Value) -> serde_json::Value {
 }
 
 fn main() -> anyhow::Result<()> {
-    let cases_path = std::env::args().nth(1).unwrap_or_else(|| "/tmp/laya_cases.json".into());
+    let cases_path = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "/tmp/laya_cases.json".into());
     let dir = PathBuf::from("my-laya");
 
     let manifest = ModelManifest::load(dir.join("huncho-model.json"))?;
     let reporting_tok = HfTokenizer::from_file(dir.join("tokenizer.json"))?;
     let formatter = formatter_for(&manifest);
 
-    let cases: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&cases_path)?)?;
+    let cases: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&cases_path)?)?;
 
     // Report the token sequence + marker positions the formatter emits, per case.
     for c in cases.as_array().unwrap() {
@@ -86,7 +87,13 @@ fn main() -> anyhow::Result<()> {
             "model": "laya",
             "questions": { name: to_question(&c["q"]) },
         }))?;
-        let resp = engine.eval(&req, &EvalOptions { extensions: true, max_context: None })?;
+        let resp = engine.eval(
+            &req,
+            &EvalOptions {
+                extensions: true,
+                ..Default::default()
+            },
+        )?;
         let logits = resp
             .extensions
             .as_ref()

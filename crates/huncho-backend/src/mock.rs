@@ -25,7 +25,6 @@ pub struct MockBackend {
     dtype: String,
     families: Vec<Family>,
     supports_fork: bool,
-    next_cache: u64,
     /// Simple "KV" store that records prefilled token prefixes so `fork` can
     /// reconstruct branch inputs. Reproducible and cheap.
     caches: BTreeMap<u64, Vec<u32>>,
@@ -44,7 +43,6 @@ impl MockBackend {
             dtype: "fp32".into(),
             families: vec![Family::F1, Family::F2, Family::F3, Family::F4],
             supports_fork: true,
-            next_cache: 1,
             caches: BTreeMap::new(),
         }
     }
@@ -107,18 +105,37 @@ impl Backend for MockBackend {
             )));
         }
         if input.retain_cache {
-            let id = self.next_cache;
-            self.next_cache += 1;
-            self.caches.insert(id, input.tokens.clone());
-            return Ok(ForwardOutput::Features {
-                positions: input.positions.clone(),
-                values: self.features_for(&input.tokens, &input.positions)?,
-            });
+            return Err(huncho_core::error::Error::Unsupported(
+                "use prefill to obtain a cache handle".into(),
+            ));
         }
         if let Some(src) = input.fork_from {
-            // When forked, the branch tokens were already reconstructed by the
-            // caller to include the prefix; just compute logits for them.
-            self.caches.insert(src.id, input.tokens.clone());
+            let prefix = self
+                .caches
+                .get(&src.id)
+                .ok_or_else(|| huncho_core::error::Error::Backend("cache not found".into()))?;
+            if prefix.len() + input.tokens.len() > self.max_context {
+                return Err(huncho_core::error::Error::Backend(
+                    "cached sequence exceeds mock max_context".into(),
+                ));
+            }
+            let positions = input
+                .positions
+                .iter()
+                .map(|&position| {
+                    position.checked_add(prefix.len()).ok_or_else(|| {
+                        huncho_core::error::Error::Backend("cached position overflow".into())
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let mut tokens = prefix.clone();
+            tokens.extend(&input.tokens);
+            let values = self.features_for(&tokens, &positions)?;
+            self.caches.insert(src.id, tokens);
+            return Ok(ForwardOutput::Features {
+                positions: input.positions,
+                values,
+            });
         }
         let values = self.features_for(&input.tokens, &input.positions)?;
         Ok(ForwardOutput::Features {
@@ -134,17 +151,28 @@ impl Backend for MockBackend {
                 handle.id
             )));
         }
-        let id = self.next_cache;
-        self.next_cache += 1;
-        self.caches.insert(id, self.caches[&handle.id].clone());
-        Ok(CacheHandle { id })
+        let child = crate::next_cache_handle()?;
+        self.caches
+            .insert(child.id, self.caches[&handle.id].clone());
+        Ok(child)
     }
 
     fn prefill(&mut self, tokens: &[u32]) -> Result<CacheHandle> {
-        let id = self.next_cache;
-        self.next_cache += 1;
-        self.caches.insert(id, tokens.to_vec());
-        Ok(CacheHandle { id })
+        if tokens.is_empty() || tokens.len() > self.max_context {
+            return Err(huncho_core::error::Error::Backend(
+                "prefill must be nonempty and within max_context".into(),
+            ));
+        }
+        let handle = crate::next_cache_handle()?;
+        self.caches.insert(handle.id, tokens.to_vec());
+        Ok(handle)
+    }
+
+    fn release_cache(&mut self, handle: CacheHandle) -> Result<()> {
+        self.caches
+            .remove(&handle.id)
+            .map(|_| ())
+            .ok_or_else(|| huncho_core::error::Error::Backend("cache not found".into()))
     }
 }
 

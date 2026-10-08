@@ -6,8 +6,8 @@
 
 use std::collections::BTreeMap;
 
-use crate::error::Result;
 use crate::contract::SystemOneRequest;
+use crate::error::Result;
 use crate::manifest::{BackendId, Family};
 use crate::tensor::Tensor;
 
@@ -28,23 +28,27 @@ pub struct RequestOutput {
 
 /// The input to a single [`Backend::forward`] call.
 ///
-/// v1 processes one sequence per call; the scheduler (CORE-07) is responsible
-/// for grouping model-identical requests into a batch by issuing concurrent
-/// forwards.
+/// Processes one sequence per call. Concurrent calls are not a batch; a future
+/// scheduler (CORE-07) needs an explicit backend batching interface.
 #[derive(Debug, Clone)]
 pub struct ForwardInput {
-    /// Token ids for the sequence.
+    /// Token ids for the sequence; only new suffix tokens when `fork_from` is set.
     pub tokens: Vec<u32>,
     /// Positions (0-based into `tokens`) to read features/logits from. Must be
     /// sorted ascending; each row of the output corresponds to one position.
     pub positions: Vec<usize>,
+    /// Optional sorted, unique vocabulary codes needed by a candidate-logit
+    /// head. Backends may return only these columns using `SelectedLogits`, or
+    /// ignore the hint and return the full vocabulary as before.
+    pub logit_codes: Option<Vec<u32>>,
     /// The typed-question index for the Laya decision head type embedding
     /// (`0`=choice, `1`=score, `2`=noul). Unused by backends that do not
     /// implement the typed option-marker head.
     pub qtype: u32,
-    /// When set, also prefill the sequence and retain a cache handle.
+    /// Legacy retention hint. Use `Backend::prefill` to obtain an explicit handle.
     pub retain_cache: bool,
-    /// When set, fork from this prefill instead of running from scratch.
+    /// Continue this isolated branch with suffix tokens. Positions are relative
+    /// to the supplied suffix, and the backend must account for prefix offsets.
     pub fork_from: Option<CacheHandle>,
 }
 
@@ -53,6 +57,7 @@ impl ForwardInput {
         ForwardInput {
             tokens,
             positions,
+            logit_codes: None,
             qtype: 0,
             retain_cache: false,
             fork_from: None,
@@ -64,16 +69,37 @@ impl ForwardInput {
         self.qtype = qtype;
         self
     }
+
+    /// Request raw logits for these codes without changing candidate order.
+    pub fn with_logit_codes(mut self, mut codes: Vec<u32>) -> Self {
+        codes.sort_unstable();
+        codes.dedup();
+        self.logit_codes = Some(codes);
+        self
+    }
 }
 
 /// The output of a [`Backend::forward`] call.
 #[derive(Debug, Clone)]
 pub enum ForwardOutput {
     /// Hidden states at the requested positions. Shape `[n_positions, dim]`.
-    Features { positions: Vec<usize>, values: Tensor },
+    Features {
+        positions: Vec<usize>,
+        values: Tensor,
+    },
     /// Logits over the vocabulary at the requested positions.
     /// Shape `[n_positions, vocab_size]`.
-    Logits { positions: Vec<usize>, values: Tensor },
+    Logits {
+        positions: Vec<usize>,
+        values: Tensor,
+    },
+    /// Raw vocabulary logits for explicitly identified columns only.
+    /// Shape `[n_positions, codes.len()]`; no activation or calibration applied.
+    SelectedLogits {
+        positions: Vec<usize>,
+        codes: Vec<u32>,
+        values: Tensor,
+    },
 }
 
 impl ForwardOutput {
@@ -82,6 +108,7 @@ impl ForwardOutput {
         match self {
             ForwardOutput::Features { positions, .. } => positions,
             ForwardOutput::Logits { positions, .. } => positions,
+            ForwardOutput::SelectedLogits { positions, .. } => positions,
         }
     }
 
@@ -90,6 +117,7 @@ impl ForwardOutput {
         match self {
             ForwardOutput::Features { values, .. } => values,
             ForwardOutput::Logits { values, .. } => values,
+            ForwardOutput::SelectedLogits { values, .. } => values,
         }
     }
 }
@@ -128,6 +156,21 @@ pub trait Backend: Send + Sync {
     /// supported; fan-out is expressed via `fork_from`.
     fn forward(&mut self, input: ForwardInput) -> Result<ForwardOutput>;
 
+    /// Whether independent, equal-length sequences can share one native
+    /// backbone call. This does not imply padding or cached-branch batching.
+    fn supports_batch(&self) -> bool {
+        false
+    }
+
+    /// Run up to 64 independent equal-length sequences, returning one output
+    /// per input in the same order. Each row retains its own positions, codes,
+    /// and question type; no cross-row attention is permitted.
+    fn forward_batch(&mut self, _inputs: Vec<ForwardInput>) -> Result<Vec<ForwardOutput>> {
+        Err(crate::error::Error::Unsupported(
+            "backend does not expose native batching".into(),
+        ))
+    }
+
     /// Encode and score all questions jointly (F5). Calibration stays in core.
     fn forward_request(
         &mut self,
@@ -145,18 +188,17 @@ pub trait Backend: Send + Sync {
     fn fork(&mut self, handle: CacheHandle) -> Result<CacheHandle>;
 
     /// Prefill a sequence and return a cache handle without reading outputs.
-    fn prefill(&mut self, tokens: &[u32]) -> Result<CacheHandle> {
-        let input = ForwardInput {
-            tokens: tokens.to_vec(),
-            positions: Vec::new(),
-            qtype: 0,
-            retain_cache: true,
-            fork_from: None,
-        };
-        // Default: forward with no positions and rely on `retain_cache`.
-        let _ = self.forward(input)?;
+    fn prefill(&mut self, _tokens: &[u32]) -> Result<CacheHandle> {
         Err(crate::error::Error::Unsupported(
             "backend does not expose a prefill handle".into(),
+        ))
+    }
+
+    /// Release a prefix or branch after use. Handles must belong to this loaded
+    /// backend; releasing a parent must not invalidate its immutable forks.
+    fn release_cache(&mut self, _handle: CacheHandle) -> Result<()> {
+        Err(crate::error::Error::Unsupported(
+            "backend does not expose cache release".into(),
         ))
     }
 }

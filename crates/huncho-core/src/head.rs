@@ -47,15 +47,33 @@ impl Linear {
             return Vec::new();
         }
         let mut out = self.bias.clone();
-        for o in 0..self.out_dim {
-            let base = o * self.in_dim;
-            let mut acc = 0.0f32;
-            for i in 0..self.in_dim {
-                acc += self.weight[base + i] * x[i];
-            }
-            out[o] += acc;
+        for (o, value) in out.iter_mut().enumerate() {
+            *value = self.project_row(x, o);
         }
         out
+    }
+
+    /// Project into caller-owned storage, retaining the scalar accumulation
+    /// order used by `apply` so buffer reuse does not change calibration.
+    pub fn apply_into(&self, x: &[f32], out: &mut [f32]) -> Result<()> {
+        if x.len() != self.in_dim || out.len() != self.out_dim {
+            return Err(Error::Backend(
+                "linear input/output dimensions do not match".into(),
+            ));
+        }
+        for (o, value) in out.iter_mut().enumerate() {
+            *value = self.project_row(x, o);
+        }
+        Ok(())
+    }
+
+    fn project_row(&self, x: &[f32], row: usize) -> f32 {
+        let base = row * self.in_dim;
+        let mut acc = 0.0f32;
+        for (&weight, &value) in self.weight[base..base + self.in_dim].iter().zip(x) {
+            acc += weight * value;
+        }
+        self.bias[row] + acc
     }
 }
 
@@ -81,18 +99,38 @@ impl HeadParams {
     }
 }
 
-/// Find the output row index for a given token position.
-fn row_for_position(output: &ForwardOutput, position: usize) -> Result<usize> {
-    output
-        .positions()
-        .iter()
-        .position(|&p| p == position)
-        .ok_or_else(|| {
-            Error::Backend(format!(
-                "requested position {position} not present in forward output (positions {:?})",
-                output.positions()
-            ))
-        })
+/// Borrow an index once. Ordered backend outputs need no allocation and permit
+/// logarithmic lookup; legacy unordered outputs retain first-match behavior.
+struct ReadoutIndex<'a, T> {
+    keys: &'a [T],
+    sorted: bool,
+}
+
+impl<'a, T: Ord> ReadoutIndex<'a, T> {
+    fn new(keys: &'a [T]) -> Self {
+        Self {
+            keys,
+            sorted: keys.windows(2).all(|pair| pair[0] <= pair[1]),
+        }
+    }
+
+    fn get(&self, key: &T) -> Option<usize> {
+        if self.sorted {
+            let index = self.keys.partition_point(|value| value < key);
+            (self.keys.get(index) == Some(key)).then_some(index)
+        } else {
+            self.keys.iter().position(|value| value == key)
+        }
+    }
+}
+
+fn row_for_position(index: &ReadoutIndex<'_, usize>, position: usize) -> Result<usize> {
+    index.get(&position).ok_or_else(|| {
+        Error::Backend(format!(
+            "requested position {position} not present in forward output (positions {:?})",
+            index.keys
+        ))
+    })
 }
 
 /// Compute per-candidate logits from a backend output.
@@ -113,15 +151,14 @@ pub fn candidate_logits(
         return Ok(Vec::new());
     }
 
+    let positions = ReadoutIndex::new(output.positions());
     match output {
         ForwardOutput::Logits { values, .. } => {
             let vocab = values.shape().last().copied().unwrap_or(0);
             let mut logits = Vec::with_capacity(candidates.len());
             for c in candidates {
-                let row = row_for_position(output, c.position)?;
-                let feat = values
-                    .row(row)
-                    .map_err(|e| Error::Backend(e.to_string()))?;
+                let row = row_for_position(&positions, c.position)?;
+                let feat = values.row(row).map_err(|e| Error::Backend(e.to_string()))?;
                 let code = c.code_id as usize;
                 if code >= vocab {
                     return Err(Error::Backend(format!(
@@ -132,16 +169,33 @@ pub fn candidate_logits(
             }
             Ok(logits)
         }
+        ForwardOutput::SelectedLogits { codes, values, .. } => {
+            if values.shape() != [output.positions().len(), codes.len()] {
+                return Err(Error::Backend(
+                    "selected-logit dimensions do not match positions/codes".into(),
+                ));
+            }
+            let codes = ReadoutIndex::new(codes);
+            let mut logits = Vec::with_capacity(candidates.len());
+            for candidate in candidates {
+                let row = row_for_position(&positions, candidate.position)?;
+                let column = codes.get(&candidate.code_id).ok_or_else(|| {
+                    Error::Backend(format!(
+                        "candidate code {} missing from selected logits",
+                        candidate.code_id
+                    ))
+                })?;
+                logits.push(values.row(row).map_err(|e| Error::Backend(e.to_string()))?[column]);
+            }
+            Ok(logits)
+        }
         ForwardOutput::Features { values, .. } => {
             let dim = values.shape().last().copied().unwrap_or(0);
             let mut logits = Vec::with_capacity(candidates.len());
             for c in candidates {
-                let row = row_for_position(output, c.position)?;
-                let feat: Vec<f32> = values
-                    .row(row)
-                    .map_err(|e| Error::Backend(e.to_string()))?
-                    .to_vec();
-                logits.push(project_feature(family, head_kind, dim, &feat, params)?);
+                let row = row_for_position(&positions, c.position)?;
+                let feat = values.row(row).map_err(|e| Error::Backend(e.to_string()))?;
+                logits.push(project_feature(family, head_kind, dim, feat, params)?);
             }
             Ok(logits)
         }
@@ -156,14 +210,20 @@ fn project_feature(
     params: &HeadParams,
 ) -> Result<f32> {
     if let Some(linear) = &params.linear {
-        let out = linear.apply(feat);
-        if out.len() != 1 {
+        if linear.out_dim != 1 {
             return Err(Error::Package(format!(
                 "expected linear head to output 1 logit, got {}",
-                out.len()
+                linear.out_dim
             )));
         }
-        return Ok(out[0]);
+        if feat.len() != linear.in_dim {
+            return Err(Error::Package(format!(
+                "linear head expects {} features, got {}",
+                linear.in_dim,
+                feat.len()
+            )));
+        }
+        return Ok(linear.project_row(feat, 0));
     }
     // Deterministic fallback when no head weights are present: the mean activation.
     if dim == 0 || feat.len() != dim {
@@ -206,7 +266,14 @@ mod tests {
             values,
         };
         let c = cands(2, 3, 7);
-        let logits = candidate_logits(Family::F3, HeadKind::CandidateLogit, &out, &c, &HeadParams::default()).unwrap();
+        let logits = candidate_logits(
+            Family::F3,
+            HeadKind::CandidateLogit,
+            &out,
+            &c,
+            &HeadParams::default(),
+        )
+        .unwrap();
         assert_eq!(logits, vec![2.5, -1.5]);
     }
 
@@ -242,7 +309,71 @@ mod tests {
                 index: 1,
             },
         ];
-        let logits = candidate_logits(Family::F1, HeadKind::OptionMarker, &out, &c, &params).unwrap();
+        let logits =
+            candidate_logits(Family::F1, HeadKind::OptionMarker, &out, &c, &params).unwrap();
         assert_eq!(logits, vec![2.0 * 0.5 + 1.0, 2.0 * 1.0 + 1.0]);
+    }
+
+    #[test]
+    fn compact_logits_preserve_candidate_order_and_reject_missing_codes() {
+        let output = ForwardOutput::SelectedLogits {
+            positions: vec![2, 7],
+            codes: vec![3, 11, 29],
+            values: Tensor::new(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
+        };
+        let mut candidates = cands(3, 7, 0);
+        candidates[0].code_id = 29;
+        candidates[1].code_id = 3;
+        candidates[2].code_id = 11;
+        candidates[2].position = 2;
+        let logits = candidate_logits(
+            Family::F3,
+            HeadKind::CandidateLogit,
+            &output,
+            &candidates,
+            &HeadParams::default(),
+        )
+        .unwrap();
+        assert_eq!(logits, vec![6.0, 4.0, 2.0]);
+        candidates[0].code_id = 30;
+        assert!(candidate_logits(
+            Family::F3,
+            HeadKind::CandidateLogit,
+            &output,
+            &candidates,
+            &HeadParams::default()
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn row_lookup_preserves_first_match_for_sorted_and_unordered_outputs() {
+        for keys in [vec![2, 2, 7], vec![7, 2, 2]] {
+            let lookup = ReadoutIndex::new(&keys);
+            assert_eq!(lookup.get(&2), keys.iter().position(|&key| key == 2));
+            assert_eq!(lookup.get(&8), None);
+        }
+    }
+
+    #[test]
+    fn reused_linear_and_scalar_projection_preserve_accumulation_order() {
+        let linear = Linear::new(4, 1, vec![1e10, 1.0, -1e10, 0.25], vec![0.5]).unwrap();
+        let input = [1.0, 1.0, 1.0, 2.0];
+        let mut output = [99.0];
+        linear.apply_into(&input, &mut output).unwrap();
+        // Summing bias first or reassociating products would produce a different result.
+        assert_eq!(output, [1.0]);
+        let params = HeadParams {
+            linear: Some(linear.clone()),
+            pointer_offset: None,
+        };
+        assert_eq!(
+            project_feature(Family::F1, HeadKind::OptionMarker, 4, &input, &params)
+                .unwrap()
+                .to_bits(),
+            output[0].to_bits()
+        );
+        assert_eq!(linear.apply(&input), output);
+        assert!(linear.apply_into(&input[..3], &mut output).is_err());
     }
 }

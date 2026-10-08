@@ -168,6 +168,7 @@ fn main() -> anyhow::Result<()> {
             expected.insert(qid.clone(), expected_from_answer(answer));
         }
         golden_cases.push(GoldenCase {
+            targets: Default::default(),
             id: id.to_string(),
             request,
             expected,

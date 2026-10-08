@@ -5,6 +5,7 @@
 //! probability fidelity across backends and quantizations.
 
 pub mod backend;
+mod cache_key;
 pub mod calibration;
 pub mod conformance;
 pub mod contract;
@@ -13,6 +14,8 @@ pub mod error;
 pub mod head;
 pub mod manifest;
 pub mod prompt;
+mod prompt_cache;
+mod response_cache;
 pub mod tensor;
 pub mod tokenizer;
 
