@@ -147,7 +147,7 @@ fn real_cpu_receipts_reject_stale_inputs_options_goldens_and_outcome_substitutio
     )
     .unwrap();
     let receipt = tmp.path().join("receipt.json");
-    let generate = || {
+    let generate = |golden: &Path, receipt: &Path| {
         command()
             .args([
                 "conform",
@@ -168,7 +168,7 @@ fn real_cpu_receipts_reject_stale_inputs_options_goldens_and_outcome_substitutio
             .spawn()
             .unwrap()
     };
-    let output = wait_exit(Running(generate()));
+    let output = wait_exit(Running(generate(&golden, &receipt)));
     assert!(
         output.status.success(),
         "{}",
@@ -193,13 +193,13 @@ fn real_cpu_receipts_reject_stale_inputs_options_goldens_and_outcome_substitutio
             64
         );
     }
-    let output = wait_exit(Running(generate()));
+    let output = wait_exit(Running(generate(&golden, &receipt)));
     assert!(!output.status.success());
     assert_eq!(std::fs::read(&receipt).unwrap(), bytes);
 
-    let record_binding = format!("tiny-kev={}", receipt.display());
-    let golden_binding = format!("tiny-kev={}", golden.display());
-    let serve = |extra: &[&str]| {
+    let serve = |golden: &Path, receipt: &Path, extra: &[&str]| {
+        let record_binding = format!("tiny-kev={}", receipt.display());
+        let golden_binding = format!("tiny-kev={}", golden.display());
         let mut command = command();
         command
             .args([
@@ -222,11 +222,53 @@ fn real_cpu_receipts_reject_stale_inputs_options_goldens_and_outcome_substitutio
             .spawn()
             .unwrap()
     };
+    let output = wait_exit(Running(serve(&golden, &receipt, &[])));
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("observed target labels"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Synthetic fixture outcomes exercise receipt/coverage plumbing. They are
+    // fixed independently of model predictions and never qualify released Kev.
+    let mut labeled_cases = cases.clone();
+    for case in &mut labeled_cases {
+        case["targets"] = case["expected"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(id, distribution)| {
+                (
+                    id.clone(),
+                    json!(distribution.as_object().unwrap().keys().next().unwrap()),
+                )
+            })
+            .collect::<serde_json::Map<String, Value>>()
+            .into();
+    }
+    let golden = tmp.path().join("labeled-golden.json");
+    std::fs::write(
+        &golden,
+        serde_json::to_vec(&json!({"schema_version":"1.0","family":"F2","cases":labeled_cases}))
+            .unwrap(),
+    )
+    .unwrap();
+    let receipt = tmp.path().join("labeled-receipt.json");
+    let output = wait_exit(Running(generate(&golden, &receipt)));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let bytes = std::fs::read(&receipt).unwrap();
+    let record: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(record["outcome_gates_passed"], true);
     let reservation = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = reservation.local_addr().unwrap();
     drop(reservation);
     let address_string = address.to_string();
-    let mut running = Running(serve(&["--bind", &address_string]));
+    let mut running = Running(serve(&golden, &receipt, &["--bind", &address_string]));
     let start = Instant::now();
     loop {
         if let Ok(mut socket) = std::net::TcpStream::connect(address) {
@@ -249,23 +291,25 @@ fn real_cpu_receipts_reject_stale_inputs_options_goldens_and_outcome_substitutio
         std::thread::sleep(Duration::from_millis(20));
     }
     drop(running);
-    assert!(
-        !wait_exit(Running(serve(&["--max-prepared-per-model", "1"])))
-            .status
-            .success()
-    );
+    assert!(!wait_exit(Running(serve(
+        &golden,
+        &receipt,
+        &["--max-prepared-per-model", "1"]
+    )))
+    .status
+    .success());
     let old_golden = std::fs::read(&golden).unwrap();
     let mut changed = old_golden.clone();
     changed.push(b' ');
     std::fs::write(&golden, &changed).unwrap();
-    let output = wait_exit(Running(serve(&[])));
+    let output = wait_exit(Running(serve(&golden, &receipt, &[])));
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("does not match"));
     std::fs::write(&golden, &old_golden).unwrap();
     let mut substituted = record.clone();
-    substituted["outcome_gates_passed"] = json!(true);
+    substituted["outcome_gates_passed"] = json!(false);
     std::fs::write(&receipt, serde_json::to_vec(&substituted).unwrap()).unwrap();
-    let output = wait_exit(Running(serve(&[])));
+    let output = wait_exit(Running(serve(&golden, &receipt, &[])));
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("outcome gates"));
     std::fs::write(&receipt, &bytes).unwrap();
@@ -275,7 +319,7 @@ fn real_cpu_receipts_reject_stale_inputs_options_goldens_and_outcome_substitutio
     let mut config = std::fs::read(&config_path).unwrap();
     config.push(b' ');
     std::fs::write(&config_path, config).unwrap();
-    let output = wait_exit(Running(serve(&[])));
+    let output = wait_exit(Running(serve(&golden, &receipt, &[])));
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("does not match"));
 }

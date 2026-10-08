@@ -1,9 +1,11 @@
 # Calibration & confidence
 
 `calibrated probabilities stay calibrated` is the core differentiator of `huncho`.
-The engine applies a per-(backend, dtype) temperature to the head logits before
-softmax, so that probabilities are calibrated across backends and
-quantizations. Confidence is computed using the documented definition.
+The engine applies a per-(backend, dtype) temperature to head logits before
+softmax. Temperature scaling alone does not establish empirical calibration.
+Every real serving runtime must pass fresh complete labeled conformance for
+its loaded execution profile, including an unoptimized package marked `fit`.
+Confidence is computed using the documented definition.
 
 ## Pipeline
 
@@ -74,9 +76,27 @@ know which formula was applied.
 - **ECE drift** — the difference between the backend's and the reference's
   expected calibration error. Default bound `0.02`.
 
-The suite passes only if all three meet their thresholds. A backend (or
-quantized variant) that fails must ship with **refitted** temperatures or be
-rejected.
+The suite passes only if all three meet their thresholds. A refit must also
+pass those unchanged gates; a failed variant remains rejected. Fit and final
+evaluation inputs must be separate, and evaluation labels must cover every
+question. Unlabeled numerical agreement is diagnostic evidence.
+
+`serve --qualification-golden MODEL=PATH` is required for native Candle,
+Clef, ONNX and llama.cpp execution, even without optimization flags or a
+refitted entry. Every replica is checked concurrently before the listener
+opens. The runtime reports `native_execution` in its capabilities/receipts;
+the explicit offline mock retains its demo path. Source `fit` metadata, a
+`default` fallback temperature or a retained unsigned receipt cannot replace
+fresh outcome checks. Quantized variants additionally require an exact
+backend:dtype `refit` entry. Library inference, `bench` and numerical-only
+`conform` remain available for analysis and do not authorize serving.
+
+This rule closes a measured portability gap: the released Kev CPU FP32
+profile fails the complete held-out probability-delta gate, despite fitted
+upstream metadata and passing argmax/ECE-drift checks. Original and buffered
+CPU logits match on its eight worst cases; CPU FP16 also differs on selected
+cases. [Retained CPU evidence](verification/kev-cpu-heldout-20261008/summary.json)
+records the failure without changing temperatures or reference vectors.
 
 ## Reference values
 

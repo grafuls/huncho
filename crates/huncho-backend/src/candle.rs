@@ -248,7 +248,10 @@ impl Backend for CandleBackend {
     }
 
     fn capabilities(&self) -> Capabilities {
-        let mut extra = BTreeMap::from([("device".into(), crate::device_label(&self.device))]);
+        let mut extra = BTreeMap::from([
+            ("device".into(), crate::device_label(&self.device)),
+            ("native_execution".into(), "candle-modernbert-v1".into()),
+        ]);
         crate::cpu_profile::record(&mut extra);
         if self.device.is_cuda() {
             extra.insert("device_path".into(), "modernbert-cuda".into());

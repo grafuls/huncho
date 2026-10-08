@@ -179,6 +179,7 @@ impl LlamaCppBackend {
             .into_owned();
         let mut extra = BTreeMap::from([
             ("device".into(), "CPU".into()),
+            ("native_execution".into(), "llamacpp-qwen35-v1".into()),
             ("runtime".into(), PIN.into()),
             ("runtime_version".into(), version),
             (

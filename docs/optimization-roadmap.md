@@ -919,3 +919,24 @@ unrefitted and supplies no observed calibration acceptance. Released model
 conversion/fitting/held-out acceptance, controlled CPU performance/RSS and
 other quantizers remain open. See [conversion and limits](llamacpp.md#new-package-conversion).
 No actual GPU or Apple checks were performed.
+
+## Mandatory labeled startup gates for every real runtime (2026-10-08)
+
+O10/calibration enforcement now covers unoptimized Candle, Clef and ONNX loads,
+in addition to the already gated llama.cpp and changed arithmetic profiles.
+Every real implementation reports `native_execution`. `serve` requires a
+complete observed-label suite and fresh unchanged delta/argmax/ECE gates even
+when the loaded source entry says `fit` and no optimization flag is enabled.
+All actual replica contexts are still checked concurrently. Numerical-only
+receipts and default-temperature fallback cannot authorize a new execution.
+Offline mock demos and diagnostic bench/capture/conform remain available.
+
+This closes the measured gap exposed by CPU Kev drift: fitted upstream metadata
+could previously authorize an unoptimized backend whose worst held-out outputs
+fail the reference gate. Process regressions verify ordinary CPU Kev/F5 loads
+reject missing or unlabeled suites; native numerical receipts cannot start
+serving. Synthetic labeled fixture receipts still exercise successful startup,
+source/golden/option mutation and outcome-flag substitution without qualifying
+released models. This is an intentional startup compatibility change. General
+signed certificates, dataset-provenance enforcement and equivalent mandatory
+library gates remain open. No actual GPU or Apple checks were performed.

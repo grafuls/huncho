@@ -111,7 +111,7 @@ pub struct ServeArgs {
     #[arg(long, default_value_t = false, env = "HUNCHO_CANDIDATE_READOUT")]
     pub candidate_readout: bool,
 
-    /// Pinned conformance suite for optimized serving, MODEL=PATH (repeatable).
+    /// Pinned labeled conformance suite for every real runtime, MODEL=PATH.
     /// Startup checks both external goldens and independent-forward parity.
     #[arg(long = "qualification-golden")]
     pub qualification_golden: Vec<String>,
@@ -365,7 +365,7 @@ impl RecordBindings {
                     )
                 })?;
             let require_outcomes = engine.calibration().status == CalibrationStatus::Refit
-                || changed_arithmetic_profile(&engine)
+                || requires_outcome_qualification(&engine)
                 || engine.replica_engines().len() > 1;
             record.verify(
                 &engine,
@@ -382,8 +382,9 @@ impl RecordBindings {
     }
 }
 
-fn changed_arithmetic_profile(engine: &huncho_core::engine::Engine) -> bool {
+fn requires_outcome_qualification(engine: &huncho_core::engine::Engine) -> bool {
     [
+        "native_execution",
         "projection_chunk_rows",
         "attention_compute_dtype",
         "device_path",
@@ -448,7 +449,7 @@ fn qualify_optimizations(registry: &ModelRegistry, args: &ServeArgs) -> anyhow::
             anyhow::ensure!(exact.is_some_and(|entry| entry.status == CalibrationStatus::Refit),
                 "quantized serving for `{name}` requires an explicit backend:dtype refit; an inherited or fitted source entry is insufficient");
         }
-        let kernel_profile = changed_arithmetic_profile(engine);
+        let outcome_profile = requires_outcome_qualification(engine);
         let replicas = engine.replica_engines();
         let replicated = replicas.len() > 1;
         let opts = evaluation_options(engine, args);
@@ -466,17 +467,17 @@ fn qualify_optimizations(registry: &ModelRegistry, args: &ServeArgs) -> anyhow::
             && !(args.candidate_readout && engine.family() == Family::F3)
             && !paths.contains_key(name.as_str())
             && !refit
-            && !kernel_profile
+            && !outcome_profile
             && !readout_storage_profile
             && !opts.prepare_all
             && !replicated
         {
             continue;
         }
-        let path=paths.get(name.as_str()).ok_or_else(||anyhow::anyhow!("serving a refitted or optimized variant of `{name}` requires --qualification-golden {name}=/path/to/pinned-golden.json"))?;
+        let path=paths.get(name.as_str()).ok_or_else(||anyhow::anyhow!("serving a native, refitted or optimized variant of `{name}` requires --qualification-golden {name}=/path/to/pinned-golden.json"))?;
         let suite = load_suite(path)?;
-        anyhow::ensure!(!(refit || kernel_profile || replicated) || suite.cases.iter().any(|case| !case.targets.is_empty()),
-            "refitted or changed-kernel serving for `{name}` requires held-out golden vectors with observed target labels");
+        anyhow::ensure!(!(refit || outcome_profile || replicated) || suite.cases.iter().any(|case| !case.targets.is_empty()),
+            "native, refitted or changed-profile serving for `{name}` requires held-out golden vectors with observed target labels");
         let evaluate = |engine: &huncho_core::engine::Engine| -> huncho_core::Result<_> {
             if let Some(rows) = args.batch_max_requests.filter(|_| engine.supports_batch()) {
                 run_suite_with_cross_request_batches(
@@ -913,6 +914,7 @@ mod qualification_tests {
     #[test]
     fn changed_kernels_require_labeled_qualification_even_with_fit_metadata() {
         for (key, value) in [
+            ("native_execution", "candle-qwen35-v1"),
             ("projection_chunk_rows", "64"),
             ("attention_compute_dtype", "fp32"),
             ("device_path", "modernbert-cuda"),

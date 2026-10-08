@@ -2071,7 +2071,10 @@ impl Backend for Qwen3_5Backend {
     }
 
     fn capabilities(&self) -> Capabilities {
-        let mut extra = BTreeMap::from([("device".into(), crate::device_label(&self.device))]);
+        let mut extra = BTreeMap::from([
+            ("device".into(), crate::device_label(&self.device)),
+            ("native_execution".into(), "candle-qwen35-v1".into()),
+        ]);
         if self.base_weight_cache {
             extra.insert("base_weight_cache".into(), "content-checked-cpu-v1".into());
         }

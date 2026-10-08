@@ -147,6 +147,7 @@ impl ClefBackend {
             .min(config.max_position_embeddings)
             .min(manifest.prompt_contract.max_len);
         let extra = BTreeMap::from([
+            ("native_execution".into(), "candle-clef-v1".into()),
             ("runtime".into(), "candle".into()),
             ("device".into(), crate::device_label(&device)),
             ("media".into(), "text-json-only".into()),

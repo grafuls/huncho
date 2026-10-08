@@ -16,6 +16,12 @@ cache per question, and prefill each branch.
 
 ## Available backends
 
+Every real serving runtime requires a pinned complete observed-label startup
+suite via `--qualification-golden MODEL=PATH`, including unoptimized packages
+marked `fit`. Actual implementations report `native_execution`; temperature
+fallback and unsigned receipts cannot bypass fresh checks. Explicit offline
+mock demos retain their path. See [calibration gates](calibration.md#conformance-probability-fidelity).
+
 Clef uses a whole-request backend (`forward_request`) because its joint head
 scores all questions together. See [Clef setup](clef.md).
 
@@ -178,7 +184,8 @@ huncho convert --backend candle \
   --source ./laya-checkout \
   --out ./my-laya
 
-huncho serve --manifest ./my-laya/huncho-model.json
+huncho serve --manifest ./my-laya/huncho-model.json \
+  --qualification-golden 'MODEL_NAME=/path/to/pinned-labeled-golden.json'
 ```
 
 `--source` copies `config.json` (or `encoder/config.json`) to `config.json`, the
@@ -244,7 +251,9 @@ selected independently, so one server can load packages using different
 runtimes without per-model flags:
 
 ```bash
-huncho serve --model convaiinnovations/laya --model Cloudflare/clef
+huncho serve --model convaiinnovations/laya --model Cloudflare/clef \
+  --qualification-golden 'LAYA_MODEL_NAME=/path/to/laya-labeled-golden.json' \
+  --qualification-golden 'CLEF_MODEL_NAME=/path/to/clef-labeled-golden.json'
 ```
 
 The resolver reads package artifacts and the decision family. Raw Hub releases

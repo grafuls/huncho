@@ -631,7 +631,10 @@ impl Backend for OnnxBackend {
                     OnnxExecutionProvider::Cpu => "CPU".into(),
                     OnnxExecutionProvider::Cuda { device } => format!("GPU (CUDA device {device})"),
                 };
-                let mut extra = BTreeMap::from([("device".into(), device)]);
+                let mut extra = BTreeMap::from([
+                    ("device".into(), device),
+                    ("native_execution".into(), "onnxruntime-v1".into()),
+                ]);
                 #[cfg(feature = "onnx-shared")]
                 if let SessionSource::Shared(shared) = &self.source {
                     extra.insert(

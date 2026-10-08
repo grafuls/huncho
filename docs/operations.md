@@ -65,12 +65,15 @@ Serve one or more model manifests:
 
 ```bash
 huncho serve --manifest ./models/laya/huncho-model.json \
-  --manifest ./models/kev/huncho-model.json
+  --manifest ./models/kev/huncho-model.json \
+  --qualification-golden 'LAYA_MODEL_NAME=/path/to/laya-labeled-golden.json' \
+  --qualification-golden 'KEV_MODEL_NAME=/path/to/kev-labeled-golden.json'
 ```
 
 Huncho chooses a compatible backend for each model from its metadata and the
 runtimes included in the build. `--backend` is an optional override for all
 models in the command. A missing runtime produces a build hint.
+Use each manifest's registered name in its qualification binding.
 
 Serve a manifest using the mock backend (offline demo, no weights):
 
@@ -83,7 +86,8 @@ Serve a model package by Hugging Face repo id. The manifest
 cache, and all artifacts are pinned to the exact resolved commit:
 
 ```bash
-huncho serve --model convaiinnovations/laya --bind 127.0.0.1:8080
+huncho serve --model convaiinnovations/laya --bind 127.0.0.1:8080 \
+  --qualification-golden 'MODEL_NAME=/path/to/pinned-labeled-golden.json'
 ```
 
 While the repo is being resolved, a per-file progress bar is drawn to stderr
@@ -104,7 +108,8 @@ You can also reference a local package path or a manifest file through
 `--model`; it is resolved without any network access:
 
 ```bash
-huncho serve --model ./models/laya
+huncho serve --model ./models/laya \
+  --qualification-golden 'MODEL_NAME=/path/to/pinned-labeled-golden.json'
 ```
 
 > Requires building with `--features hf`. A local package is resolved whether or
@@ -133,7 +138,7 @@ huncho serve --model ./models/laya
 | `--prefix-cache` | Opt-in request-local Kev prefix fan-out; requires qualification for the loaded device/precision. |
 | `--max-batch-tokens` | Opt-in exact-length question batches, bounded by submitted token positions. Conflicts with prefix reuse. |
 | `--candidate-readout` | Opt-in F3 candidate-only projection, after qualification. |
-| `--qualification-golden MODEL=PATH` | Independent pinned suite for each optimized model; checked before the listener opens. Repeatable. |
+| `--qualification-golden MODEL=PATH` | Independent pinned labeled suite for every real runtime; checked before the listener opens. Repeatable. |
 | `--cache-dir` | Model cache directory; also seeds HF resolution (OPS-04). |
 
 Prefix reuse, native batching, upfront preparation and F3 candidate-only projection are off by default
@@ -149,9 +154,11 @@ CLI serving rejects pending calibration. Refitted entries require an explicit
 qualification suite with observed target labels for every question, even when
 no numerical optimization is enabled. Keep fitting inputs separate from those
 held-out cases; the CLI checks coverage and drift, not dataset provenance.
-Existing entries marked `fit` remain trusted unless an explicit suite or a
-numerical optimization triggers qualification. General execution certificates
-and equivalent enforcement for library callers remain open.
+Every native Candle, Clef, ONNX and llama.cpp runtime also requires complete
+labeled startup qualification with `fit` metadata and no optimization flags.
+Temperature fallback does not authorize a different backend/device/precision.
+The explicit offline mock retains its demo path. General signed execution
+certificates and equivalent enforcement for library callers remain open.
 
 `--max-prepared-per-model N` moves F1–F4 formatting/tokenization ahead of
 model execution on blocking workers. One slot covers a running preparation or
@@ -612,6 +619,24 @@ and total tensor tokens. This opt-in profile requires labeled pinned goldens
 and fresh startup conformance; enabled scheduling must perform actual batch work
 and pass the tighter independent-forward parity gate. CPU deterministic
 fixtures pass; real exported Laya graphs and CUDA batching remain unqualified.
+
+### Qualification of all real serving runtimes
+
+Every actual Candle, Clef, ONNX and llama.cpp runtime requires
+`--qualification-golden MODEL=PATH`, including an unoptimized source package
+marked `fit`. The suite must supply observed outcomes for every question and
+pass the unchanged external probability, argmax and ECE-drift gates before
+the listener opens. Replica pools gate every context concurrently; enabled
+cache/batch/preparation work still has its separate nonvacuous parity checks.
+Execution receipts retain `native_execution`, and an unsigned retained record
+cannot replace fresh conformance. Explicit offline mock demos remain available.
+
+This is an intentional startup compatibility change. Temperature lookup can
+still use a source `default`, but that metadata no longer authorizes a new
+backend/device/precision. The full Kev CPU FP32 held-out rejection demonstrates
+why the unoptimized path also needs the gate. A refit must pass the same
+unchanged thresholds; do not replace goldens with the variant's outputs.
+`bench`, raw-logit capture and diagnostic `conform` do not grant serving approval.
 
 ### Buffered CPU Gated DeltaNet recurrence
 

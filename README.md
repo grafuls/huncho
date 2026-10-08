@@ -87,13 +87,20 @@ Registering a model package from the Hugging Face Hub by repo id (build with
 `--features onnx,hf,tokenizers` for an ONNX package):
 
 ```bash
-cargo run --release -p huncho-cli --features onnx,hf,tokenizers -- serve --model my-org/laya
+cargo run --release -p huncho-cli --features onnx,hf,tokenizers -- serve --model my-org/laya \
+  --qualification-golden 'MODEL_NAME=/path/to/pinned-labeled-golden.json'
 ```
 
 `serve`, `bench`, and `conform` select a backend for each model automatically.
 Clef uses its native runtime; supported safetensors packages use Candle; ONNX
 packages use ONNX Runtime. `--backend` is an optional override. The required
 runtime must be included in the build; a missing runtime produces a build hint.
+
+Every real runtime, including unoptimized packages marked `fit`, requires fresh
+complete labeled startup conformance before serving. Use the manifest's name
+for `MODEL_NAME` and keep fitting inputs separate from the pinned evaluation
+suite. A failed variant remains rejected. Numerical-only `conform` and `bench`
+are available for analysis; see [calibration gates](docs/calibration.md).
 
 The manifest and the selected backend's artifacts are fetched into the HF cache,
 pinned to the resolved commit, so `serve --model` is deterministic across runs.
@@ -102,7 +109,8 @@ Serve Kev-4B natively with Candle (add the `cuda` feature for GPU support):
 
 ```bash
 cargo build --release -p huncho-cli --features hf,candle,tokenizers
-./target/release/huncho serve --model jaredpalmer/kev-4b --bind 127.0.0.1:8080
+./target/release/huncho serve --model jaredpalmer/kev-4b --bind 127.0.0.1:8080 \
+  --qualification-golden 'kev-4b=/path/to/pinned-labeled-golden.json'
 ```
 
 The first load downloads the adapter, tokenizer, pointer head, and the base
@@ -110,15 +118,16 @@ checkpoint pinned by `head.pt`. Requests use `"model": "kev-4b"`. The default
 is fp16 on CUDA and fp32 on CPU; `--dtype` overrides it. This path supports Qwen3.5 Kev
 LoRA checkpoints with up to 8,192 tokens per state-plus-question row. See
 [native Kev support](docs/backends.md#kev-f2-on-candle) for the loading contract
-and current limits.
+and current limits. The retained CPU FP32 held-out profile currently fails the
+probability-delta gate and is not accepted for serving.
 
-Serve a real ONNX artifact (`examples/mock-model` ships a 512-dim encoder and
-its conformance golden). Build with `--features onnx` (fetches a prebuilt ONNX
+Inspect a native ONNX artifact (`examples/mock-model` ships a 512-dim numerical
+fixture with no observed-outcome acceptance). Build with `--features onnx` (fetches a prebuilt ONNX
 Runtime at build time):
 
 ```bash
 cargo run --release -p huncho-cli --features onnx -- \
-  serve --manifest examples/mock-model/huncho-model.json
+  bench --manifest examples/mock-model/huncho-model.json --iterations 5
 
 cargo run --release -p huncho-cli --features onnx -- conform \
   --manifest examples/mock-model/huncho-model.json \
@@ -136,7 +145,8 @@ the `.safetensors` directly with `candle` (HF's Rust framework). Build with
 
 ```bash
 cargo run --release -p huncho-cli --features candle -- \
-  serve --manifest my-laya/huncho-model.json
+  serve --manifest my-laya/huncho-model.json \
+  --qualification-golden 'MODEL_NAME=/path/to/pinned-labeled-golden.json'
 ```
 
 `CandleBackend` loads `convaiinnovations/laya`'s ModernBERT encoder (remapping
@@ -159,7 +169,8 @@ Cloudflare Clef has a native Rust/Candle backend for text and JSON:
 
 ```bash
 cargo build --release -p huncho-cli --features clef
-./target/release/huncho serve --model Cloudflare/clef
+./target/release/huncho serve --model Cloudflare/clef \
+  --qualification-golden 'MODEL_NAME=/path/to/pinned-labeled-golden.json'
 ```
 
 No Python, pip dependencies, or model conversion is required. The command above
