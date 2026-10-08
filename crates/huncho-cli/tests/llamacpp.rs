@@ -10,11 +10,15 @@ fn command(args: &[&str]) -> Output {
     command_profile(args, 1)
 }
 fn command_profile(args: &[&str], batch_rows: usize) -> Output {
+    command_execution(args, batch_rows, 0)
+}
+fn command_execution(args: &[&str], batch_rows: usize, chunks: usize) -> Output {
     Command::new(env!("CARGO_BIN_EXE_huncho"))
         .args(args)
         .env("HUNCHO_DEVICE", "cpu")
         .env("HUNCHO_LLAMA_THREADS", "2")
         .env("HUNCHO_LLAMA_BATCH_ROWS", batch_rows.to_string())
+        .env("HUNCHO_PREFILL_CHUNK_TOKENS", chunks.to_string())
         .env("RAYON_NUM_THREADS", "1")
         .env("CANDLE_NUM_THREADS", "1")
         .env_remove("HUNCHO_BACKEND")
@@ -164,6 +168,46 @@ fn real_cpu_runtime_selects_exact_dtype_and_keeps_numerical_and_labeled_acceptan
     assert!(prefix["work"]["cache_forks"].as_u64().unwrap() > 0);
     assert!(prefix["work"]["persistent_prefix_hits"].as_u64().unwrap() > 0);
     assert!(prefix["outcome_calibration"].is_null());
+    let cooperative = command_execution(
+        &[
+            "conform",
+            "--model",
+            pkg.to_str().unwrap(),
+            "--golden",
+            golden.to_str().unwrap(),
+            "--prefix-cache",
+            "--cooperative-prefill",
+            "--json",
+        ],
+        1,
+        3,
+    );
+    assert!(
+        cooperative.status.success(),
+        "{}",
+        String::from_utf8_lossy(&cooperative.stderr)
+    );
+    let cooperative: Value = serde_json::from_slice(&cooperative.stdout).unwrap();
+    assert_eq!(cooperative["passed"], true);
+    assert_eq!(
+        cooperative["execution_metadata"]["prefill_chunk_tokens"],
+        "3"
+    );
+    assert_eq!(
+        cooperative["execution_metadata"]["llamacpp_prefill_execution"],
+        "cpu-full-state-chunks-v1"
+    );
+    assert!(cooperative["work"]["chunked_prefills"].as_u64().unwrap() > 0);
+    assert!(cooperative["work"]["prefill_yields"].as_u64().unwrap() > 0);
+    assert!(cooperative["work"]["prefill_interleaves"].as_u64().unwrap() > 0);
+    assert!(
+        cooperative["optimization_parity"]["max_prob_delta"]
+            .as_f64()
+            .unwrap()
+            <= 1e-4
+    );
+    assert_eq!(cooperative["optimization_parity"]["argmax_agreement"], 1.);
+    assert!(cooperative["outcome_calibration"].is_null());
     // Repeat every unchanged fixture case under a new ID to exercise equal
     // shapes across distinct requests. No predictions or targets are added.
     let data: Value = serde_json::from_slice(&std::fs::read(&golden).unwrap()).unwrap();

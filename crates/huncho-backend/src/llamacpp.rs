@@ -32,12 +32,15 @@ pub struct LlamaOptions {
     /// Native independent sequence slots (1..=8). One preserves the default
     /// context; larger values explicitly multiply KV/recurrent allocations.
     pub batch_rows: usize,
+    /// CPU full-state prefix chunks; zero preserves one-shot prefill (0..4096).
+    pub prefill_chunk_tokens: usize,
 }
 impl Default for LlamaOptions {
     fn default() -> Self {
         Self {
             threads: 1,
             batch_rows: 1,
+            prefill_chunk_tokens: 0,
         }
     }
 }
@@ -106,12 +109,14 @@ impl LlamaCppBackend {
         }
         if !(1..=256).contains(&options.threads)
             || !(1..=8).contains(&options.batch_rows)
+            || options.prefill_chunk_tokens > 4096
+            || (options.prefill_chunk_tokens > 0 && manifest.family != Family::F2)
             || manifest.backbone.max_context == 0
             || manifest.backbone.max_context > 65536
             || manifest.prompt_contract.max_options >= MAX_OUTPUTS
         {
             return Err(Error::Request(
-                "llama.cpp requires 1..256 CPU threads, 1..8 batch rows, 1..65536 context and at most 255 options"
+                "llama.cpp requires 1..256 CPU threads, 1..8 batch rows, F2 prefill chunks 0..4096, 1..65536 context and at most 255 options"
                     .into(),
             ));
         }
@@ -222,6 +227,16 @@ impl LlamaCppBackend {
                 "cpu-independent-sequences-v1".into(),
             );
         }
+        if options.prefill_chunk_tokens > 0 {
+            extra.insert(
+                "prefill_chunk_tokens".into(),
+                options.prefill_chunk_tokens.to_string(),
+            );
+            extra.insert(
+                "llamacpp_prefill_execution".into(),
+                "cpu-full-state-chunks-v1".into(),
+            );
+        }
         Ok(Self {
             context,
             readout: Arc::new(readout),
@@ -322,6 +337,7 @@ impl Backend for LlamaCppBackend {
         self.prefixes.insert(snapshot)
     }
     fn release_cache(&mut self, handle: CacheHandle) -> Result<()> {
+        self.prefixes.pending.remove(&handle.id);
         self.prefixes
             .handles
             .remove(&handle.id)
@@ -349,6 +365,24 @@ impl Backend for LlamaCppBackend {
     }
     fn supports_batch(&self) -> bool {
         self.options.batch_rows > 1
+    }
+    fn supports_resumable_prefill(&self) -> bool {
+        self.options.prefill_chunk_tokens > 0
+            && matches!(self.readout.as_ref(), Readout::Pointer(_))
+    }
+    fn begin_resumable_prefill(
+        &mut self,
+        tokens: &[u32],
+        max_bytes: usize,
+    ) -> Result<CachedPrefill> {
+        self.begin_chunked_prefix(tokens, max_bytes)
+    }
+    fn advance_resumable_prefill(
+        &mut self,
+        handle: CacheHandle,
+        work: &mut PrefillWork,
+    ) -> Result<bool> {
+        self.advance_chunked_prefix(handle, work)
     }
     fn batch_limits(&self) -> huncho_core::backend::BatchLimits {
         huncho_core::backend::BatchLimits {

@@ -70,8 +70,27 @@ retention uses a caller budget of 0–512 MiB and at most 16 exact token prefixe
 evicts FIFO, and defaults to zero. Clearing retention keeps live handles valid.
 Oversized snapshots fail explicitly; no tokens or cache state are truncated.
 This is CPU state-copy reuse, not paging or native multi-sequence attention.
-Copying a large recurrent state can outweigh prefill savings. Cooperative
-chunks and runtime multi-adapter attachment remain open.
+Copying a large recurrent state can outweigh prefill savings. Runtime
+multi-adapter attachment remains open.
+
+`HUNCHO_PREFILL_CHUNK_TOKENS=1..4096` enables CPU F2 prefix chunks; zero retains
+the original one-shot prefill. A private partial handle owns exact pending
+tokens and an immutable full hybrid snapshot. Each step clears native scratch,
+restores its own previous state, submits at most one chunk at absolute positions,
+then commits a new snapshot after successful serialization. Partial handles
+cannot be forked or used for readouts. Pending token capacity and entry storage
+are charged to the same 512 MiB limit; cancellation releases partial state.
+Completed prefixes can enter the existing exact FIFO retention cache.
+
+The existing `--cooperative-prefill --prefix-cache` scheduler can interleave
+these prefixes and whole questions without holding the backend lock between
+steps. Independent calls and native batches can run between steps without
+changing another partial prefix. This is CPU snapshot/restore scheduling;
+serialization adds work and is not a paged/device kernel. The chunk size and
+`llamacpp_prefill_execution=cpu-full-state-chunks-v1` bind the arithmetic profile.
+Serving requires actual split-prefix work, yields, request switches and the
+unchanged external/paired/observed-label gates. No fairness or speed improvement
+is inferred from tiny fixture tests.
 
 `HUNCHO_LLAMA_BATCH_ROWS=2..8` explicitly allocates independent native sequence
 slots; default `1` exposes no batch path and preserves the original context.

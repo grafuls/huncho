@@ -342,6 +342,7 @@ fn load_llamacpp(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Bo
         huncho_backend::llamacpp::LlamaOptions {
             threads,
             batch_rows,
+            prefill_chunk_tokens: prefill_chunk_tokens_from_env()?,
         },
     )?))
 }

@@ -32,7 +32,7 @@ also show drift. Packed CPU fitting/held-out evaluation is still running.
 | O18 quantization | Experimental Candle and llama.cpp CPU Q8/Q4 packages available | Portable Q8/Q4 fit/held-out job running; other families open |
 | O19 retained/paged prefixes | Bounded immutable CPU snapshots available | Paging, branch collation and tenant policies |
 | O20 Metal | Skipped by user | Apple work deferred |
-| O21 llama.cpp | CPU F2/F3, full-state F2 forks, bounded native batches and pending FP32/FP16/Q8/Q4 exports available | Cooperative chunks and released fitting/qualification |
+| O21 llama.cpp | CPU F2/F3, full-state forks/chunks, bounded native batches and pending FP32/FP16/Q8/Q4 exports available | Released fitting/qualification and graph-side readout efficiency |
 | O22 shared bases/residency | Immutable CPU bases shared across isolated merges | Lazy resident loading/eviction and runtime LoRA dispatch |
 | O23 vLLM custom readouts | Open | Actual no-decode family implementation and qualification |
 | O24 distributed/sharded inference | Open | Implementation; actual multi-GPU qualification deferred |
@@ -41,6 +41,33 @@ also show drift. Packed CPU fitting/held-out evaluation is still running.
 | O27 browser WASM/WebGPU | Open | Separate actual browser runtime, packaging and gates |
 
 ## Implemented increments
+
+### Resumable native llama.cpp prefixes
+
+The pinned CPU runtime now exposes the existing bounded prefix-step interface
+when `HUNCHO_PREFILL_CHUNK_TOKENS=1..4096` is configured for F2. Partial handles
+retain exact tokens and full hybrid state under the 64-handle/512 MiB limits.
+Each native chunk restores its own snapshot and absolute positions, and commits
+only after successful serialization. Partial state cannot enter forks/readouts
+or retained-prefix hits. Release/cancellation frees pending tokens and state;
+replicas inherit the immutable execution profile, without active state.
+
+The existing cooperative scheduler can alternate these CPU prefixes and whole
+questions. One-shot prefixes and chunks use the same accounting; split counters
+describe actual attempts and retained hits submit zero work. Native independent
+calls and batches between steps leave pending snapshots unchanged. Chunk size
+and native execution identity bind qualification. Existing fixed external,
+paired, split/interleaving and complete observed-label serving gates remain.
+Snapshot copies can outweigh prefill savings, so no performance claim follows.
+
+Actual FP32/FP16 CPU tests cover 1/3/7-token chunks, interleaved distinct prefixes,
+native batches between steps, final pointer probabilities, retained hits,
+partial/foreign/completed handle rejection, cancellation/reuse bounds and
+invalid settings. CLI tests exercise actual cooperative yields and distinct
+request switches against unchanged upstream fixture vectors. They retain
+unlabeled diagnostic status and do not qualify released Kev-4B.
+The complete CPU `llamacpp,clef,qualification` workspace passes; all actual
+GPU tests remain ignored, and no Apple build or hardware check was run.
 
 ### Bounded native llama.cpp batches
 

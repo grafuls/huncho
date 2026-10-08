@@ -277,6 +277,148 @@ fn native_f3_batches_keep_per_sequence_position_and_code_order() {
 }
 
 #[test]
+fn resumable_full_hybrid_prefixes_interleave_and_reject_partial_readouts() {
+    use huncho_core::{backend::PrefillWork, calibration::argmax};
+    let root = Path::new("tests/fixtures/tiny_kev");
+    for dtype in ["gguf-f32", "gguf-f16"] {
+        let mut m = manifest();
+        let a = &mut m.backbone.artifacts.get_mut(&BackendId::LlamaCpp).unwrap()[0];
+        a.dtype = dtype.into();
+        a.path = format!("../llamacpp/kev-{}.gguf", dtype.trim_start_matches("gguf-"));
+        for chunk in [1, 3, 7] {
+            let mut backend = LlamaCppBackend::load(
+                root,
+                &m,
+                dtype,
+                LlamaOptions {
+                    prefill_chunk_tokens: chunk,
+                    batch_rows: 2,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let mut replica = backend.replica().unwrap();
+            assert!(backend.supports_resumable_prefill());
+            let prefixes = [
+                vec![1, 3, 5, 7, 9, 11, 13, 15, 17],
+                vec![2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22],
+            ];
+            let suffix = vec![24, 25, 26, 27];
+            let expected: Vec<_> = prefixes
+                .iter()
+                .map(|p| {
+                    let tokens = p.iter().chain(&suffix).copied().collect();
+                    let output = backend
+                        .forward(ForwardInput::new(tokens, vec![p.len() + 3, p.len()]))
+                        .unwrap();
+                    calibrate(output.values().data(), 2.40605).unwrap()
+                })
+                .collect();
+            let handles: Vec<_> = prefixes
+                .iter()
+                .map(|p| {
+                    backend
+                        .begin_resumable_prefill(p, 1024 * 1024)
+                        .unwrap()
+                        .handle
+                })
+                .collect();
+            let mut totals = PrefillWork::default();
+            assert!(backend.fork(handles[0]).is_err());
+            let mut partial = ForwardInput::new(suffix.clone(), vec![3, 0]);
+            partial.fork_from = Some(handles[0]);
+            assert!(backend.forward(partial).is_err());
+            assert!(replica
+                .advance_resumable_prefill(handles[0], &mut totals)
+                .is_err());
+            assert_eq!(totals.forward_calls, 0);
+            let mut ready = [false; 2];
+            while !ready.iter().all(|b| *b) {
+                for row in 0..2 {
+                    if !ready[row] {
+                        ready[row] = backend
+                            .advance_resumable_prefill(handles[row], &mut totals)
+                            .unwrap();
+                        // Unrelated independent native batches clear/overwrite
+                        // scratch state while both unfinished snapshots survive.
+                        backend
+                            .forward_batch(vec![ForwardInput::new(vec![3, 2, 1], vec![2]); 2])
+                            .unwrap();
+                    }
+                }
+            }
+            assert_eq!(totals.processed_tokens, 20);
+            assert_eq!(
+                totals.forward_calls as usize,
+                prefixes
+                    .iter()
+                    .map(|p| (p.len() + chunk - 1) / chunk)
+                    .sum::<usize>()
+            );
+            assert_eq!(totals.chunked_prefills, 2);
+            for row in 0..2 {
+                assert!(backend
+                    .advance_resumable_prefill(handles[row], &mut PrefillWork::default())
+                    .is_err());
+                let branch = backend.fork(handles[row]).unwrap();
+                let mut input = ForwardInput::new(suffix.clone(), vec![3, 0]);
+                input.fork_from = Some(branch);
+                let actual =
+                    calibrate(backend.forward(input).unwrap().values().data(), 2.40605).unwrap();
+                assert_eq!(argmax(&actual), argmax(&expected[row]));
+                assert!(actual
+                    .iter()
+                    .zip(&expected[row])
+                    .all(|(a, b)| (a - b).abs() <= 1e-4));
+                backend.release_cache(branch).unwrap();
+                backend.release_cache(handles[row]).unwrap();
+                let mut work = PrefillWork::default();
+                let hit = backend
+                    .prefill_cached_with_work(&prefixes[row], 1024 * 1024, &mut work)
+                    .unwrap();
+                assert!(hit.hit);
+                assert_eq!(work.forward_calls, 0);
+                assert_eq!(work.processed_tokens, 0);
+                backend.release_cache(hit.handle).unwrap();
+            }
+            backend.clear_prefix_cache().unwrap();
+            let pending: Vec<_> = (0..64)
+                .map(|_| {
+                    backend
+                        .begin_resumable_prefill(&prefixes[0], 0)
+                        .unwrap()
+                        .handle
+                })
+                .collect();
+            assert!(backend.begin_resumable_prefill(&prefixes[0], 0).is_err());
+            for handle in pending {
+                backend.release_cache(handle).unwrap();
+            }
+            assert!(backend.begin_resumable_prefill(&[], 0).is_err());
+            assert!(backend.begin_resumable_prefill(&[384], 0).is_err());
+            let mut work = PrefillWork::default();
+            let complete = backend
+                .prefill_cached_with_work(&prefixes[0], 0, &mut work)
+                .unwrap();
+            assert!(!complete.hit);
+            assert_eq!(work.processed_tokens, 9);
+            assert!(work.forward_calls > 1);
+            backend.release_cache(complete.handle).unwrap();
+        }
+        assert!(LlamaCppBackend::load(
+            root,
+            &m,
+            dtype,
+            LlamaOptions {
+                prefill_chunk_tokens: 4097,
+                ..Default::default()
+            }
+        )
+        .is_err());
+    }
+}
+
+#[test]
 fn full_hybrid_prefix_snapshots_preserve_frozen_pointer_scores_and_isolate_forks() {
     use huncho_core::{
         backend::{CacheHandle, PrefillWork},

@@ -15,6 +15,7 @@ pub(super) struct Snapshot {
 pub(super) struct Prefixes {
     pub(super) handles: BTreeMap<u64, Arc<Snapshot>>,
     retained: VecDeque<(Vec<u32>, Arc<Snapshot>)>,
+    pub(super) pending: BTreeMap<u64, (Vec<u32>, usize)>,
 }
 impl Prefixes {
     fn bytes(&self) -> usize {
@@ -30,6 +31,11 @@ impl Prefixes {
             }
         }
         bytes
+            + self
+                .pending
+                .values()
+                .map(|(tokens, _)| ENTRY_BYTES + tokens.capacity() * 4)
+                .sum::<usize>()
             + self
                 .retained
                 .iter()
@@ -78,6 +84,11 @@ impl Prefixes {
 
 impl LlamaCppBackend {
     pub(super) fn prefix(&self, handle: CacheHandle) -> Result<Arc<Snapshot>> {
+        if self.prefixes.pending.contains_key(&handle.id) {
+            return Err(Error::Backend(
+                "partial llama.cpp prefixes cannot be forked or read".into(),
+            ));
+        }
         self.prefixes
             .handles
             .get(&handle.id)
@@ -157,6 +168,22 @@ impl LlamaCppBackend {
         budget: usize,
         work: &mut PrefillWork,
     ) -> Result<CachedPrefill> {
+        if self.options.prefill_chunk_tokens > 0 {
+            let cached = self.begin_chunked_prefix(tokens, budget)?;
+            if !cached.hit {
+                loop {
+                    match self.advance_chunked_prefix(cached.handle, work) {
+                        Ok(true) => break,
+                        Ok(false) => {}
+                        Err(error) => {
+                            self.release_cache(cached.handle)?;
+                            return Err(error);
+                        }
+                    }
+                }
+            }
+            return Ok(cached);
+        }
         if !matches!(self.readout.as_ref(), Readout::Pointer(_)) {
             return Err(Error::Unsupported(
                 "llama.cpp prefix reuse currently requires Kev F2".into(),
@@ -205,6 +232,106 @@ impl LlamaCppBackend {
         }
         result
     }
+
+    pub(super) fn begin_chunked_prefix(
+        &mut self,
+        tokens: &[u32],
+        budget: usize,
+    ) -> Result<CachedPrefill> {
+        if !self.supports_resumable_prefill() {
+            return Err(Error::Unsupported(
+                "llama.cpp resumable prefixes require configured F2 CPU chunks".into(),
+            ));
+        }
+        if tokens.is_empty()
+            || tokens.len() > self.capabilities.max_context
+            || budget > MAX_BYTES
+            || tokens
+                .iter()
+                .any(|&t| t as usize >= self.context.model.vocab)
+        {
+            return Err(Error::Request(
+                "invalid llama.cpp prefix tokens or retention budget (0..512 MiB)".into(),
+            ));
+        }
+        self.prefixes.trim(budget);
+        if budget > 0 {
+            if let Some((_, snapshot)) = self
+                .prefixes
+                .retained
+                .iter()
+                .find(|(key, _)| key.as_slice() == tokens)
+            {
+                let handle = self.prefixes.insert(snapshot.clone())?;
+                return Ok(CachedPrefill { handle, hit: true });
+            }
+        }
+        let mut owned = Vec::new();
+        owned
+            .try_reserve_exact(tokens.len())
+            .map_err(|_| Error::Backend("llama.cpp pending prefix allocation failed".into()))?;
+        if self
+            .prefixes
+            .bytes()
+            .saturating_add(2 * ENTRY_BYTES + owned.capacity() * 4)
+            > MAX_BYTES
+        {
+            return Err(Error::Backend(
+                "llama.cpp pending prefix exceeds charged snapshot budget".into(),
+            ));
+        }
+        owned.extend_from_slice(tokens);
+        let handle = self.prefixes.insert(Arc::new(Snapshot {
+            data: Vec::new(),
+            tokens: 0,
+        }))?;
+        self.prefixes.pending.insert(handle.id, (owned, budget));
+        Ok(CachedPrefill { handle, hit: false })
+    }
+
+    pub(super) fn advance_chunked_prefix(
+        &mut self,
+        handle: CacheHandle,
+        work: &mut PrefillWork,
+    ) -> Result<bool> {
+        let (tokens, budget) = self.prefixes.pending.get(&handle.id).ok_or_else(|| {
+            Error::Backend("unknown or completed llama.cpp resumable prefix".into())
+        })?;
+        let previous = self
+            .prefixes
+            .handles
+            .get(&handle.id)
+            .ok_or_else(|| Error::Backend("unknown llama.cpp prefix handle".into()))?
+            .clone();
+        let offset = previous.tokens;
+        let end = tokens.len().min(offset + self.options.prefill_chunk_tokens);
+        let complete = end == tokens.len();
+        let budget = *budget;
+        let chunk = tokens[offset..end].to_vec();
+        self.clear_memory()?;
+        let result = (|| {
+            if offset > 0 {
+                self.restore(&previous)?;
+            }
+            work.forward_calls += 1;
+            work.processed_tokens += chunk.len() as u64;
+            if offset == self.options.prefill_chunk_tokens {
+                work.chunked_prefills += 1;
+            }
+            self.decode_tokens(&chunk, &[], offset, false)?;
+            let snapshot = self.snapshot(end)?;
+            self.prefixes.handles.insert(handle.id, snapshot.clone());
+            if complete {
+                let (tokens, _) = self.prefixes.pending.remove(&handle.id).unwrap();
+                self.prefixes.remember(&tokens, snapshot, budget);
+            }
+            Ok(complete)
+        })();
+        if result.is_err() {
+            let _ = self.clear_memory();
+        }
+        result
+    }
 }
 
 #[cfg(test)]
@@ -228,6 +355,18 @@ mod tests {
         prefixes.clear_retained();
         assert_eq!(prefixes.bytes(), 1024 + ENTRY_BYTES);
         prefixes.handles.remove(&child.id);
+        let partial = prefixes
+            .insert(Arc::new(Snapshot {
+                data: Vec::new(),
+                tokens: 0,
+            }))
+            .unwrap();
+        prefixes.pending.insert(partial.id, (vec![1; 128], 0));
+        assert_eq!(prefixes.bytes(), 2 * ENTRY_BYTES + 128 * 4);
+        prefixes.clear_retained();
+        assert!(prefixes.pending.contains_key(&partial.id));
+        prefixes.pending.remove(&partial.id);
+        prefixes.handles.remove(&partial.id);
         assert_eq!(prefixes.bytes(), 0);
         for key in 0..18 {
             prefixes.remember(
