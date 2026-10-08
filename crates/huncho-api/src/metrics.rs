@@ -41,6 +41,8 @@ pub struct Metrics {
     /// Physical token positions submitted across all forward/prefill calls,
     /// including failed evaluations and disconnected HTTP callers.
     pub tokens_prefilled: IntCounter,
+    pub prefill_calls: IntCounter,
+    pub chunked_prefills: IntCounter,
     /// Number of KV forks performed.
     pub fork_count: IntCounter,
     pub reused_prefix_tokens: IntCounter,
@@ -84,6 +86,16 @@ impl Metrics {
         .unwrap();
         let fork_count =
             IntCounter::with_opts(Opts::new("huncho_fork_count", "Number of KV forks.")).unwrap();
+        let prefill_calls = IntCounter::new(
+            "huncho_prefill_calls",
+            "Native prefix forward attempts, including every chunk.",
+        )
+        .unwrap();
+        let chunked_prefills = IntCounter::new(
+            "huncho_chunked_prefills",
+            "Prefixes actually submitted across more than one native call.",
+        )
+        .unwrap();
         let batch_count = IntCounter::new(
             "huncho_batch_count",
             "Native backbone calls containing multiple independent sequences.",
@@ -221,6 +233,10 @@ impl Metrics {
             .register(Box::new(tokens_prefilled.clone()))
             .unwrap();
         registry.register(Box::new(fork_count.clone())).unwrap();
+        registry.register(Box::new(prefill_calls.clone())).unwrap();
+        registry
+            .register(Box::new(chunked_prefills.clone()))
+            .unwrap();
         registry.register(Box::new(batch_count.clone())).unwrap();
         registry
             .register(Box::new(cross_request_batch_count.clone()))
@@ -259,6 +275,8 @@ impl Metrics {
             prepared_waiting,
             questions_prepared,
             tokens_prefilled,
+            prefill_calls,
+            chunked_prefills,
             fork_count,
             reused_prefix_tokens,
             batch_count,

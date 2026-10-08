@@ -377,6 +377,7 @@ fn changed_arithmetic_profile(engine: &huncho_core::engine::Engine) -> bool {
         "onnx_native_batch",
         "delta_rule_execution",
         "causal_conv_execution",
+        "prefill_chunk_tokens",
         "weight_quantization",
     ]
     .iter()
@@ -428,6 +429,8 @@ fn qualify_optimizations(registry: &ModelRegistry, args: &ServeArgs) -> anyhow::
         }
         let kernel_profile = changed_arithmetic_profile(engine);
         let opts = evaluation_options(engine, args);
+        anyhow::ensure!(!engine.execution_metadata().contains_key("prefill_chunk_tokens") || opts.prefix_cache,
+            "chunked prefill serving for `{name}` requires --prefix-cache and an actual split-prefix qualification");
         let onnx_readout_profile = ["onnx_readout", "onnx_output_buffer_bytes"]
             .iter()
             .any(|key| engine.execution_metadata().contains_key(*key));

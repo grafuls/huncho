@@ -59,6 +59,16 @@ pub struct CachedPrefill {
     pub hit: bool,
 }
 
+/// Physical prefix work, including attempted calls before a failed prefill.
+/// Retained snapshot hits submit zero work. Split prefixes account for every
+/// chunk while logical API usage remains the complete original prompt.
+#[derive(Debug, Default)]
+pub struct PrefillWork {
+    pub forward_calls: u64,
+    pub processed_tokens: u64,
+    pub chunked_prefills: u64,
+}
+
 impl ForwardInput {
     pub fn new(tokens: Vec<u32>, positions: Vec<usize>) -> Self {
         ForwardInput {
@@ -206,6 +216,24 @@ pub trait Backend: Send + Sync {
     fn prefill_cached(&mut self, tokens: &[u32], _max_bytes: usize) -> Result<CachedPrefill> {
         self.prefill(tokens)
             .map(|handle| CachedPrefill { handle, hit: false })
+    }
+
+    /// Default single-call accounting; backends with chunked prefills override
+    /// this method and update work before each native attempt.
+    fn prefill_cached_with_work(
+        &mut self,
+        tokens: &[u32],
+        max_bytes: usize,
+        work: &mut PrefillWork,
+    ) -> Result<CachedPrefill> {
+        work.forward_calls += 1;
+        work.processed_tokens += tokens.len() as u64;
+        let result = self.prefill_cached(tokens, max_bytes);
+        if result.as_ref().is_ok_and(|cached| cached.hit) {
+            work.forward_calls -= 1;
+            work.processed_tokens -= tokens.len() as u64;
+        }
+        result
     }
 
     /// Clear retained snapshots without invalidating active caller-owned forks.

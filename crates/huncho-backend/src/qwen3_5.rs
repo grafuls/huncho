@@ -1290,6 +1290,7 @@ pub struct Qwen3_5Backend {
     device: Device,
     caches: BTreeMap<u64, ModelCache>,
     prefixes: PrefixSnapshots,
+    prefill_chunk_tokens: usize,
 }
 
 enum Readout {
@@ -1298,6 +1299,30 @@ enum Readout {
 }
 
 impl Qwen3_5Backend {
+    /// Bound the query length of native CPU Kev prefix attention. This changes
+    /// projection/attention shapes, so paired and labeled qualification apply.
+    /// It does not yield between jobs or implement a fair serving scheduler.
+    pub fn with_prefill_chunk_tokens(mut self, tokens: usize) -> CoreResult<Self> {
+        if tokens > 4096 {
+            return Err(Error::Request(
+                "prefill chunk tokens must be 0..4096".into(),
+            ));
+        }
+        if tokens > 0 && (!self.device.is_cpu() || !matches!(self.head, Readout::Pointer(_))) {
+            return Err(Error::Unsupported(
+                "chunked prefill currently supports CPU Kev only".into(),
+            ));
+        }
+        if tokens != self.prefill_chunk_tokens
+            && (!self.caches.is_empty() || !self.prefixes.values.is_empty())
+        {
+            return Err(Error::Unsupported(
+                "release retained Qwen caches before changing prefill chunks".into(),
+            ));
+        }
+        self.prefill_chunk_tokens = tokens;
+        Ok(self)
+    }
     /// Optional CPU convolution buffers, with unchanged FP32 tap reduction.
     pub fn with_cpu_causal_conv(mut self, enabled: bool) -> CoreResult<Self> {
         if enabled && !self.device.is_cpu() {
@@ -1560,6 +1585,7 @@ impl Qwen3_5Backend {
             device,
             caches: BTreeMap::new(),
             prefixes: PrefixSnapshots::default(),
+            prefill_chunk_tokens: 0,
         })
     }
 }
@@ -1700,6 +1726,12 @@ impl Backend for Qwen3_5Backend {
         }
         if self.model.cpu_causal_conv {
             extra.insert("causal_conv_execution".into(), "cpu-buffered-v1".into());
+        }
+        if self.prefill_chunk_tokens > 0 {
+            extra.insert(
+                "prefill_chunk_tokens".into(),
+                self.prefill_chunk_tokens.to_string(),
+            );
         }
         #[cfg(feature = "quantization")]
         if let Some(scheme) = quantized::Scheme::from_dtype(&self.dtype) {
@@ -1886,32 +1918,7 @@ impl Backend for Qwen3_5Backend {
     }
 
     fn prefill(&mut self, tokens: &[u32]) -> CoreResult<CacheHandle> {
-        if !matches!(self.head, Readout::Pointer(_)) {
-            return Err(Error::Unsupported(
-                "prefix caching is currently qualified only for the pointer readout".into(),
-            ));
-        }
-        self.check_cache_capacity()?;
-        if tokens.is_empty()
-            || tokens.len() > self.max_context
-            || tokens
-                .iter()
-                .any(|&token| token as usize >= self.input_vocab_size)
-        {
-            return Err(Error::Backend(
-                "prefill must be nonempty and fit max_context".into(),
-            ));
-        }
-        let mut cache = self.model.empty_cache();
-        let ids = Tensor::new(tokens, &self.device)
-            .and_then(|ids| ids.unsqueeze(0))
-            .map_err(|e| Error::Backend(e.to_string()))?;
-        self.model
-            .forward_cached(&ids, &mut cache)
-            .map_err(|e| Error::Backend(e.to_string()))?;
-        let handle = crate::next_cache_handle()?;
-        self.caches.insert(handle.id, cache);
-        Ok(handle)
+        self.compute_prefix(tokens, &mut Default::default())
     }
 
     fn release_cache(&mut self, handle: CacheHandle) -> CoreResult<()> {
@@ -1931,6 +1938,71 @@ impl Backend for Qwen3_5Backend {
         tokens: &[u32],
         max_bytes: usize,
     ) -> CoreResult<huncho_core::backend::CachedPrefill> {
+        self.cached_prefix(tokens, max_bytes, &mut Default::default())
+    }
+
+    fn prefill_cached_with_work(
+        &mut self,
+        tokens: &[u32],
+        max_bytes: usize,
+        work: &mut huncho_core::backend::PrefillWork,
+    ) -> CoreResult<huncho_core::backend::CachedPrefill> {
+        self.cached_prefix(tokens, max_bytes, work)
+    }
+}
+
+impl Qwen3_5Backend {
+    fn compute_prefix(
+        &mut self,
+        tokens: &[u32],
+        work: &mut huncho_core::backend::PrefillWork,
+    ) -> CoreResult<CacheHandle> {
+        if !matches!(self.head, Readout::Pointer(_)) {
+            return Err(Error::Unsupported(
+                "prefix caching is currently qualified only for the pointer readout".into(),
+            ));
+        }
+        self.check_cache_capacity()?;
+        if tokens.is_empty()
+            || tokens.len() > self.max_context
+            || tokens
+                .iter()
+                .any(|&token| token as usize >= self.input_vocab_size)
+        {
+            return Err(Error::Backend(
+                "prefill must be nonempty and fit max_context".into(),
+            ));
+        }
+        let mut cache = self.model.empty_cache();
+        let chunk_size = if self.prefill_chunk_tokens == 0 {
+            tokens.len()
+        } else {
+            self.prefill_chunk_tokens
+        };
+        for (index, chunk) in tokens.chunks(chunk_size).enumerate() {
+            let ids = Tensor::new(chunk, &self.device)
+                .and_then(|ids| ids.unsqueeze(0))
+                .map_err(|e| Error::Backend(e.to_string()))?;
+            work.forward_calls += 1;
+            work.processed_tokens += chunk.len() as u64;
+            if index == 1 {
+                work.chunked_prefills += 1;
+            }
+            self.model
+                .forward_cached(&ids, &mut cache)
+                .map_err(|e| Error::Backend(e.to_string()))?;
+        }
+        let handle = crate::next_cache_handle()?;
+        self.caches.insert(handle.id, cache);
+        Ok(handle)
+    }
+
+    fn cached_prefix(
+        &mut self,
+        tokens: &[u32],
+        max_bytes: usize,
+        work: &mut huncho_core::backend::PrefillWork,
+    ) -> CoreResult<huncho_core::backend::CachedPrefill> {
         self.prefixes.trim(max_bytes, 0);
         self.check_cache_capacity()?;
         if max_bytes > 0 {
@@ -1940,7 +2012,7 @@ impl Backend for Qwen3_5Backend {
                 return Ok(huncho_core::backend::CachedPrefill { handle, hit: true });
             }
         }
-        let handle = self.prefill(tokens)?;
+        let handle = self.compute_prefix(tokens, work)?;
         let cache = &self.caches[&handle.id];
         if let Some(bytes) = cache
             .retention_bytes(tokens.len())
@@ -2349,6 +2421,7 @@ mod tests {
             device,
             caches: BTreeMap::new(),
             prefixes: PrefixSnapshots::default(),
+            prefill_chunk_tokens: 0,
         };
         let out = backend
             .forward(ForwardInput::new(vec![1, 2, 3, 4], vec![3]))

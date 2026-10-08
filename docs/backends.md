@@ -175,6 +175,12 @@ the separate `quantization` feature. The pointer head and retained state remain
 FP32; conversion leaves calibration pending and serving requires an explicit
 variant refit plus fresh labeled conformance. See [quantization](quantization.md).
 
+`HUNCHO_PREFILL_CHUNK_TOKENS=1..4096` optionally bounds CPU Kev prefix query
+length. It requires `--prefix-cache` when serving, a representative prefix
+longer than the selected chunk size, and fresh labeled/paired qualification.
+It reduces attention's temporary score shape but retains complete KV/state and
+holds the execution lock throughout; it does not yet interleave serving jobs.
+
 With `--features hf,candle,tokenizers`, `serve --model jaredpalmer/kev-4b` loads
 Kev directly. The Hub resolver distinguishes Kev's
 PEFT `FEATURE_EXTRACTION` adapter from Nimble's candidate-logit adapter.

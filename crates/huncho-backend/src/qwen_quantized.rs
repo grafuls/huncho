@@ -319,6 +319,7 @@ impl Qwen3_5Backend {
             device: Device::Cpu,
             caches: BTreeMap::new(),
             prefixes: PrefixSnapshots::default(),
+            prefill_chunk_tokens: 0,
         })
     }
 }

@@ -153,6 +153,8 @@ async fn run(
             let mut stats = EvalStats::default();
             let result = backend.eval_prepared_batch_with_stats(packets, tokens, &mut stats);
             job_metrics.tokens_prefilled.inc_by(stats.processed_tokens);
+            job_metrics.prefill_calls.inc_by(stats.prefill_calls);
+            job_metrics.chunked_prefills.inc_by(stats.chunked_prefills);
             job_metrics.fork_count.inc_by(stats.cache_forks);
             job_metrics.batch_count.inc_by(stats.batch_calls);
             job_metrics

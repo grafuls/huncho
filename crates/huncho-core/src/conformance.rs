@@ -421,6 +421,17 @@ fn run_suite_impl(
     if options.prefix_cache && work.cache_forks == 0 {
         return Err(Error::Conformance("prefix-cache qualification requires a supported multi-question Kev case that actually forks".into()));
     }
+    if options.prefix_cache
+        && engine
+            .execution_metadata()
+            .contains_key("prefill_chunk_tokens")
+        && work.chunked_prefills == 0
+    {
+        return Err(Error::Conformance(
+            "chunked-prefix qualification requires an actual prefix split across native calls"
+                .into(),
+        ));
+    }
     if options.persistent_prefix_bytes > 0 && work.persistent_prefix_hits == 0 {
         return Err(Error::Conformance("persistent-prefix qualification requires fresh prefill and actual retained-snapshot hits".into()));
     }

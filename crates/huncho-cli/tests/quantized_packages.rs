@@ -13,6 +13,7 @@ fn command(args: &[&str], device: &str) -> Output {
         .env("CANDLE_NUM_THREADS", "1")
         .env_remove("HUNCHO_CPU_DELTA_RULE")
         .env_remove("HUNCHO_CPU_CAUSAL_CONV")
+        .env_remove("HUNCHO_PREFILL_CHUNK_TOKENS")
         .env_remove("HUNCHO_PROJECTION_CHUNK_ROWS")
         .env_remove("HUNCHO_ATTENTION_FP32")
         .env_remove("HUNCHO_PREFIX_CACHE")

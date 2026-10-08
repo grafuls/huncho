@@ -23,7 +23,7 @@ def suite():
 def options(**overrides):
     args = SimpleNamespace(device="cpu", dtype="fp16", projection_chunk_rows=64,
         fp32_attention=True, batch_tokens=4096, numerical_only=False, prepare_all=False,
-        cpu_delta_rule=False, cpu_causal_conv=False, persistent_prefix_bytes=0, batch_max_requests=None)
+        cpu_delta_rule=False, cpu_causal_conv=False, prefill_chunk_tokens=0, persistent_prefix_bytes=0, batch_max_requests=None)
     vars(args).update(overrides)
     return args
 
@@ -72,6 +72,18 @@ class RuntimeQualificationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "kernel profile"):
             qualifier.verify_report(data, options(), suite(), "prefix")
 
+    def test_chunked_prefix_requires_exact_budget_and_an_actual_split(self):
+        args = options(prefill_chunk_tokens=2)
+        data = report()
+        data["execution_metadata"]["prefill_chunk_tokens"] = "2"
+        with self.assertRaisesRegex(ValueError, "actual split prefix"):
+            qualifier.verify_report(data, args, suite(), "prefix")
+        data["work"]["chunked_prefills"] = 1
+        self.assertTrue(qualifier.verify_report(data, args, suite(), "prefix"))
+        data["execution_metadata"]["prefill_chunk_tokens"] = "3"
+        with self.assertRaisesRegex(ValueError, "kernel profile"):
+            qualifier.verify_report(data, args, suite(), "prefix")
+
     def test_persistent_prefix_reuse_requires_real_hits_and_exact_budget(self):
         args = options(persistent_prefix_bytes=1024)
         data = dict(report(), persistent_prefix_bytes=1024)
@@ -100,6 +112,9 @@ class RuntimeQualificationTests(unittest.TestCase):
         for change in [
             {"device": "cuda", "cpu_delta_rule": True},
             {"device": "cuda", "cpu_causal_conv": True},
+            {"device": "cuda", "prefill_chunk_tokens": 2},
+            {"prefill_chunk_tokens": 4097},
+            {"prefill_chunk_tokens": 2, "modes": "independent"},
             {"device": "cuda", "dtype": "q8_0-fp32"},
             {"persistent_prefix_bytes": -1}, {"persistent_prefix_bytes": 1, "modes": "independent"},
             {"batch_max_requests": 1}, {"batch_max_requests": 65},

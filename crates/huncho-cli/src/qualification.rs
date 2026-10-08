@@ -272,6 +272,7 @@ impl ExecutionIdentity {
             "HUNCHO_ONNX_NATIVE_BATCH",
             "HUNCHO_CPU_DELTA_RULE",
             "HUNCHO_CPU_CAUSAL_CONV",
+            "HUNCHO_PREFILL_CHUNK_TOKENS",
             "ORT_DYLIB_PATH",
             "LD_LIBRARY_PATH",
             "LD_PRELOAD",
@@ -488,6 +489,9 @@ impl QualificationRecord {
             || (engine.family() == Family::F3
                 && self.report.reference_readout != options.reference_readout)
             || (options.prefix_cache && self.report.work.cache_forks == 0)
+            || (fresh.metadata.contains_key("prefill_chunk_tokens")
+                && options.prefix_cache
+                && self.report.work.chunked_prefills == 0)
             || (options.persistent_prefix_bytes > 0 && self.report.work.persistent_prefix_hits == 0)
             || (options.max_batch_tokens.is_some() && self.report.work.batch_calls == 0)
             || (options.prepare_all && self.report.work.prepared_questions == 0)

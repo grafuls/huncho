@@ -291,6 +291,8 @@ async fn evaluate(
             }
         };
         metrics.tokens_prefilled.inc_by(stats.processed_tokens);
+        metrics.prefill_calls.inc_by(stats.prefill_calls);
+        metrics.chunked_prefills.inc_by(stats.chunked_prefills);
         metrics
             .model_tokens
             .with_label_values(&[&job_model])

@@ -67,6 +67,8 @@ def verify_report(report, args, suite, mode):
         expected_metadata["delta_rule_execution"] = "cpu-buffered-v1"
     if args.cpu_causal_conv:
         expected_metadata["causal_conv_execution"] = "cpu-buffered-v1"
+    if args.prefill_chunk_tokens:
+        expected_metadata["prefill_chunk_tokens"] = str(args.prefill_chunk_tokens)
     if args.dtype in PACKED_PROFILES:
         expected_metadata.update(weight_quantization=PACKED_PROFILES[args.dtype],
             activation_dtype="fp32", recurrent_state_dtype="fp32", pointer_head_dtype="fp32",
@@ -99,6 +101,8 @@ def verify_report(report, args, suite, mode):
         raise ValueError("suite did not exercise request preparation")
     if mode == "prefix" and args.persistent_prefix_bytes > 0 and report.get("work", {}).get("persistent_prefix_hits", 0) <= 0:
         raise ValueError("suite did not exercise persistent prefix reuse")
+    if mode == "prefix" and args.prefill_chunk_tokens and report.get("work", {}).get("chunked_prefills", 0) <= 0:
+        raise ValueError("suite did not exercise an actual split prefix")
     if mode == "batch" and args.batch_max_requests is not None and report.get("work", {}).get("cross_request_batches", 0) <= 0:
         raise ValueError("suite did not exercise cross-request collation")
     if mode != "independent":
@@ -125,6 +129,8 @@ def run(args):
         raise ValueError("buffered recurrence and convolution are CPU-only")
     if args.dtype in PACKED_PROFILES and args.device != "cpu":
         raise ValueError("packed Kev artifacts are CPU-only")
+    if not 0 <= args.prefill_chunk_tokens <= 4096 or (args.prefill_chunk_tokens and args.device != "cpu"):
+        raise ValueError("prefix chunk size must be CPU-only and 0..4096")
     if args.persistent_prefix_bytes < 0:
         raise ValueError("persistent prefix byte budget must be nonnegative")
     if args.batch_max_requests is not None and not 2 <= args.batch_max_requests <= 64:
@@ -134,6 +140,8 @@ def run(args):
         raise ValueError("modes must be distinct independent, prefix or batch entries")
     if args.persistent_prefix_bytes and "prefix" not in modes:
         raise ValueError("persistent prefix budget requires the prefix mode")
+    if args.prefill_chunk_tokens and "prefix" not in modes:
+        raise ValueError("prefix chunk size requires the prefix mode")
     if args.batch_max_requests is not None and "batch" not in modes:
         raise ValueError("cross-request batch size requires the batch mode")
     suite = json.loads(args.golden.read_text())
@@ -176,6 +184,7 @@ def run(args):
         "fp32_attention": args.fp32_attention, "kernel": platform.release(),
         "cpu_delta_rule": args.cpu_delta_rule,
         "cpu_causal_conv": args.cpu_causal_conv,
+        "prefill_chunk_tokens": args.prefill_chunk_tokens,
         "persistent_prefix_bytes": args.persistent_prefix_bytes,
         "batch_max_requests": args.batch_max_requests,
         "cpu_affinity": sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else None,
@@ -198,6 +207,7 @@ def run(args):
         HUNCHO_ATTENTION_FP32=str(args.fp32_attention).lower(),
         HUNCHO_CPU_DELTA_RULE=str(args.cpu_delta_rule).lower())
     env["HUNCHO_CPU_CAUSAL_CONV"] = str(args.cpu_causal_conv).lower()
+    env["HUNCHO_PREFILL_CHUNK_TOKENS"] = str(args.prefill_chunk_tokens)
     identity["rayon_num_threads"] = env.get("RAYON_NUM_THREADS")
     identity["thread_environment"] = {key: env[key] for key in
         ["RAYON_NUM_THREADS", "CANDLE_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"] if key in env}
@@ -255,6 +265,7 @@ def main():
     parser.add_argument("--fp32-attention", action="store_true")
     parser.add_argument("--cpu-delta-rule", action="store_true")
     parser.add_argument("--cpu-causal-conv", action="store_true")
+    parser.add_argument("--prefill-chunk-tokens", type=int, default=0)
     parser.add_argument("--persistent-prefix-bytes", type=int, default=0)
     parser.add_argument("--batch-max-requests", type=int)
     parser.add_argument("--prepare-all", action="store_true")

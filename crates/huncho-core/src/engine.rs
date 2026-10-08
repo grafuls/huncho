@@ -48,6 +48,8 @@ pub struct EvalOptions {
 pub struct EvalStats {
     pub forward_calls: u64,
     pub prefill_calls: u64,
+    /// Prefixes actually submitted across more than one native prefill call.
+    pub chunked_prefills: u64,
     pub processed_tokens: u64,
     pub reused_prefix_tokens: u64,
     pub cache_forks: u64,
@@ -67,6 +69,7 @@ impl EvalStats {
     pub fn accumulate(&mut self, work: &Self) {
         self.forward_calls += work.forward_calls;
         self.prefill_calls += work.prefill_calls;
+        self.chunked_prefills += work.chunked_prefills;
         self.processed_tokens += work.processed_tokens;
         self.reused_prefix_tokens += work.reused_prefix_tokens;
         self.cache_forks += work.cache_forks;
@@ -684,22 +687,20 @@ impl Engine {
                 && prefix_len < prompt.tokens.len()
                 && positions.iter().all(|&position| position >= prefix_len);
             if eligible && prefix.is_none() {
-                stats.prefill_calls += 1;
-                stats.processed_tokens += prefix_len as u64;
-                let handle = if opts.persistent_prefix_bytes > 0 {
-                    let cached = backend.prefill_cached(
-                        &prompt.tokens[..prefix_len],
-                        opts.persistent_prefix_bytes,
-                    )?;
-                    if cached.hit {
-                        stats.prefill_calls -= 1;
-                        stats.processed_tokens -= prefix_len as u64;
-                        stats.persistent_prefix_hits += 1;
-                    }
-                    cached.handle
-                } else {
-                    backend.prefill(&prompt.tokens[..prefix_len])?
-                };
+                let mut prefill_work = crate::backend::PrefillWork::default();
+                let result = backend.prefill_cached_with_work(
+                    &prompt.tokens[..prefix_len],
+                    opts.persistent_prefix_bytes,
+                    &mut prefill_work,
+                );
+                stats.prefill_calls += prefill_work.forward_calls;
+                stats.processed_tokens += prefill_work.processed_tokens;
+                stats.chunked_prefills += prefill_work.chunked_prefills;
+                let cached = result?;
+                if cached.hit {
+                    stats.persistent_prefix_hits += 1;
+                }
+                let handle = cached.handle;
                 prefix = Some(RequestPrefix {
                     backend: &self.backend,
                     handle,

@@ -544,3 +544,38 @@ and binary hashes, compiler, CPU/affinity and thread environment. It excludes
 SiLU, casting, model inference and serving, and has no frequency or heterogeneous
 core isolation. Released checkpoint/calibration qualification remains false;
 the measurements do not establish a full-model speed or cost improvement.
+
+## Bounded CPU prefix chunking (2026-10-08)
+
+O25 now has an optional CPU Kev prefix-compute increment:
+`HUNCHO_PREFILL_CHUNK_TOKENS=0..4096` (zero keeps the original single call).
+Each chunk advances dense-attention KV, FP32 recurrence and compact convolution
+history together. No pointer-head readout is computed during prefill, and a
+caller-owned handle is published only after the complete prefix succeeds.
+Persistent snapshots retain the completed immutable prefix. Kernel/chunk
+changes with retained state fail, and F3/GPU chunk profiles are rejected.
+
+The query length of dense prefix attention is bounded by the chunk size, while
+keys cover the complete past. This bounds that attention score allocation to
+approximately chunk-size times total-prefix length instead of prefix length
+squared; full KV/state storage remains. Multiple appends and smaller matmuls
+can increase latency. This increment holds the existing engine/backend and
+serving execution locks throughout the prefill; fair interleaving, pipelining
+and cancellation between chunks remain open.
+
+Core `PrefillWork` now records each native attempt and token slice, including
+work preceding an error; retained snapshot hits submit zero physical work.
+`EvalStats.prefill_calls` counts actual native calls and `chunked_prefills`
+counts prefixes actually split across calls. Logical response usage stays
+unchanged. Both HTTP execution paths expose corresponding counters. Metadata,
+receipts and the qualification runner bind the chunk budget. Serving requires
+prefix reuse and fresh complete labeled qualification; conformance rejects
+suites whose prefix never actually exceeds the selected chunk size.
+
+CPU tests cover fp32/fp16, one-token through full-size chunks, short convolution
+history, original independent calibrated vectors, fork/snapshot isolation,
+actual misses/hits/work counts, early invalid-token rejection and retained-state
+profile guards. The engine check keeps unchanged upstream goldens, preserves
+logical usage, verifies lower physical token work and rejects a vacuous
+4,096-token chunk profile. Released-model chunk acceptance and actual peak RSS
+or latency measurements remain outstanding; no GPU checks are performed.

@@ -335,7 +335,8 @@ fn load_candle(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<
             .with_projection_chunk_rows(projection_chunk_rows_from_env()?)?
             .with_fp32_attention(fp32_attention_from_env()?)?
             .with_cpu_delta_rule(bool_env("HUNCHO_CPU_DELTA_RULE")?)?
-            .with_cpu_causal_conv(bool_env("HUNCHO_CPU_CAUSAL_CONV")?)?;
+            .with_cpu_causal_conv(bool_env("HUNCHO_CPU_CAUSAL_CONV")?)?
+            .with_prefill_chunk_tokens(prefill_chunk_tokens_from_env()?)?;
             return Ok(Box::new(backend));
         }
     }
@@ -351,7 +352,8 @@ fn load_candle(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<
         .with_projection_chunk_rows(projection_chunk_rows_from_env()?)?
         .with_fp32_attention(fp32_attention_from_env()?)?
         .with_cpu_delta_rule(bool_env("HUNCHO_CPU_DELTA_RULE")?)?
-        .with_cpu_causal_conv(bool_env("HUNCHO_CPU_CAUSAL_CONV")?)?;
+        .with_cpu_causal_conv(bool_env("HUNCHO_CPU_CAUSAL_CONV")?)?
+        .with_prefill_chunk_tokens(prefill_chunk_tokens_from_env()?)?;
         return Ok(Box::new(backend));
     }
     // F3 (Bespoke-Nimble) packages are candidate-logit PEFT adapters over a
@@ -381,7 +383,8 @@ fn load_candle(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<
             .with_projection_chunk_rows(projection_chunk_rows_from_env()?)?
             .with_fp32_attention(fp32_attention_from_env()?)?
             .with_cpu_delta_rule(bool_env("HUNCHO_CPU_DELTA_RULE")?)?
-            .with_cpu_causal_conv(bool_env("HUNCHO_CPU_CAUSAL_CONV")?)?;
+            .with_cpu_causal_conv(bool_env("HUNCHO_CPU_CAUSAL_CONV")?)?
+            .with_prefill_chunk_tokens(prefill_chunk_tokens_from_env()?)?;
         return Ok(Box::new(backend) as Box<dyn Backend>);
     }
     let artifact = manifest
@@ -414,6 +417,18 @@ fn projection_chunk_rows_from_env() -> Result<usize> {
     }
 }
 
+#[cfg(feature = "candle")]
+fn prefill_chunk_tokens_from_env() -> Result<usize> {
+    match std::env::var("HUNCHO_PREFILL_CHUNK_TOKENS") {
+        Ok(value) => value
+            .parse::<usize>()
+            .map_err(|_| Error::Request("HUNCHO_PREFILL_CHUNK_TOKENS must be 0..4096".into())),
+        Err(std::env::VarError::NotPresent) => Ok(0),
+        Err(_) => Err(Error::Request(
+            "HUNCHO_PREFILL_CHUNK_TOKENS must be valid UTF-8".into(),
+        )),
+    }
+}
 #[cfg(feature = "candle")]
 fn fp32_attention_from_env() -> Result<bool> {
     bool_env("HUNCHO_ATTENTION_FP32")
