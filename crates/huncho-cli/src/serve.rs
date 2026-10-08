@@ -341,6 +341,7 @@ impl RecordBindings {
                     "projection_chunk_rows",
                     "attention_compute_dtype",
                     "device_path",
+                    "joint_head_execution",
                 ]
                 .iter()
                 .any(|key| engine.execution_metadata().contains_key(*key));
@@ -394,6 +395,7 @@ fn qualify_optimizations(registry: &ModelRegistry, args: &ServeArgs) -> anyhow::
             "projection_chunk_rows",
             "attention_compute_dtype",
             "device_path",
+            "joint_head_execution",
         ]
         .iter()
         .any(|key| engine.execution_metadata().contains_key(*key));
@@ -745,6 +747,7 @@ mod qualification_tests {
             ("attention_compute_dtype", "fp32"),
             ("device_path", "modernbert-cuda"),
             ("device_path", "qwen-f3-cuda"),
+            ("joint_head_execution", "vectorized-v1"),
         ] {
             let registry = registry_with_execution_metadata(
                 0.0,

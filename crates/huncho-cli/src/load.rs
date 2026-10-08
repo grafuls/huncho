@@ -286,7 +286,7 @@ fn load_backend(
 fn load_clef(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<dyn Backend>> {
     Ok(Box::new(huncho_backend::ClefBackend::load(
         dir, manifest, dtype, huncho_backend::clef::device_from_env()?,
-    )?))
+    )?.with_vectorized_head(bool_env("HUNCHO_CLEF_VECTOR_HEAD")?)))
 }
 
 #[cfg(not(feature = "clef"))]
@@ -369,12 +369,17 @@ fn projection_chunk_rows_from_env() -> Result<usize> {
 
 #[cfg(feature = "candle")]
 fn fp32_attention_from_env() -> Result<bool> {
-    match std::env::var("HUNCHO_ATTENTION_FP32") {
+    bool_env("HUNCHO_ATTENTION_FP32")
+}
+
+#[cfg(feature = "candle")]
+fn bool_env(name: &str) -> Result<bool> {
+    match std::env::var(name) {
         Ok(value) if matches!(value.as_str(), "1" | "true") => Ok(true),
         Ok(value) if matches!(value.as_str(), "0" | "false") => Ok(false),
         Err(std::env::VarError::NotPresent) => Ok(false),
         _ => Err(Error::Request(
-            "HUNCHO_ATTENTION_FP32 must be 0, 1, false or true".into(),
+            format!("{name} must be 0, 1, false or true"),
         )),
     }
 }

@@ -14,6 +14,67 @@ fn native_clef_matches_reference_tokens_spans_and_logits() {
     assert_clef_matches_reference(candle::Device::Cpu, &["fp32", "fp16"]);
 }
 
+#[test]
+fn vectorized_clef_head_preserves_probabilities_and_original_option_order_on_cpu() {
+    let root = Path::new(FIXTURE);
+    let manifest = ModelManifest::load(root.join("huncho-model.json")).unwrap();
+    let golden: Value =
+        serde_json::from_slice(&std::fs::read(root.join("golden.json")).unwrap()).unwrap();
+    for dtype in ["fp32", "fp16"] {
+        let mut scalar = ClefBackend::load(root, &manifest, dtype, candle::Device::Cpu).unwrap();
+        let mut vector = ClefBackend::load(root, &manifest, dtype, candle::Device::Cpu)
+            .unwrap()
+            .with_vectorized_head(true);
+        assert_eq!(
+            vector.capabilities().extra["joint_head_execution"],
+            "vectorized-v1"
+        );
+        assert!(!scalar
+            .capabilities()
+            .extra
+            .contains_key("joint_head_execution"));
+        for case in golden["cases"].as_array().unwrap() {
+            let request: SystemOneRequest =
+                serde_json::from_value(case["request"].clone()).unwrap();
+            let actual = vector.forward_request(&request, 4096).unwrap();
+            let reference = scalar.forward_request(&request, 4096).unwrap();
+            assert_eq!(actual.input_tokens, reference.input_tokens);
+            assert_eq!(
+                actual.logits.keys().collect::<Vec<_>>(),
+                reference.logits.keys().collect::<Vec<_>>()
+            );
+            for (id, logits) in &actual.logits {
+                assert_eq!(
+                    logits.keys().collect::<Vec<_>>(),
+                    reference.logits[id].keys().collect::<Vec<_>>()
+                );
+                let a: Vec<_> = logits.values().copied().collect();
+                let b: Vec<_> = reference.logits[id].values().copied().collect();
+                for temperature in [0.75, 1.0, 2.40605] {
+                    let a = huncho_core::calibration::calibrate(&a, temperature).unwrap();
+                    let b = huncho_core::calibration::calibrate(&b, temperature).unwrap();
+                    assert_eq!(
+                        huncho_core::calibration::argmax(&a),
+                        huncho_core::calibration::argmax(&b)
+                    );
+                    assert!(
+                        a.iter().zip(&b).all(|(a, b)| (a - b).abs() <= 1e-4),
+                        "{dtype}: {a:?} vs {b:?}"
+                    );
+                }
+            }
+            assert!(vector
+                .forward_request(&request, actual.input_tokens as usize - 1)
+                .is_err());
+        }
+        let scalar_again = vector.with_vectorized_head(false);
+        assert!(!scalar_again
+            .capabilities()
+            .extra
+            .contains_key("joint_head_execution"));
+    }
+}
+
 #[cfg(feature = "cuda")]
 #[test]
 #[ignore = "requires an NVIDIA GPU and compatible CUDA kernels"]

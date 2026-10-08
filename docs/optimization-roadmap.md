@@ -265,3 +265,24 @@ Use the same executable, thread/affinity settings and exact inference options
 for recording and serving. Qualification hashes all selected inputs; its startup
 I/O cost can be substantial for large checkpoints and is excluded from warm
 inference benchmarks.
+
+## Grouped Clef head projections (2026-10-08)
+
+O13 now has an optional `HUNCHO_CLEF_VECTOR_HEAD=1` execution profile. Context and
+lexical projections are grouped across all option rows; the question projection
+runs once and gathers each question's vector for its options. Final option
+normalization and residual MLP projections also run across the flattened rows.
+The five affected projection calls per question become five calls per request.
+Span means, evidence routing, joint-field attention, learned scales and original
+question/option order remain unchanged. Variable-length span pooling and summary
+reductions still use their reference operations.
+
+This changes GEMM shapes and the lexical prior reduction, so it is default-off.
+The loaded backend records `joint_head_execution=vectorized-v1`; CLI startup
+requires complete labeled held-out goldens even when calibration metadata says
+`fit`. Execution receipts include this mode. CPU fp32/fp16 tiny-Clef tests compare
+both paths at three unchanged temperatures, require <=1e-4 probability delta and
+matching argmax, preserve option labels/usage, and cover context errors. Existing
+upstream scalar golden checks remain unchanged. This is real head execution
+coverage, not a full Cloudflare/Clef qualification or a measured production
+speedup. No GPU checks were run; the profile remains unqualified there.

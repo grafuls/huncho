@@ -244,3 +244,10 @@ Refer to the PRD for the full matrix: CUDA, Metal, x86/ARM CPU (Raspberry Pi as
 the floor), and browser (WebGPU/WASM) from one codebase. v1 uses existing
 runtimes for the backbone forward pass; the engine itself writes no custom
 kernels.
+
+Clef also exposes an opt-in grouped head profile via
+`HUNCHO_CLEF_VECTOR_HEAD=1` (default off). It groups option and residual projections
+while preserving schema routing and candidate order. Changed GEMM/reduction
+shapes require labeled startup qualification; metadata records
+`joint_head_execution=vectorized-v1`. CPU fixture parity passes at fp32/fp16;
+full released-model and GPU acceptance remain open.

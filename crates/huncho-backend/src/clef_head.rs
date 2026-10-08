@@ -204,6 +204,7 @@ impl JointHead {
         hidden: &Tensor,
         lexical_weight: &Tensor,
         record: &EncodedRecord,
+        vectorized: bool,
     ) -> candle::Result<Vec<Vec<f32>>> {
         let hidden = self.hidden_norm.forward(hidden)?;
         let memory = self.memory.forward(&hidden)?;
@@ -219,6 +220,7 @@ impl JointHead {
         )?;
         let mut lexical = Vec::new();
         let mut option_queries = Vec::new();
+        let mut contexts = Vec::new();
         for (i, q) in record.questions.iter().enumerate() {
             let context = Tensor::stack(
                 &q.option_spans
@@ -241,18 +243,46 @@ impl JointHead {
                 );
             }
             let vectors = Tensor::stack(&vectors, 0)?;
-            option_queries.push(
-                (self.option_context.forward(&context)?
-                    + self.option_lexical.forward(&vectors)?)?
-                .broadcast_add(
-                    &self
-                        .option_question
-                        .forward(&questions.i(i)?.unsqueeze(0)?)?,
-                )?,
-            );
+            if vectorized {
+                contexts.push(context);
+            } else {
+                option_queries.push(
+                    (self.option_context.forward(&context)?
+                        + self.option_lexical.forward(&vectors)?)?
+                    .broadcast_add(
+                        &self
+                            .option_question
+                            .forward(&questions.i(i)?.unsqueeze(0)?)?,
+                    )?,
+                );
+            }
             lexical.push(vectors);
         }
-        let mut routed = Tensor::cat(&option_queries, 0)?;
+        let question_ids = if vectorized {
+            let ids: Vec<_> = record
+                .questions
+                .iter()
+                .enumerate()
+                .flat_map(|(i, question)| {
+                    std::iter::repeat(i as u32).take(question.option_ids.len())
+                })
+                .collect();
+            Some(Tensor::new(ids.as_slice(), hidden.device())?)
+        } else {
+            None
+        };
+        let mut routed = if let Some(question_ids) = &question_ids {
+            (self.option_context.forward(&Tensor::cat(&contexts, 0)?)?
+                + self.option_lexical.forward(&Tensor::cat(&lexical, 0)?)?)?
+            .broadcast_add(
+                &self
+                    .option_question
+                    .forward(&questions)?
+                    .index_select(question_ids, 0)?,
+            )?
+        } else {
+            Tensor::cat(&option_queries, 0)?
+        };
         for layer in &self.evidence {
             routed = layer.forward(&routed, &memory)?;
         }
@@ -280,26 +310,39 @@ impl JointHead {
             fields = layer.forward(&fields, &memory)?;
         }
         fields = self.field_norm.forward(&fields)?;
-        let mut logits = Vec::new();
-        for (i, (lexical, routed)) in lexical.iter().zip(split).enumerate() {
-            let anchor = normalize(&(questions.i(i)? + &global)?, 1e-12)?;
-            let prior = (normalize(lexical, 1e-12)?
-                .matmul(&anchor.unsqueeze(1)?)?
-                .squeeze(1)?
-                * self.prior_scale)?;
-            let options = self.option_norm.forward(&routed)?;
-            let field = fields.i(i)?.unsqueeze(0)?.broadcast_as(options.shape())?;
-            let product = (&field * &options)?;
-            let delta = (&field - &options)?.abs()?;
-            let cosine = (normalize(&field, 1e-8)? * normalize(&options, 1e-8)?)?.sum(D::Minus1)?;
-            let features = Tensor::cat(&[&field, &options, &product, &delta], D::Minus1)?;
-            let residual = self.residual.forward(&features)?.squeeze(1)?;
-            let joint = ((cosine * self.joint_scale)? + residual)?;
-            logits.push((prior + (joint * self.gate)?)?.to_dtype(DType::F32)?);
-        }
-        // Transfer all question logits once. Retain each question's original
-        // arithmetic and option order, then scatter the contiguous host data.
-        let values = Tensor::cat(&logits, 0)?.to_vec1::<f32>()?;
+        let flat_logits = if let Some(question_ids) = &question_ids {
+            self.vector_scores(
+                &questions,
+                &global,
+                &Tensor::cat(&lexical, 0)?,
+                &routed,
+                &fields,
+                question_ids,
+            )?
+        } else {
+            let mut logits = Vec::new();
+            for (i, (lexical, routed)) in lexical.iter().zip(split).enumerate() {
+                let anchor = normalize(&(questions.i(i)? + &global)?, 1e-12)?;
+                let prior = (normalize(lexical, 1e-12)?
+                    .matmul(&anchor.unsqueeze(1)?)?
+                    .squeeze(1)?
+                    * self.prior_scale)?;
+                let options = self.option_norm.forward(&routed)?;
+                let field = fields.i(i)?.unsqueeze(0)?.broadcast_as(options.shape())?;
+                let product = (&field * &options)?;
+                let delta = (&field - &options)?.abs()?;
+                let cosine =
+                    (normalize(&field, 1e-8)? * normalize(&options, 1e-8)?)?.sum(D::Minus1)?;
+                let features = Tensor::cat(&[&field, &options, &product, &delta], D::Minus1)?;
+                let residual = self.residual.forward(&features)?.squeeze(1)?;
+                let joint = ((cosine * self.joint_scale)? + residual)?;
+                logits.push((prior + (joint * self.gate)?)?.to_dtype(DType::F32)?);
+            }
+            Tensor::cat(&logits, 0)?
+        };
+        // Transfer all question logits once. Both execution modes retain
+        // original option order; the scalar mode retains original arithmetic.
+        let values = flat_logits.to_vec1::<f32>()?;
         let mut offset = 0;
         Ok(record
             .questions
@@ -311,6 +354,32 @@ impl JointHead {
                 row
             })
             .collect())
+    }
+
+    /// Group per-row operations without changing spans, routing, field order,
+    /// normalization axes or learned scales. GEMM shapes/reduction kernels can
+    /// change rounding, so this remains a separately qualified execution mode.
+    fn vector_scores(
+        &self,
+        questions: &Tensor,
+        global: &Tensor,
+        lexical: &Tensor,
+        routed: &Tensor,
+        fields: &Tensor,
+        question_ids: &Tensor,
+    ) -> candle::Result<Tensor> {
+        let anchors =
+            normalize(&questions.broadcast_add(global)?, 1e-12)?.index_select(question_ids, 0)?;
+        let prior = ((normalize(lexical, 1e-12)? * anchors)?.sum(D::Minus1)? * self.prior_scale)?;
+        let options = self.option_norm.forward(routed)?;
+        let fields = fields.index_select(question_ids, 0)?;
+        let product = (&fields * &options)?;
+        let delta = (&fields - &options)?.abs()?;
+        let cosine = (normalize(&fields, 1e-8)? * normalize(&options, 1e-8)?)?.sum(D::Minus1)?;
+        let features = Tensor::cat(&[&fields, &options, &product, &delta], D::Minus1)?;
+        let residual = self.residual.forward(&features)?.squeeze(1)?;
+        let joint = ((cosine * self.joint_scale)? + residual)?;
+        (prior + (joint * self.gate)?)?.to_dtype(DType::F32)
     }
 }
 

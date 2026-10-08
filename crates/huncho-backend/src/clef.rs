@@ -37,6 +37,7 @@ pub struct ClefBackend {
     capabilities: Capabilities,
     device: Device,
     head_dtype: DType,
+    vectorized_head: bool,
 }
 impl ClefBackend {
     pub fn load(dir: &Path, manifest: &ModelManifest, dtype: &str, device: Device) -> Result<Self> {
@@ -60,7 +61,8 @@ impl ClefBackend {
             "bf16" if supports_bf16(&device)? => DType::BF16,
             "bf16" => {
                 return Err(Error::Unsupported(
-                    "Clef bf16 requires CUDA compute capability 8.0 or newer; use fp16 or fp32".into(),
+                    "Clef bf16 requires CUDA compute capability 8.0 or newer; use fp16 or fp32"
+                        .into(),
                 ))
             }
             _ => {
@@ -69,7 +71,10 @@ impl ClefBackend {
                 )))
             }
         };
-        log::info!("Clef device {}, dtype {dtype}", crate::device_label(&device));
+        log::info!(
+            "Clef device {}, dtype {dtype}",
+            crate::device_label(&device)
+        );
         let config_json: serde_json::Value =
             serde_json::from_slice(&std::fs::read(dir.join("config.json"))?)?;
         let text = config_json.get("text_config").unwrap_or(&config_json);
@@ -147,6 +152,7 @@ impl ClefBackend {
             tokenizer,
             device: device.clone(),
             head_dtype,
+            vectorized_head: false,
             capabilities: Capabilities {
                 id: BackendId::Clef,
                 dtype: dtype.into(),
@@ -160,6 +166,19 @@ impl ClefBackend {
                 ..Default::default()
             },
         })
+    }
+
+    /// Opt in to grouped joint-head projections after model/device qualification.
+    pub fn with_vectorized_head(mut self, enabled: bool) -> Self {
+        self.vectorized_head = enabled;
+        if enabled {
+            self.capabilities
+                .extra
+                .insert("joint_head_execution".into(), "vectorized-v1".into());
+        } else {
+            self.capabilities.extra.remove("joint_head_execution");
+        }
+        self
     }
 }
 
@@ -196,7 +215,7 @@ impl Backend for ClefBackend {
             .map_err(backend_error)?;
         let scores = self
             .head
-            .forward(&hidden, &self.lexical_weight, &record)
+            .forward(&hidden, &self.lexical_weight, &record, self.vectorized_head)
             .map_err(backend_error)?;
         let mut logits = BTreeMap::new();
         for (q, scores) in record.questions.iter().zip(scores) {
