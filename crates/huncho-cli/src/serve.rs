@@ -411,6 +411,7 @@ fn qualify_optimizations(registry: &ModelRegistry, args: &ServeArgs) -> anyhow::
             "joint_head_execution",
             "onnx_execution_provider",
             "onnx_intra_threads",
+            "onnx_native_batch",
         ]
         .iter()
         .any(|key| engine.execution_metadata().contains_key(*key));
@@ -770,6 +771,7 @@ mod qualification_tests {
             ("joint_head_execution", "vectorized-v1"),
             ("onnx_execution_provider", "cuda-strict-tf32-off-v1"),
             ("onnx_intra_threads", "4"),
+            ("onnx_native_batch", "equal-length-v1"),
         ] {
             let registry = registry_with_execution_metadata(
                 0.0,

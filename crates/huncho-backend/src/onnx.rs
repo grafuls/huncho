@@ -67,6 +67,9 @@ pub struct OnnxOptions {
     pub execution_provider: OnnxExecutionProvider,
     /// Intra-op threads; zero preserves ORT's automatic choice (maximum 256).
     pub intra_threads: usize,
+    /// Opt into native equal-length tensor batches on a validated dynamic graph.
+    /// Compact readout graphs use a different contract and cannot enable this.
+    pub native_batch: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -120,6 +123,11 @@ impl OnnxBackend {
         dtype: impl Into<String>,
         options: OnnxOptions,
     ) -> Result<OnnxBackend> {
+        if options.native_batch && options.compact_readout {
+            return Err(Error::Unsupported(
+                "ONNX native batches and compact graph readouts are separate contracts".into(),
+            ));
+        }
         if options.intra_threads > 256 {
             return Err(Error::Request(
                 "ONNX intra-op threads must be from 0 to 256".into(),
@@ -216,6 +224,15 @@ impl OnnxBackend {
                 ));
             }
             "huncho_features".into()
+        } else if options.native_batch {
+            if input_ids_name != "input_ids"
+                || !output_names.iter().any(|n| n == "last_hidden_state")
+            {
+                return Err(Error::Unsupported(
+                    "ONNX native batching requires input_ids and last_hidden_state".into(),
+                ));
+            }
+            "last_hidden_state".into()
         } else {
             output_names
                 .iter()
@@ -250,6 +267,24 @@ impl OnnxBackend {
                 _ => return Err(Error::Backend("huncho_features must be float32[1,rows,hidden] or [rows,hidden], with dynamic rows and fixed positive hidden width".into())),
             }
         }
+        if options.native_batch {
+            for input in session.inputs() {
+                let supported = matches!(
+                    input.name(),
+                    "input_ids" | "attention_mask" | "token_type_ids" | "position_ids"
+                );
+                if !supported
+                    || !matches!(input.dtype(), ValueType::Tensor {
+                    ty: TensorElementType::Int64, shape, ..
+                } if shape[..] == [-1, -1])
+                {
+                    return Err(Error::Unsupported(format!("ONNX batching requires known int64[batch,seq] inputs with dynamic batch/seq; unsupported input {}", input.name())));
+                }
+            }
+            if !matches!(output_shape.as_deref(), Some([-1, -1, width]) if *width > 0) {
+                return Err(Error::Unsupported("ONNX batching requires float32[batch,seq,hidden] with dynamic batch/seq and fixed positive hidden width".into()));
+            }
+        }
 
         Ok(OnnxBackend {
             session,
@@ -282,20 +317,37 @@ impl OnnxBackend {
 
     /// Copy requested rows directly from ORT-owned CPU output storage. Avoid
     /// allocating a second complete sequence-by-hidden host buffer.
-    fn run_readout(&mut self, tokens: &[u32], positions: &[usize]) -> Result<CoreTensor> {
-        if tokens.len() > self.max_context {
+    fn run_readouts(&mut self, requests: &[(&[u32], &[usize])]) -> Result<Vec<CoreTensor>> {
+        let batch = requests.len();
+        if batch == 0 || batch > 64 || (batch > 1 && !self.options.native_batch) {
+            return Err(Error::Unsupported(
+                "ONNX readouts require 1..64 rows and a native-batch profile for multiple rows"
+                    .into(),
+            ));
+        }
+        let seq = requests[0].0.len();
+        if seq > self.max_context {
             return Err(Error::Backend(format!(
                 "sequence length {} exceeds max_context {}",
-                tokens.len(),
-                self.max_context
+                seq, self.max_context
             )));
         }
-        let seq = tokens.len();
-        if let Some(pos) = positions.iter().find(|&&pos| pos >= seq) {
-            return Err(Error::Backend(format!(
-                "position {pos} out of range for sequence of length {seq}"
-            )));
+        for &(tokens, positions) in requests {
+            if tokens.len() != seq {
+                return Err(Error::Unsupported(
+                    "ONNX native batches require equal sequence lengths without padding".into(),
+                ));
+            }
+            if let Some(pos) = positions.iter().find(|&&pos| pos >= seq) {
+                return Err(Error::Backend(format!(
+                    "position {pos} out of range for sequence of length {seq}"
+                )));
+            }
         }
+        let positions = requests[0].1;
+        let input_count = batch
+            .checked_mul(seq)
+            .ok_or_else(|| Error::Backend("ONNX batch input size overflow".into()))?;
 
         // Build one owned tensor per declared input so we never borrow temporaries.
         let mut inputs: Vec<(String, Tensor<i64>)> = Vec::with_capacity(self.input_names.len());
@@ -318,7 +370,14 @@ impl OnnxBackend {
                 continue;
             }
             let data: Vec<i64> = if name == &self.input_ids_name {
-                tokens.iter().map(|&t| t as i64).collect()
+                requests
+                    .iter()
+                    .flat_map(|(tokens, _)| tokens.iter().map(|&t| t as i64))
+                    .collect()
+            } else if self.options.native_batch && name == "position_ids" {
+                (0..batch)
+                    .flat_map(|_| (0..seq).map(|p| p as i64))
+                    .collect()
             } else {
                 // Attention mask (ones) or a best-effort zeros tensor for the rest.
                 vec![
@@ -327,10 +386,10 @@ impl OnnxBackend {
                     } else {
                         0
                     };
-                    seq
+                    input_count
                 ]
             };
-            let t = Tensor::from_array(([1usize, seq], data))
+            let t = Tensor::from_array(([batch, seq], data))
                 .map_err(|e| Error::Backend(OnnxError::Inference(e.to_string()).to_string()))?;
             inputs.push((name.clone(), t));
         }
@@ -344,10 +403,14 @@ impl OnnxBackend {
             .output_shape
             .as_deref()
             .and_then(|shape| match shape {
-                [1, n, h] if (*n == -1 || *n == rows as i64) && *h > 0 => {
-                    Some(vec![1, rows, *h as usize])
+                [b, n, h]
+                    if (*b == -1 || *b == batch as i64)
+                        && (*n == -1 || *n == rows as i64)
+                        && *h > 0 =>
+                {
+                    Some(vec![batch, rows, *h as usize])
                 }
-                [n, h] if (*n == -1 || *n == rows as i64) && *h > 0 => {
+                [n, h] if batch == 1 && (*n == -1 || *n == rows as i64) && *h > 0 => {
                     Some(vec![rows, *h as usize])
                 }
                 _ => None,
@@ -413,42 +476,53 @@ impl OnnxBackend {
             .try_extract_tensor::<f32>()
             .map_err(|e| Error::Backend(OnnxError::Inference(e.to_string()).to_string()))?;
 
-        // Output layout: `[1, seq, hidden]` (or `[seq, hidden]`). Batch is 1.
         let (output_seq, hidden) = match &shape[..] {
-            [1, seq, hidden] | [seq, hidden] if *seq >= 0 && *hidden > 0 => {
+            [b, seq, hidden] if *b == batch as i64 && *seq >= 0 && *hidden > 0 => {
+                (*seq as usize, *hidden as usize)
+            }
+            [seq, hidden] if batch == 1 && *seq >= 0 && *hidden > 0 => {
                 (*seq as usize, *hidden as usize)
             }
             _ => {
                 return Err(Error::Backend(format!(
-                "unsupported ONNX feature shape {shape:?}; expected [1,seq,hidden] or [seq,hidden]"
-            )))
+                    "unsupported ONNX feature shape {shape:?}; expected [{batch},rows,hidden]"
+                )))
             }
         };
-        if output_seq != rows || rows.checked_mul(hidden) != Some(data.len()) {
+        if output_seq != rows
+            || rows.checked_mul(hidden).and_then(|n| n.checked_mul(batch)) != Some(data.len())
+        {
             return Err(Error::Backend(format!(
                 "ONNX feature shape {shape:?} does not cover the input sequence of length {seq}"
             )));
         }
-        let count = positions
-            .len()
-            .checked_mul(hidden)
-            .ok_or_else(|| Error::Backend("ONNX readout size overflow".into()))?;
-        let mut selected = Vec::with_capacity(count);
-        if self.options.compact_readout {
-            selected.extend_from_slice(data);
-        } else {
-            for &pos in positions {
-                selected.extend_from_slice(&data[pos * hidden..(pos + 1) * hidden]);
-            }
-        }
-        // Preserve the legacy empty-readout metadata hint; nonempty readouts
-        // use the actual graph width, as before. Trained heads validate width.
-        let width = if positions.is_empty() {
-            self.hidden_size
-        } else {
-            hidden
-        };
-        CoreTensor::new(vec![positions.len(), width], selected)
+        requests
+            .iter()
+            .enumerate()
+            .map(|(index, (_, positions))| {
+                let count = positions
+                    .len()
+                    .checked_mul(hidden)
+                    .ok_or_else(|| Error::Backend("ONNX readout size overflow".into()))?;
+                let mut selected = Vec::with_capacity(count);
+                if self.options.compact_readout {
+                    selected.extend_from_slice(data);
+                } else {
+                    for &pos in *positions {
+                        let offset = (index * seq + pos) * hidden;
+                        selected.extend_from_slice(&data[offset..offset + hidden]);
+                    }
+                }
+                // Preserve the legacy empty-readout metadata hint; nonempty readouts
+                // use the actual graph width, as before. Trained heads validate width.
+                let width = if positions.is_empty() {
+                    self.hidden_size
+                } else {
+                    hidden
+                };
+                CoreTensor::new(vec![positions.len(), width], selected)
+            })
+            .collect()
     }
 }
 
@@ -486,6 +560,9 @@ impl Backend for OnnxBackend {
                         self.options.intra_threads.to_string(),
                     );
                 }
+                if self.options.native_batch {
+                    extra.insert("onnx_native_batch".into(), "equal-length-v1".into());
+                }
                 if self.options.compact_readout {
                     extra.insert("onnx_readout".into(), "gather-v1".into());
                 }
@@ -501,11 +578,43 @@ impl Backend for OnnxBackend {
     }
 
     fn forward(&mut self, input: ForwardInput) -> Result<ForwardOutput> {
-        let values = self.run_readout(&input.tokens, &input.positions)?;
+        if input.fork_from.is_some() {
+            return Err(Error::Unsupported(
+                "ONNX does not support cached forwards".into(),
+            ));
+        }
+        let values = self
+            .run_readouts(&[(&input.tokens, &input.positions)])?
+            .remove(0);
         Ok(ForwardOutput::Features {
             positions: input.positions,
             values,
         })
+    }
+
+    fn supports_batch(&self) -> bool {
+        self.options.native_batch
+    }
+
+    fn forward_batch(&mut self, inputs: Vec<ForwardInput>) -> Result<Vec<ForwardOutput>> {
+        if !self.options.native_batch || inputs.iter().any(|input| input.fork_from.is_some()) {
+            return Err(Error::Unsupported(
+                "ONNX native batching needs an enabled dynamic graph and uncached inputs".into(),
+            ));
+        }
+        let requests = inputs
+            .iter()
+            .map(|input| (input.tokens.as_slice(), input.positions.as_slice()))
+            .collect::<Vec<_>>();
+        let values = self.run_readouts(&requests)?;
+        Ok(inputs
+            .into_iter()
+            .zip(values)
+            .map(|(input, values)| ForwardOutput::Features {
+                positions: input.positions,
+                values,
+            })
+            .collect())
     }
 
     fn fork(&mut self, _handle: CacheHandle) -> Result<CacheHandle> {

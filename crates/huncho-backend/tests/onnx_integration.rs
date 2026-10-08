@@ -299,3 +299,89 @@ fn provider_and_thread_configuration_validate_without_gpu_probes() {
     .to_string()
     .contains("onnx-cuda"));
 }
+
+#[test]
+fn native_dynamic_batches_preserve_isolated_rows_and_validate_contract() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/tiny_encoder_batch.onnx"
+    );
+    let mut reference = OnnxBackend::load(fixture(), 8, 512, "fp32").unwrap();
+    let inputs = vec![
+        ForwardInput::new(vec![3, 10, 5], vec![2, 0, 2]),
+        ForwardInput::new(vec![5, 3, 10], vec![0, 2]),
+        ForwardInput::new(vec![1, 2, 3], vec![]),
+    ];
+    let expected = inputs
+        .iter()
+        .map(|input| reference.forward(input.clone()).unwrap())
+        .collect::<Vec<_>>();
+    for bytes in [0, 288] {
+        let mut backend = OnnxBackend::load_with_options(
+            path,
+            8,
+            512,
+            "fp32",
+            OnnxOptions {
+                native_batch: true,
+                output_buffer_bytes: bytes,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(backend.supports_batch());
+        for _ in 0..2 {
+            let actual = backend.forward_batch(inputs.clone()).unwrap();
+            for (a, e) in actual.iter().zip(&expected) {
+                assert_eq!(a.positions(), e.positions());
+                assert_eq!(a.values().shape(), e.values().shape());
+                assert_eq!(bits(a.values().data()), bits(e.values().data()));
+            }
+        }
+        assert_eq!(backend.output_buffer_reuses(), u64::from(bytes > 0));
+        assert_eq!(backend.retained_output_bytes(), bytes);
+        for invalid in [
+            vec![],
+            vec![inputs[0].clone(); 65],
+            vec![inputs[0].clone(), ForwardInput::new(vec![1], vec![0])],
+            vec![ForwardInput::new(vec![1], vec![1])],
+        ] {
+            assert!(backend.forward_batch(invalid).is_err());
+        }
+        let mut cached = inputs[0].clone();
+        cached.fork_from = Some(huncho_core::backend::CacheHandle { id: 1 });
+        assert!(backend.forward_batch(vec![cached.clone()]).is_err());
+        assert!(backend.forward(cached).is_err());
+        let actual = backend.forward(inputs[1].clone()).unwrap();
+        assert_eq!(
+            bits(actual.values().data()),
+            bits(expected[1].values().data())
+        );
+        assert!(backend.retained_output_bytes() <= bytes);
+    }
+    assert!(OnnxBackend::load_with_options(
+        fixture(),
+        8,
+        512,
+        "fp32",
+        OnnxOptions {
+            native_batch: true,
+            ..Default::default()
+        }
+    )
+    .is_err());
+    assert!(OnnxBackend::load_with_options(
+        path,
+        8,
+        512,
+        "fp32",
+        OnnxOptions {
+            native_batch: true,
+            compact_readout: true,
+            ..Default::default()
+        }
+    )
+    .is_err());
+    assert!(!reference.supports_batch());
+    assert!(reference.forward_batch(inputs).is_err());
+}

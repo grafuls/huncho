@@ -260,6 +260,7 @@ impl ExecutionIdentity {
             "HUNCHO_ONNX_OUTPUT_BUFFER_BYTES",
             "HUNCHO_ONNX_EP",
             "HUNCHO_ONNX_THREADS",
+            "HUNCHO_ONNX_NATIVE_BATCH",
             "ORT_DYLIB_PATH",
             "LD_LIBRARY_PATH",
             "LD_PRELOAD",

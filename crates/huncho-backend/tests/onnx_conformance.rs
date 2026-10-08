@@ -111,3 +111,82 @@ fn graph_side_readout_and_bound_buffer_pass_unchanged_probability_goldens() {
         assert_eq!(report.execution_metadata["onnx_readout"], "gather-v1");
     }
 }
+
+#[test]
+fn native_onnx_batches_qualify_per_request_and_cross_request_work() {
+    use huncho_core::engine::EvalOptions;
+    let mut suite = conformance::load_suite("../../examples/mock-model/golden.json").unwrap();
+    let mut case = suite.cases[0].clone();
+    let question = case.request.questions.values().next().unwrap().clone();
+    let expected = case.expected.values().next().unwrap().clone();
+    case.request
+        .questions
+        .insert("duplicate_prompt".into(), question);
+    case.expected.insert("duplicate_prompt".into(), expected);
+    suite.cases = vec![case.clone(), case];
+    suite.cases[1].id = "second-request".into();
+    let manifest = ModelManifest::load("../../examples/mock-model/huncho-model.json").unwrap();
+    let engine = Engine::new(
+        manifest.clone(),
+        Box::new(
+            OnnxBackend::load_with_options(
+                "../../examples/mock-model/mock-model.onnx",
+                manifest.backbone.hidden_size,
+                manifest.backbone.max_context,
+                "fp32",
+                OnnxOptions {
+                    native_batch: true,
+                    output_buffer_bytes: 1024 * 1024,
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+        ),
+        Box::new(SimpleTokenizer::new(32768)),
+        HeadParams::default(),
+        BackendId::Onnx,
+        "fp32",
+    )
+    .unwrap()
+    .with_prompt_cache(1024 * 1024)
+    .with_result_cache(1024 * 1024);
+    let options = EvalOptions {
+        max_batch_tokens: Some(4096),
+        prepare_all: true,
+        ..Default::default()
+    };
+    let per_request =
+        conformance::run_suite_with_options(&engine, &suite, &Default::default(), &options)
+            .unwrap();
+    let cross_request = conformance::run_suite_with_cross_request_batches(
+        &engine,
+        &suite,
+        &Default::default(),
+        &options,
+        2,
+    )
+    .unwrap();
+    for report in [&per_request, &cross_request] {
+        assert!(report.passed, "{report:?}");
+        assert_eq!(report.max_prob_delta, 0.);
+        assert_eq!(report.argmax_agreement, 1.);
+        assert_eq!(
+            report.optimization_parity.as_ref().unwrap().max_prob_delta,
+            0.
+        );
+        assert!(report.work.batch_calls > 0);
+        assert_eq!(report.work.prepared_questions, 4);
+        assert_eq!(report.work.result_cache_hits, 0);
+        assert_eq!(report.work.prompt_cache_hits, 0);
+        assert_eq!(
+            report.execution_metadata["onnx_native_batch"],
+            "equal-length-v1"
+        );
+    }
+    assert!(cross_request.work.cross_request_batches > 0);
+    assert!(cross_request.work.forward_calls < per_request.work.forward_calls);
+    assert_eq!(
+        cross_request.work.processed_tokens,
+        per_request.work.processed_tokens
+    );
+}

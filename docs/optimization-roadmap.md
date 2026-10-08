@@ -384,3 +384,26 @@ CPU tests validate parser errors, feature rejection before attempting a CUDA
 load, thread-profile output parity and startup gates. The CUDA path is compiled
 only; actual GPU checks and provider/model qualification remain deferred. No
 latency or cost improvement is inferred from compile and fixture checks.
+
+## Native ONNX batching increment (2026-10-08)
+
+O08/O12 now connect verified dynamic F1 ONNX graphs to the existing per-request
+and cross-request bounded scheduler. `HUNCHO_ONNX_NATIVE_BATCH=1` requires
+int64 dynamic `[batch,seq]` known encoder inputs and float32 dynamic
+`last_hidden_state[batch,seq,hidden]`. Optional position IDs are explicit
+ascending rows. Unknown inputs, fixed batch dimensions, cache handles and
+compact-readout combinations fail closed. Native batches accept at most 64
+equal-length rows with no padding; readouts scatter by request and position,
+including repeated and empty selections. Full graph outputs remain host
+tensors, and optional CPU output binding reuses an allocation for the complete
+batch shape.
+
+CPU tests verify exact row bits against independent forward calls, shape and
+buffer bounds, failure recovery, actual per-request/cross-request batching,
+unchanged probability goldens, nonvacuous physical-work accounting and zero
+retained result/prompt hits during conformance. Profile selection requires
+labeled startup qualification; scheduling adds the independent parity gate.
+These are deterministic ONNX fixtures rather than trained Laya acceptance or
+a production speed measurement. CUDA batching has not run on hardware. O08
+still has device-resident head work open, and graph-side compact selections and
+native batches intentionally use separate contracts in this increment.

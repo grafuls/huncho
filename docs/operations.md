@@ -592,3 +592,22 @@ OpenMP may instead require `OMP_NUM_THREADS`. Positive values and CUDA selection
 argmax and observed calibration gates. They do not select a new temperature.
 Choose thread counts from measured workload evidence; no universal setting is
 promoted. Both settings are part of optional persisted qualification identity.
+
+### Native ONNX tensor batches
+
+`HUNCHO_ONNX_NATIVE_BATCH=1` opts into F1 graphs with `input_ids` and optional
+`attention_mask`, `token_type_ids`, and `position_ids`, all int64 with dynamic
+`[batch,seq]` dimensions. The output must be `last_hidden_state`, float32 with
+dynamic `[batch,seq]` and a fixed positive hidden width. The backend verifies
+this schema at load. Mask values are one, token-type values zero, and explicit
+position IDs run from zero to sequence length minus one. Other required inputs,
+fixed-batch graphs and the separate compact-readout contract are rejected.
+
+Use `--max-batch-tokens N` to batch equal-length questions and, optionally,
+`--batch-max-requests 2..64` to collate prepared requests. Native calls take at
+most 64 equal-length rows, preserve each row's selected positions, and never
+pad or truncate. The serving scheduler bounds admission, preparation, collation
+and total tensor tokens. This opt-in profile requires labeled pinned goldens
+and fresh startup conformance; enabled scheduling must perform actual batch work
+and pass the tighter independent-forward parity gate. CPU deterministic
+fixtures pass; real exported Laya graphs and CUDA batching remain unqualified.

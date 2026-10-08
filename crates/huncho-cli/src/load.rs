@@ -456,6 +456,7 @@ fn load_onnx(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<dy
             output_buffer_bytes,
             execution_provider,
             intra_threads,
+            native_batch: bool_env("HUNCHO_ONNX_NATIVE_BATCH")?,
         },
     )
     .map_err(|e| Error::Package(format!("failed to load ONNX backend: {e}")))?;

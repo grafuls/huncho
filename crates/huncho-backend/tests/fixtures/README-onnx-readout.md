@@ -16,3 +16,10 @@ Use `onnx.load(INPUT).graph.output[0].name` for the original output name. The
 exporter refuses existing destinations. The tiny graphs contain embedded data;
 external-data exports must retain the accompanying `.data` file. No Python
 dependency is added to Cargo or serving.
+
+`tiny_encoder_batch.onnx` uses the same deterministic embedding Gather as
+`tiny_encoder.onnx`, with dynamic batch dimensions. Regenerate it with
+`python scripts/generate_onnx_batch_fixture.py`. That script applies only to this
+Gather fixture; changing graph metadata alone does not make arbitrary exported
+encoders batch correctly. The existing mock graph already declares a dynamic
+batch and supplies the end-to-end batching probability fixtures.
