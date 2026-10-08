@@ -17,7 +17,7 @@ These variants remain unqualified.
 | Area | Implementation status | Remaining work or qualification |
 |---|---|---|
 | O01 readout deduplication | Available | New model/profile coverage |
-| O02 buffers/allocations | Available in readouts, heads, CPU gate, selected ONNX outputs and bitwise-preserving owned calibration across scalar/batch/prefix/cooperative/F5/browser paths | Broader activation-buffer reuse and released workload measurements |
+| O02 buffers/allocations | Available in readouts, heads, CPU gate, selected ONNX outputs, owned calibration and payload-free external batch planning | Broader activation-buffer reuse and released workload measurements |
 | O03 CPU kernels/threads | Thread/build profiles and optional OpenBLAS available | Platform fitting, held-out gates and throughput |
 | O04 result reuse/coalescing | Available, bounded, default off | Tenant-specific retention policy |
 | O05 F3 selected projection | Available | Released Nimble qualification |
@@ -45,6 +45,24 @@ These variants remain unqualified.
 | O27 browser WASM/WebGPU | Separate CPU WASM F1 scalar/native equal/masked row/marker heads, packaging, dedicated bounded CPU workers and fresh per-session labeled/paired gates available | Released exports/calibration, cross-request batches/prefixes, other families and multithread tuning; WebGPU deferred |
 
 ## Implemented increments
+
+### Borrow external readout dimensions during batch planning
+
+O02/O27 now avoid cloning every token/marker payload into discarded native
+inputs just to plan external graph groups. Owned native inputs and borrowed
+external readouts share the same dimension-based grouping algorithm. Stable
+length ordering, original indices, physical rectangles, conservative readout
+charges, padding and complete-prefix budgets are unchanged; inference tensors
+and calibration remain in their existing paths.
+
+The local release allocator check compares the retained historical clone stage
+with actual borrowed planning. Four 512-token question rows formerly request
+8,672 bytes in the clone stage alone; complete borrowed planning requests 256
+bytes, the same as four short rows. This measures planning heap requests only,
+not total RSS or inference latency. Native grouping and actual CPU browser
+gates retain frozen inputs/probabilities and thresholds. Apple and actual GPU
+checks remain deferred.
+[Evidence and limits](verification/borrowed-batch-planning-20261009/README.md).
 
 ### Reuse owned candidate-logit storage for calibration
 

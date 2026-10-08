@@ -1,39 +1,55 @@
 use crate::backend::{BatchLimits, ForwardInput};
 
+/// Grouping needs dimensions only. Owned native inputs and borrowed external
+/// readouts share the same budget/padding algorithm without copying payloads.
+pub(super) trait BatchShape {
+    fn token_len(&self) -> usize;
+    fn readout_rows(&self) -> usize;
+}
+
+impl BatchShape for ForwardInput {
+    fn token_len(&self) -> usize {
+        self.tokens.len()
+    }
+    fn readout_rows(&self) -> usize {
+        self.positions.len().saturating_add(1)
+    }
+}
+
 /// Greedy groups in caller order (engine supplies increasing lengths). Charge
 /// the full padded rectangle, and always preserve oversized singletons intact.
-pub(super) fn padded_groups(
-    inputs: Vec<(usize, ForwardInput)>,
+pub(super) fn padded_groups<T: BatchShape>(
+    inputs: Vec<(usize, T)>,
     budget: usize,
     percent: usize,
     limits: BatchLimits,
-) -> Vec<Vec<(usize, ForwardInput)>> {
+) -> Vec<Vec<(usize, T)>> {
     padded_groups_with_prefix(inputs, budget, percent, limits, 0)
 }
 
 /// Charge complete KV contexts, but bound padding against only newly submitted
 /// suffix positions. Prefix residency cannot hide padding cost.
-pub(super) fn padded_groups_with_prefix(
-    inputs: Vec<(usize, ForwardInput)>,
+pub(super) fn padded_groups_with_prefix<T: BatchShape>(
+    inputs: Vec<(usize, T)>,
     budget: usize,
     percent: usize,
     limits: BatchLimits,
     prefix: usize,
-) -> Vec<Vec<(usize, ForwardInput)>> {
+) -> Vec<Vec<(usize, T)>> {
     let mut groups = Vec::new();
-    let mut group: Vec<(usize, ForwardInput)> = Vec::new();
+    let mut group: Vec<(usize, T)> = Vec::new();
     let mut longest = 0;
     let mut logical = 0usize;
     let mut readouts = 0usize;
     for input in inputs {
-        let length = input.1.tokens.len();
+        let length = input.1.token_len();
         let new_longest = longest.max(length);
         let physical = new_longest.checked_mul(group.len() + 1);
         let workspace = new_longest
             .checked_add(prefix)
             .and_then(|n| n.checked_mul(group.len() + 1));
         let new_logical = logical.checked_add(length);
-        let cost = input.1.positions.len().saturating_add(1);
+        let cost = input.1.readout_rows();
         let new_readouts = readouts.checked_add(cost);
         let fits = physical
             .zip(new_logical)

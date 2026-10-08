@@ -10,6 +10,16 @@ pub struct MarkerReadout {
     pub qtype: u32,
 }
 
+impl batching::BatchShape for &MarkerReadout {
+    fn token_len(&self) -> usize {
+        self.tokens.len()
+    }
+    fn readout_rows(&self) -> usize {
+        // Keep the native planner's conservative final-decision row charge.
+        self.positions.len().saturating_add(1)
+    }
+}
+
 /// Immutable CPU external graph collation profile; no prefix/retention policy.
 #[derive(Debug, Clone, Copy)]
 pub struct MarkerBatchProfile {
@@ -455,17 +465,7 @@ impl ExternalEvaluation {
 
     pub fn marker_batches(&self, profile: MarkerBatchProfile) -> Result<Vec<MarkerBatch>> {
         profile.validate()?;
-        let mut inputs: Vec<_> = self
-            .readouts
-            .iter()
-            .enumerate()
-            .map(|(i, input)| {
-                (
-                    i,
-                    ForwardInput::new(input.tokens.clone(), input.positions.clone()),
-                )
-            })
-            .collect();
+        let mut inputs: Vec<_> = self.readouts.iter().enumerate().collect();
         inputs.sort_by_key(|(_, input)| input.tokens.len());
         Ok(batching::padded_groups(
             inputs,

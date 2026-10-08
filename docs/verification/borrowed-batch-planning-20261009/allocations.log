@@ -1,0 +1,23 @@
+   Compiling huncho-core v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-core)
+    Finished `release` profile [optimized] target(s) in 12.70s
+     Running tests/batch_planning_allocations.rs (target/release/deps/batch_planning_allocations-a7c69092a9e986a5)
+
+running 1 test
+test external_planner_heap_requests_do_not_grow_with_token_payloads ... tokens_per_question=14, questions=4: historical clone-stage calls=9, requested_bytes=704; actual borrowed planner calls=4, requested_bytes=256
+tokens_per_question=512, questions=4: historical clone-stage calls=9, requested_bytes=8672; actual borrowed planner calls=4, requested_bytes=256
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/calibration_allocations.rs (target/release/deps/calibration_allocations-682d739fbbbe3e21)
+
+running 1 test
+test owned_calibration_makes_no_heap_calls_and_borrowed_calibration_uses_one_fp32_buffer ... candidates=2: historical alloc/realloc calls=2, requested_bytes=24; borrowed calls=1, requested_bytes=8; owned calls=0, requested_bytes=0
+candidates=3: historical alloc/realloc calls=2, requested_bytes=36; borrowed calls=1, requested_bytes=12; owned calls=0, requested_bytes=0
+candidates=10: historical alloc/realloc calls=2, requested_bytes=120; borrowed calls=1, requested_bytes=40; owned calls=0, requested_bytes=0
+candidates=255: historical alloc/realloc calls=2, requested_bytes=3060; borrowed calls=1, requested_bytes=1020; owned calls=0, requested_bytes=0
+candidates=4096: historical alloc/realloc calls=2, requested_bytes=49152; borrowed calls=1, requested_bytes=16384; owned calls=0, requested_bytes=0
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

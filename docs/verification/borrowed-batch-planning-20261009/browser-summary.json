@@ -1,0 +1,593 @@
+{
+  "qualified": false,
+  "synthetic_fixture_only": true,
+  "actual_runtime": "ONNX Runtime Web 1.30.0 CPU WASM",
+  "browser": "Chrome/151.0.7922.137",
+  "gpu_checks": false,
+  "checks": [
+    "fresh actual CPU WASM inference for every labeled fixture question",
+    "all typed answers, per-type temperatures, raw logits, confidence, legend and logical usage",
+    "extensions opt-in and complete native wire parity",
+    "exact native/WASM tokenizer and prompt parity; consumed and invalid plan cleanup",
+    "unlabeled, incomplete, drifted, pending, nonfinite, substituted and GPU-provider loads refuse serving",
+    "actual native equal/masked CPU WASM row/marker batches; original typed probabilities, sorted scatter and honest physical/logical counters",
+    "browser batch ABI/mask/limit/label/nonfinite/vacuous gates; below-external-limit drift still fails fixed paired 1e-4",
+    "self-contained bundle, pinned descriptor/SDK, fresh session qualification and overwrite refusal",
+    "actual dedicated CPU WASM worker: fresh complete labeled gate and unchanged typed/native probability parity",
+    "worker hash/outcome refusal, bounded immutable requests, drain/dispose, fatal failure and explicit termination reject all pending work",
+    "new hashed native-batch bundle and dedicated worker each rerun actual labeled/paired tensor gates",
+    "invalid model, empty requests/candidates, multimodal input and option budgets fail; next evaluation succeeds",
+    "bounded queue, input snapshots, immutable qualification and drain-before-dispose"
+  ],
+  "report": {
+    "model": "browser-synthetic-f1",
+    "backend": "onnx",
+    "dtype": "fp32",
+    "device": "WASM",
+    "execution_metadata": {
+      "ORT_WASM_sha256": "3398c10d07d229bd91b364548e130e0e51a8e5704b88c7c083ebbeb78842dee2",
+      "ORT_loader_sha256": "e13f7f94fc51b4ca72b12faeb1ee95f4ace6dfbc8939bc718aabdc0a27c4299b",
+      "ORT_module_sha256": "219e6a1fc8a9938268d18efca3c91d310bd2f4a59bbd13744df5b2b7fc6cee3b",
+      "browser_execution": "calling-thread-v1",
+      "browser_user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36",
+      "core_WASM_sha256": "94ebde3fbe404834fd47d88bf354f93957691d3c9f422dbd5d4ac2b3776d54a2",
+      "core_module_sha256": "6e955c1ab54a31556924f023b2ca95c16cf02b348dde459bd790f1acf908b147",
+      "external_marker_scores": "graph-integrated-f1-v1",
+      "golden_sha256": "726c0bc9c5b6d5307f9e27e1fa8619de3aea0b89f80261b97e279afe8f9ff82b",
+      "graph_optimization": "all",
+      "manifest_sha256": "a2e921ec89f350f8e4cd287e9ad88345073917b3430c6ef69d39d5a2213408bf",
+      "model_sha256": "15198bd1673dd9ee82b9d094400878bcbe2b5fc51887a7ccac0df61d8300a7b4",
+      "native_execution": "onnxruntime-web-integrated-f1-v1",
+      "onnx_execution_provider": "wasm",
+      "onnx_web_version": "1.30.0",
+      "tokenizer_sha256": "f5bff0b656463e1ebe4e689eda962091b620d389ad75002ad54409a7da5b1209",
+      "wasm_simd": "fixed",
+      "wasm_threads": "1"
+    },
+    "reference_readout": false,
+    "prefix_cache": false,
+    "persistent_prefix_bytes": 0,
+    "max_batch_tokens": null,
+    "max_batch_padding_percent": 0,
+    "prepare_all": false,
+    "cooperative_prefill": false,
+    "work": {
+      "forward_calls": 12,
+      "prefill_calls": 0,
+      "chunked_prefills": 0,
+      "processed_tokens": 645,
+      "reused_prefix_tokens": 0,
+      "cache_forks": 0,
+      "batch_calls": 0,
+      "fork_batch_calls": 0,
+      "fork_padded_batch_calls": 0,
+      "padded_batch_calls": 0,
+      "padded_tokens": 0,
+      "cross_request_batches": 0,
+      "persistent_prefix_hits": 0,
+      "result_cache_hits": 0,
+      "prompt_cache_hits": 0,
+      "prepared_questions": 12,
+      "prefill_yields": 0,
+      "prefill_interleaves": 0
+    },
+    "cases": [
+      {
+        "id": "synthetic-0",
+        "max_prob_delta": 0,
+        "argmax_match": true,
+        "ece": 0.40853804
+      },
+      {
+        "id": "synthetic-1",
+        "max_prob_delta": 0,
+        "argmax_match": true,
+        "ece": 0.41004154
+      },
+      {
+        "id": "synthetic-2",
+        "max_prob_delta": 0,
+        "argmax_match": true,
+        "ece": 0.4072236
+      },
+      {
+        "id": "synthetic-3",
+        "max_prob_delta": 0,
+        "argmax_match": true,
+        "ece": 0.41391882
+      }
+    ],
+    "max_prob_delta": 0,
+    "argmax_agreement": 1,
+    "ece": 0,
+    "passed": true,
+    "outcome_calibration": {
+      "questions": 12,
+      "backend_ece": 0.4099305,
+      "reference_ece": 0.4099305,
+      "backend_brier": 0.614227793831149,
+      "reference_brier": 0.614227793831149
+    }
+  },
+  "package_report": {
+    "model": "browser-synthetic-f1",
+    "backend": "onnx",
+    "dtype": "fp32",
+    "device": "WASM",
+    "execution_metadata": {
+      "ORT_WASM_sha256": "3398c10d07d229bd91b364548e130e0e51a8e5704b88c7c083ebbeb78842dee2",
+      "ORT_loader_sha256": "e13f7f94fc51b4ca72b12faeb1ee95f4ace6dfbc8939bc718aabdc0a27c4299b",
+      "ORT_module_sha256": "219e6a1fc8a9938268d18efca3c91d310bd2f4a59bbd13744df5b2b7fc6cee3b",
+      "browser_execution": "calling-thread-v1",
+      "browser_user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36",
+      "core_WASM_sha256": "94ebde3fbe404834fd47d88bf354f93957691d3c9f422dbd5d4ac2b3776d54a2",
+      "core_module_sha256": "6e955c1ab54a31556924f023b2ca95c16cf02b348dde459bd790f1acf908b147",
+      "external_marker_scores": "graph-integrated-f1-v1",
+      "golden_sha256": "726c0bc9c5b6d5307f9e27e1fa8619de3aea0b89f80261b97e279afe8f9ff82b",
+      "graph_optimization": "all",
+      "manifest_sha256": "a2e921ec89f350f8e4cd287e9ad88345073917b3430c6ef69d39d5a2213408bf",
+      "model_sha256": "15198bd1673dd9ee82b9d094400878bcbe2b5fc51887a7ccac0df61d8300a7b4",
+      "native_execution": "onnxruntime-web-integrated-f1-v1",
+      "onnx_execution_provider": "wasm",
+      "onnx_web_version": "1.30.0",
+      "package_sha256": "c6d322b17ba321be041d22cedc1eef89df251b261f7716693df19552b199c3b9",
+      "sdk_sha256": "17abb0c5d2bc3ae8816ee27fdb8c7a88e885c35d24562293391d41010111b2ea",
+      "tokenizer_sha256": "f5bff0b656463e1ebe4e689eda962091b620d389ad75002ad54409a7da5b1209",
+      "wasm_simd": "fixed",
+      "wasm_threads": "1",
+      "worker_module_sha256": "d074f7d9e343614450c07914bb24a3dc62a52f9eb76dff5417955b13e4e5f689"
+    },
+    "reference_readout": false,
+    "prefix_cache": false,
+    "persistent_prefix_bytes": 0,
+    "max_batch_tokens": null,
+    "max_batch_padding_percent": 0,
+    "prepare_all": false,
+    "cooperative_prefill": false,
+    "work": {
+      "forward_calls": 12,
+      "prefill_calls": 0,
+      "chunked_prefills": 0,
+      "processed_tokens": 645,
+      "reused_prefix_tokens": 0,
+      "cache_forks": 0,
+      "batch_calls": 0,
+      "fork_batch_calls": 0,
+      "fork_padded_batch_calls": 0,
+      "padded_batch_calls": 0,
+      "padded_tokens": 0,
+      "cross_request_batches": 0,
+      "persistent_prefix_hits": 0,
+      "result_cache_hits": 0,
+      "prompt_cache_hits": 0,
+      "prepared_questions": 12,
+      "prefill_yields": 0,
+      "prefill_interleaves": 0
+    },
+    "cases": [
+      {
+        "id": "synthetic-0",
+        "max_prob_delta": 0,
+        "argmax_match": true,
+        "ece": 0.40853804
+      },
+      {
+        "id": "synthetic-1",
+        "max_prob_delta": 0,
+        "argmax_match": true,
+        "ece": 0.41004154
+      },
+      {
+        "id": "synthetic-2",
+        "max_prob_delta": 0,
+        "argmax_match": true,
+        "ece": 0.4072236
+      },
+      {
+        "id": "synthetic-3",
+        "max_prob_delta": 0,
+        "argmax_match": true,
+        "ece": 0.41391882
+      }
+    ],
+    "max_prob_delta": 0,
+    "argmax_agreement": 1,
+    "ece": 0,
+    "passed": true,
+    "outcome_calibration": {
+      "questions": 12,
+      "backend_ece": 0.4099305,
+      "reference_ece": 0.4099305,
+      "backend_brier": 0.614227793831149,
+      "reference_brier": 0.614227793831149
+    }
+  },
+  "worker_report": {
+    "model": "browser-synthetic-f1",
+    "backend": "onnx",
+    "dtype": "fp32",
+    "device": "WASM",
+    "execution_metadata": {
+      "ORT_WASM_sha256": "3398c10d07d229bd91b364548e130e0e51a8e5704b88c7c083ebbeb78842dee2",
+      "ORT_loader_sha256": "e13f7f94fc51b4ca72b12faeb1ee95f4ace6dfbc8939bc718aabdc0a27c4299b",
+      "ORT_module_sha256": "219e6a1fc8a9938268d18efca3c91d310bd2f4a59bbd13744df5b2b7fc6cee3b",
+      "browser_execution": "dedicated-worker-v1",
+      "browser_user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36",
+      "core_WASM_sha256": "94ebde3fbe404834fd47d88bf354f93957691d3c9f422dbd5d4ac2b3776d54a2",
+      "core_module_sha256": "6e955c1ab54a31556924f023b2ca95c16cf02b348dde459bd790f1acf908b147",
+      "external_marker_scores": "graph-integrated-f1-v1",
+      "golden_sha256": "726c0bc9c5b6d5307f9e27e1fa8619de3aea0b89f80261b97e279afe8f9ff82b",
+      "graph_optimization": "all",
+      "manifest_sha256": "a2e921ec89f350f8e4cd287e9ad88345073917b3430c6ef69d39d5a2213408bf",
+      "model_sha256": "15198bd1673dd9ee82b9d094400878bcbe2b5fc51887a7ccac0df61d8300a7b4",
+      "native_execution": "onnxruntime-web-integrated-f1-v1",
+      "onnx_execution_provider": "wasm",
+      "onnx_web_version": "1.30.0",
+      "package_sha256": "c6d322b17ba321be041d22cedc1eef89df251b261f7716693df19552b199c3b9",
+      "sdk_sha256": "17abb0c5d2bc3ae8816ee27fdb8c7a88e885c35d24562293391d41010111b2ea",
+      "tokenizer_sha256": "f5bff0b656463e1ebe4e689eda962091b620d389ad75002ad54409a7da5b1209",
+      "wasm_simd": "fixed",
+      "wasm_threads": "1",
+      "worker_module_sha256": "d074f7d9e343614450c07914bb24a3dc62a52f9eb76dff5417955b13e4e5f689"
+    },
+    "reference_readout": false,
+    "prefix_cache": false,
+    "persistent_prefix_bytes": 0,
+    "max_batch_tokens": null,
+    "max_batch_padding_percent": 0,
+    "prepare_all": false,
+    "cooperative_prefill": false,
+    "work": {
+      "forward_calls": 12,
+      "prefill_calls": 0,
+      "chunked_prefills": 0,
+      "processed_tokens": 645,
+      "reused_prefix_tokens": 0,
+      "cache_forks": 0,
+      "batch_calls": 0,
+      "fork_batch_calls": 0,
+      "fork_padded_batch_calls": 0,
+      "padded_batch_calls": 0,
+      "padded_tokens": 0,
+      "cross_request_batches": 0,
+      "persistent_prefix_hits": 0,
+      "result_cache_hits": 0,
+      "prompt_cache_hits": 0,
+      "prepared_questions": 12,
+      "prefill_yields": 0,
+      "prefill_interleaves": 0
+    },
+    "cases": [
+      {
+        "id": "synthetic-0",
+        "max_prob_delta": 0,
+        "argmax_match": true,
+        "ece": 0.40853804
+      },
+      {
+        "id": "synthetic-1",
+        "max_prob_delta": 0,
+        "argmax_match": true,
+        "ece": 0.41004154
+      },
+      {
+        "id": "synthetic-2",
+        "max_prob_delta": 0,
+        "argmax_match": true,
+        "ece": 0.4072236
+      },
+      {
+        "id": "synthetic-3",
+        "max_prob_delta": 0,
+        "argmax_match": true,
+        "ece": 0.41391882
+      }
+    ],
+    "max_prob_delta": 0,
+    "argmax_agreement": 1,
+    "ece": 0,
+    "passed": true,
+    "outcome_calibration": {
+      "questions": 12,
+      "backend_ece": 0.4099305,
+      "reference_ece": 0.4099305,
+      "backend_brier": 0.614227793831149,
+      "reference_brier": 0.614227793831149
+    }
+  },
+  "batch_report": {
+    "model": "browser-synthetic-f1",
+    "backend": "onnx",
+    "dtype": "fp32",
+    "device": "WASM",
+    "execution_metadata": {
+      "ORT_WASM_sha256": "3398c10d07d229bd91b364548e130e0e51a8e5704b88c7c083ebbeb78842dee2",
+      "ORT_loader_sha256": "e13f7f94fc51b4ca72b12faeb1ee95f4ace6dfbc8939bc718aabdc0a27c4299b",
+      "ORT_module_sha256": "219e6a1fc8a9938268d18efca3c91d310bd2f4a59bbd13744df5b2b7fc6cee3b",
+      "browser_batch_padding_percent": "100",
+      "browser_batch_tokens": "8192",
+      "browser_execution": "calling-thread-v1",
+      "browser_user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36",
+      "core_WASM_sha256": "94ebde3fbe404834fd47d88bf354f93957691d3c9f422dbd5d4ac2b3776d54a2",
+      "core_module_sha256": "6e955c1ab54a31556924f023b2ca95c16cf02b348dde459bd790f1acf908b147",
+      "external_marker_scores": "graph-integrated-f1-batch-v1",
+      "golden_sha256": "726c0bc9c5b6d5307f9e27e1fa8619de3aea0b89f80261b97e279afe8f9ff82b",
+      "graph_optimization": "all",
+      "manifest_sha256": "a2e921ec89f350f8e4cd287e9ad88345073917b3430c6ef69d39d5a2213408bf",
+      "model_sha256": "3cf897b61fd20424f2a81b285f08570ea4e28b14d3ec4c079b7f407ccaa6ddb3",
+      "native_execution": "onnxruntime-web-integrated-f1-batch-v1",
+      "onnx_execution_provider": "wasm",
+      "onnx_native_batch": "wasm-f1-row-marker-v1",
+      "onnx_web_version": "1.30.0",
+      "tokenizer_sha256": "f5bff0b656463e1ebe4e689eda962091b620d389ad75002ad54409a7da5b1209",
+      "wasm_simd": "fixed",
+      "wasm_threads": "1"
+    },
+    "reference_readout": false,
+    "prefix_cache": false,
+    "persistent_prefix_bytes": 0,
+    "max_batch_tokens": 8192,
+    "max_batch_padding_percent": 100,
+    "prepare_all": false,
+    "cooperative_prefill": false,
+    "work": {
+      "forward_calls": 4,
+      "prefill_calls": 0,
+      "chunked_prefills": 0,
+      "processed_tokens": 672,
+      "reused_prefix_tokens": 0,
+      "cache_forks": 0,
+      "batch_calls": 4,
+      "fork_batch_calls": 0,
+      "fork_padded_batch_calls": 0,
+      "padded_batch_calls": 3,
+      "padded_tokens": 27,
+      "cross_request_batches": 0,
+      "persistent_prefix_hits": 0,
+      "result_cache_hits": 0,
+      "prompt_cache_hits": 0,
+      "prepared_questions": 12,
+      "prefill_yields": 0,
+      "prefill_interleaves": 0
+    },
+    "cases": [
+      {
+        "id": "synthetic-0",
+        "max_prob_delta": 0,
+        "argmax_match": true,
+        "ece": 0.40853804
+      },
+      {
+        "id": "synthetic-1",
+        "max_prob_delta": 0,
+        "argmax_match": true,
+        "ece": 0.41004154
+      },
+      {
+        "id": "synthetic-2",
+        "max_prob_delta": 0,
+        "argmax_match": true,
+        "ece": 0.4072236
+      },
+      {
+        "id": "synthetic-3",
+        "max_prob_delta": 0,
+        "argmax_match": true,
+        "ece": 0.41391882
+      }
+    ],
+    "max_prob_delta": 0,
+    "argmax_agreement": 1,
+    "ece": 0,
+    "passed": true,
+    "outcome_calibration": {
+      "questions": 12,
+      "backend_ece": 0.4099305,
+      "reference_ece": 0.4099305,
+      "backend_brier": 0.614227793831149,
+      "reference_brier": 0.614227793831149
+    },
+    "optimization_parity": {
+      "max_prob_delta": 0,
+      "argmax_agreement": 1
+    }
+  },
+  "equal_batch_report": {
+    "model": "browser-synthetic-f1",
+    "backend": "onnx",
+    "dtype": "fp32",
+    "device": "WASM",
+    "execution_metadata": {
+      "ORT_WASM_sha256": "3398c10d07d229bd91b364548e130e0e51a8e5704b88c7c083ebbeb78842dee2",
+      "ORT_loader_sha256": "e13f7f94fc51b4ca72b12faeb1ee95f4ace6dfbc8939bc718aabdc0a27c4299b",
+      "ORT_module_sha256": "219e6a1fc8a9938268d18efca3c91d310bd2f4a59bbd13744df5b2b7fc6cee3b",
+      "browser_batch_padding_percent": "0",
+      "browser_batch_tokens": "8192",
+      "browser_execution": "calling-thread-v1",
+      "browser_user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36",
+      "core_WASM_sha256": "94ebde3fbe404834fd47d88bf354f93957691d3c9f422dbd5d4ac2b3776d54a2",
+      "core_module_sha256": "6e955c1ab54a31556924f023b2ca95c16cf02b348dde459bd790f1acf908b147",
+      "external_marker_scores": "graph-integrated-f1-batch-v1",
+      "golden_sha256": "75c1aa2774e519d112fca470d030aed9c4601b5356b0146c65f6046460d3dd7f",
+      "graph_optimization": "all",
+      "manifest_sha256": "a2e921ec89f350f8e4cd287e9ad88345073917b3430c6ef69d39d5a2213408bf",
+      "model_sha256": "c33743895663e9afe3db977a78f116f9aae3dd087df7ea019a31062f22ca5981",
+      "native_execution": "onnxruntime-web-integrated-f1-batch-v1",
+      "onnx_execution_provider": "wasm",
+      "onnx_native_batch": "wasm-f1-row-marker-v1",
+      "onnx_web_version": "1.30.0",
+      "tokenizer_sha256": "f5bff0b656463e1ebe4e689eda962091b620d389ad75002ad54409a7da5b1209",
+      "wasm_simd": "fixed",
+      "wasm_threads": "1"
+    },
+    "reference_readout": false,
+    "prefix_cache": false,
+    "persistent_prefix_bytes": 0,
+    "max_batch_tokens": 8192,
+    "max_batch_padding_percent": 0,
+    "prepare_all": false,
+    "cooperative_prefill": false,
+    "work": {
+      "forward_calls": 10,
+      "prefill_calls": 0,
+      "chunked_prefills": 0,
+      "processed_tokens": 851,
+      "reused_prefix_tokens": 0,
+      "cache_forks": 0,
+      "batch_calls": 4,
+      "fork_batch_calls": 0,
+      "fork_padded_batch_calls": 0,
+      "padded_batch_calls": 0,
+      "padded_tokens": 0,
+      "cross_request_batches": 0,
+      "persistent_prefix_hits": 0,
+      "result_cache_hits": 0,
+      "prompt_cache_hits": 0,
+      "prepared_questions": 16,
+      "prefill_yields": 0,
+      "prefill_interleaves": 0
+    },
+    "cases": [
+      {
+        "id": "synthetic-0",
+        "max_prob_delta": 0,
+        "argmax_match": true,
+        "ece": 0.3982351
+      },
+      {
+        "id": "synthetic-1",
+        "max_prob_delta": 0,
+        "argmax_match": true,
+        "ece": 0.40049037
+      },
+      {
+        "id": "synthetic-2",
+        "max_prob_delta": 0,
+        "argmax_match": true,
+        "ece": 0.39626348
+      },
+      {
+        "id": "synthetic-3",
+        "max_prob_delta": 0,
+        "argmax_match": true,
+        "ece": 0.40630627
+      }
+    ],
+    "max_prob_delta": 0,
+    "argmax_agreement": 1,
+    "ece": 0,
+    "passed": true,
+    "outcome_calibration": {
+      "questions": 16,
+      "backend_ece": 0.4003238,
+      "reference_ece": 0.4003238,
+      "backend_brier": 0.6390742718810609,
+      "reference_brier": 0.6390742718810609
+    },
+    "optimization_parity": {
+      "max_prob_delta": 0,
+      "argmax_agreement": 1
+    }
+  },
+  "batch_worker_report": {
+    "model": "browser-synthetic-f1",
+    "backend": "onnx",
+    "dtype": "fp32",
+    "device": "WASM",
+    "execution_metadata": {
+      "ORT_WASM_sha256": "3398c10d07d229bd91b364548e130e0e51a8e5704b88c7c083ebbeb78842dee2",
+      "ORT_loader_sha256": "e13f7f94fc51b4ca72b12faeb1ee95f4ace6dfbc8939bc718aabdc0a27c4299b",
+      "ORT_module_sha256": "219e6a1fc8a9938268d18efca3c91d310bd2f4a59bbd13744df5b2b7fc6cee3b",
+      "browser_batch_padding_percent": "100",
+      "browser_batch_tokens": "8192",
+      "browser_execution": "dedicated-worker-v1",
+      "browser_user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.0.0 Safari/537.36",
+      "core_WASM_sha256": "94ebde3fbe404834fd47d88bf354f93957691d3c9f422dbd5d4ac2b3776d54a2",
+      "core_module_sha256": "6e955c1ab54a31556924f023b2ca95c16cf02b348dde459bd790f1acf908b147",
+      "external_marker_scores": "graph-integrated-f1-batch-v1",
+      "golden_sha256": "726c0bc9c5b6d5307f9e27e1fa8619de3aea0b89f80261b97e279afe8f9ff82b",
+      "graph_optimization": "all",
+      "manifest_sha256": "a2e921ec89f350f8e4cd287e9ad88345073917b3430c6ef69d39d5a2213408bf",
+      "model_sha256": "3cf897b61fd20424f2a81b285f08570ea4e28b14d3ec4c079b7f407ccaa6ddb3",
+      "native_execution": "onnxruntime-web-integrated-f1-batch-v1",
+      "onnx_execution_provider": "wasm",
+      "onnx_native_batch": "wasm-f1-row-marker-v1",
+      "onnx_web_version": "1.30.0",
+      "package_sha256": "0f8ca156ab937798b51e4428dc5c31cd75eca8f7e954ed8db89947379215d000",
+      "sdk_sha256": "17abb0c5d2bc3ae8816ee27fdb8c7a88e885c35d24562293391d41010111b2ea",
+      "tokenizer_sha256": "f5bff0b656463e1ebe4e689eda962091b620d389ad75002ad54409a7da5b1209",
+      "wasm_simd": "fixed",
+      "wasm_threads": "1",
+      "worker_module_sha256": "d074f7d9e343614450c07914bb24a3dc62a52f9eb76dff5417955b13e4e5f689"
+    },
+    "reference_readout": false,
+    "prefix_cache": false,
+    "persistent_prefix_bytes": 0,
+    "max_batch_tokens": 8192,
+    "max_batch_padding_percent": 100,
+    "prepare_all": false,
+    "cooperative_prefill": false,
+    "work": {
+      "forward_calls": 4,
+      "prefill_calls": 0,
+      "chunked_prefills": 0,
+      "processed_tokens": 672,
+      "reused_prefix_tokens": 0,
+      "cache_forks": 0,
+      "batch_calls": 4,
+      "fork_batch_calls": 0,
+      "fork_padded_batch_calls": 0,
+      "padded_batch_calls": 3,
+      "padded_tokens": 27,
+      "cross_request_batches": 0,
+      "persistent_prefix_hits": 0,
+      "result_cache_hits": 0,
+      "prompt_cache_hits": 0,
+      "prepared_questions": 12,
+      "prefill_yields": 0,
+      "prefill_interleaves": 0
+    },
+    "cases": [
+      {
+        "id": "synthetic-0",
+        "max_prob_delta": 0,
+        "argmax_match": true,
+        "ece": 0.40853804
+      },
+      {
+        "id": "synthetic-1",
+        "max_prob_delta": 0,
+        "argmax_match": true,
+        "ece": 0.41004154
+      },
+      {
+        "id": "synthetic-2",
+        "max_prob_delta": 0,
+        "argmax_match": true,
+        "ece": 0.4072236
+      },
+      {
+        "id": "synthetic-3",
+        "max_prob_delta": 0,
+        "argmax_match": true,
+        "ece": 0.41391882
+      }
+    ],
+    "max_prob_delta": 0,
+    "argmax_agreement": 1,
+    "ece": 0,
+    "passed": true,
+    "outcome_calibration": {
+      "questions": 12,
+      "backend_ece": 0.4099305,
+      "reference_ece": 0.4099305,
+      "backend_brier": 0.614227793831149,
+      "reference_brier": 0.614227793831149
+    },
+    "optimization_parity": {
+      "max_prob_delta": 0,
+      "argmax_agreement": 1
+    }
+  },
+  "note": "Synthetic labels test gate plumbing only; no released-model calibration or speed acceptance."
+}
