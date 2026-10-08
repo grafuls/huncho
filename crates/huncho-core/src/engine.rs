@@ -965,7 +965,7 @@ impl Engine {
             released?;
 
             // Head -> candidate logits.
-            let logits = head::candidate_logits(
+            let mut logits = head::candidate_logits(
                 self.manifest.family,
                 self.manifest.head.kind,
                 &output,
@@ -975,7 +975,8 @@ impl Engine {
 
             // Calibration: temperature + softmax.
             let temperature = self.temperature_for(question, n_options);
-            let probabilities = calibration::calibrate(&logits, temperature)?;
+            let probabilities =
+                calibration::calibrate_readout(&mut logits, temperature, opts.extensions)?;
 
             if opts.extensions {
                 raw_logits.insert(id.clone(), logits);
@@ -1106,16 +1107,17 @@ impl Engine {
         for ((id, question, prompt), output) in jobs.into_iter().zip(outputs) {
             let output =
                 output.ok_or_else(|| Error::Backend("batch backend omitted a sequence".into()))?;
-            let logits = head::candidate_logits(
+            let mut logits = head::candidate_logits(
                 self.family(),
                 self.manifest.head.kind,
                 &output,
                 &prompt.candidates,
                 &self.head,
             )?;
-            let probabilities = calibration::calibrate(
-                &logits,
+            let probabilities = calibration::calibrate_readout(
+                &mut logits,
                 self.temperature_for(question, prompt.candidates.len()),
+                opts.extensions,
             )?;
             answers.insert(
                 id.clone(),
@@ -1376,7 +1378,7 @@ impl Engine {
                     "joint backend returned the wrong options for `{id}`"
                 )));
             }
-            let logits = options
+            let mut logits = options
                 .iter()
                 .map(|c| {
                     let label = match (question, c.label.as_str()) {
@@ -1395,8 +1397,11 @@ impl Engine {
                     Ok(value)
                 })
                 .collect::<Result<Vec<_>>>()?;
-            let probabilities =
-                calibration::calibrate(&logits, self.temperature_for(question, options.len()))?;
+            let probabilities = calibration::calibrate_readout(
+                &mut logits,
+                self.temperature_for(question, options.len()),
+                opts.extensions,
+            )?;
             answers.insert(
                 id.clone(),
                 self.build_answer(question, options, &probabilities)?,

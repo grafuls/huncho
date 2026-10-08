@@ -1,0 +1,22 @@
+   Compiling ureq v3.3.0
+   Compiling huncho-backend v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-backend)
+   Compiling ndarray v0.17.2
+   Compiling huncho-core v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-core)
+   Compiling ort-sys v2.0.0-rc.13
+   Compiling ort v2.0.0-rc.13
+   Compiling huncho-api v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-api)
+   Compiling huncho-cli v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-cli)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.81s
+     Running tests/onnx_head_batch.rs (target/debug/deps/onnx_head_batch-c2b92c29d88bc766)
+
+running 1 test
+test cli_native_heads_bind_identity_and_actual_padding_and_refuse_missing_labels ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.81s
+
+     Running tests/onnx_padded.rs (target/debug/deps/onnx_padded-ca895e058f4b8c8c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

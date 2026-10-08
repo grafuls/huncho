@@ -1,0 +1,48 @@
+   Compiling huncho-core v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-core)
+   Compiling huncho-backend v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-backend)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.18s
+     Running tests/clef_batch.rs (target/debug/deps/clef_batch-a0e9675daab3a277)
+
+running 3 tests
+test native_complete_schemas_keep_original_joint_head_lengths_and_physical_rectangles ... ok
+test native_schema_validation_fails_before_any_forward_and_oversized_singletons_stay_intact ... ok
+test opaque_whole_request_collation_preserves_wire_cache_ownership_and_fresh_fixed_gates ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 30.01s
+
+     Running tests/cooperative_batches.rs (target/debug/deps/cooperative_batches-3b4022224f35dff1)
+
+running 3 tests
+test large_qualification_cohorts_leave_live_room_for_actual_native_groups ... ok
+test live_partial_parents_shrink_native_groups_without_leaks_or_probability_drift ... ok
+test native_equal_and_padded_cooperative_groups_keep_frozen_probabilities_and_fresh_gates ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.93s
+
+     Running tests/fork_batch.rs (target/debug/deps/fork_batch-38143f7e46e02aa0)
+
+running 3 tests
+test cached_batches_reject_invalid_partial_foreign_and_exhausted_parents ... ok
+test cached_native_batches_preserve_typed_goldens_rows_pages_and_adapters ... ok
+test engine_branch_batches_preserve_original_goldens_usage_budgets_and_nonvacuous_gates ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.04s
+
+     Running tests/kev_reference.rs (target/debug/deps/kev_reference-028b5eb7dca76560)
+
+running 1 test
+test kev_candle_matches_upstream_probabilities ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+
+     Running tests/native_batch.rs (target/debug/deps/native_batch-4b562e13a56a55ba)
+
+running 5 tests
+test buffered_cpu_kernels_preserve_kev_reference_batches_and_prefixes ... ok
+test execution_profiles_preserve_fixture_readouts_and_cache_semantics ... ok
+test kev_cpu_cross_request_collation_qualifies_unchanged_upstream_vectors ... ok
+test modernbert_batches_preserve_rows_and_candidate_positions ... ok
+test qwen_pointer_batches_preserve_probabilities_and_reject_cache_branches ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.95s
+

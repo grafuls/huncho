@@ -34,6 +34,17 @@ A higher temperature flattens the distribution; a lower temperature sharpens it.
 likelihood on a held-out `(logits, target)` set and writes it back into the
 manifest.
 
+The core keeps the existing FP32 exponent, ordered FP64 sum/division and final
+FP32 rounding. `calibrate_owned(Vec<f32>, temperature)` consumes raw logits
+and normalizes in their allocation; `calibrate(&[f32], temperature)` retains
+the caller's raw logits and allocates one FP32 result buffer. Both reject the
+same invalid logits/temperatures. Native scalar/batch/prefix/cooperative/F5 and
+browser readout paths consume temporary logits when extensions are disabled.
+Extensions retain the original raw vector. No temperature, reduction order or
+candidate mapping changes, and no refit is inferred from buffer reuse.
+[Bitwise and allocation checks](verification/calibration-buffers-20261009/README.md)
+cover the original arithmetic, unchanged gates and actual CPU inference.
+
 ## Confidence
 
 Three definitions are supported, selectable per model via `calibration.default.confidence`:

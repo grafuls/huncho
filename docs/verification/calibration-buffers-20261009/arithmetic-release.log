@@ -1,0 +1,42 @@
+   Compiling huncho-core v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-core)
+    Finished `release` profile [optimized] target(s) in 19.29s
+     Running unittests src/lib.rs (target/release/deps/huncho_core-31b00840e4d86ecb)
+
+running 10 tests
+test calibration::tests::ece_basic ... ok
+test calibration::tests::ece_uses_actual_confidence_and_includes_endpoints ... ok
+test calibration::tests::entropy_confidence ... ok
+test calibration::tests::fit_temperature_recovers_true ... ok
+test calibration::tests::jev_confidence_values ... ok
+test calibration::tests::readout_storage_reuse_preserves_raw_extensions_and_identical_validation ... ok
+test calibration::tests::rejects_invalid_inference_and_fit_inputs ... ok
+test calibration::tests::reused_probability_storage_matches_original_float_bits_and_owned_allocation ... ok
+test calibration::tests::softmax_sums_to_one ... ok
+test calibration::tests::temperature_flattens ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 60 filtered out; finished in 0.01s
+
+     Running tests/calibration_allocations.rs (target/release/deps/calibration_allocations-16f7466a13884b83)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/hf_tokenizer.rs (target/release/deps/hf_tokenizer-682ba29d90e3c387)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/joint_schema.rs (target/release/deps/joint_schema-473a0d16eaab4cf5)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/serving_qualification.rs (target/release/deps/serving_qualification-f4a10d0abe0a488b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out; finished in 0.00s
+

@@ -233,16 +233,17 @@ impl Engine {
                 (batch.jobs, outputs)
             };
             for ((id, question, prompt), output) in jobs.into_iter().zip(outputs) {
-                let logits = head::candidate_logits(
+                let mut logits = head::candidate_logits(
                     self.family(),
                     self.manifest.head.kind,
                     &output,
                     &prompt.candidates,
                     &self.head,
                 )?;
-                let probabilities = calibration::calibrate(
-                    &logits,
+                let probabilities = calibration::calibrate_readout(
+                    &mut logits,
                     self.temperature_for(&question, prompt.candidates.len()),
+                    cursor.options.extensions,
                 )?;
                 cursor.answers.insert(
                     id.clone(),

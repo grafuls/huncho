@@ -17,7 +17,7 @@ These variants remain unqualified.
 | Area | Implementation status | Remaining work or qualification |
 |---|---|---|
 | O01 readout deduplication | Available | New model/profile coverage |
-| O02 buffers/allocations | Available in readouts, heads, CPU gate and selected ONNX outputs | Broader activation-buffer reuse and released workload measurements |
+| O02 buffers/allocations | Available in readouts, heads, CPU gate, selected ONNX outputs and bitwise-preserving owned calibration across scalar/batch/prefix/cooperative/F5/browser paths | Broader activation-buffer reuse and released workload measurements |
 | O03 CPU kernels/threads | Thread/build profiles and optional OpenBLAS available | Platform fitting, held-out gates and throughput |
 | O04 result reuse/coalescing | Available, bounded, default off | Tenant-specific retention policy |
 | O05 F3 selected projection | Available | Released Nimble qualification |
@@ -45,6 +45,26 @@ These variants remain unqualified.
 | O27 browser WASM/WebGPU | Separate CPU WASM F1 scalar/native equal/masked row/marker heads, packaging, dedicated bounded CPU workers and fresh per-session labeled/paired gates available | Released exports/calibration, cross-request batches/prefixes, other families and multithread tuning; WebGPU deferred |
 
 ## Implemented increments
+
+### Reuse owned candidate-logit storage for calibration
+
+O02 now removes the separate FP64 exponent scratch while retaining the original
+FP32 exponential, ordered FP64 sum/division and final FP32 rounding. Every core
+readout path consumes its temporary logits allocation when extensions are off;
+extensions preserve raw logits and use one FP32 probability buffer. This has
+no shared scratch state, feature/runtime dependency, new execution option,
+temperature refit or candidate/order change.
+
+Historical arithmetic comparisons cover float bits, cardinalities, ties,
+extreme finite logits/temperatures, raw extension ownership and identical
+validation. On the measured local release build, historical calibration makes
+two allocation/reallocation calls requesting 12 bytes per candidate, borrowed
+calibration makes one requesting four bytes per candidate, and owned calibration
+makes zero additional heap calls. These are calibration-only heap measurements,
+not end-to-end latency/RSS or released calibration acceptance. Native and CPU
+browser gates retain original weights, probabilities and thresholds. Apple and
+actual GPU checks remain deferred.
+[Evidence and limits](verification/calibration-buffers-20261009/README.md).
 
 ### Direct CPU shared-prefix attention for native suffix rows
 

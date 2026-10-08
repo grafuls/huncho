@@ -232,15 +232,18 @@ impl Engine {
                 released?;
                 output
             };
-            let logits = head::candidate_logits(
+            let mut logits = head::candidate_logits(
                 self.family(),
                 self.manifest.head.kind,
                 &output,
                 &prompt.candidates,
                 &self.head,
             )?;
-            let probabilities =
-                calibration::calibrate(&logits, self.temperature_for(&question, n_options))?;
+            let probabilities = calibration::calibrate_readout(
+                &mut logits,
+                self.temperature_for(&question, n_options),
+                cursor.options.extensions,
+            )?;
             let answer = self.build_answer(&question, &prompt.candidates, &probabilities)?;
             cursor.answers.insert(id.clone(), answer);
             if cursor.options.extensions {

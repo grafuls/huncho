@@ -670,7 +670,7 @@ impl Engine {
             .zip(plan.prompts)
             .zip(plan.readouts.into_iter().zip(scores))
         {
-            let logits = prompt
+            let mut logits = prompt
                 .candidates
                 .iter()
                 .map(|candidate| {
@@ -683,9 +683,10 @@ impl Engine {
                     Ok(scores[row])
                 })
                 .collect::<Result<Vec<_>>>()?;
-            let probabilities = calibration::calibrate(
-                &logits,
+            let probabilities = calibration::calibrate_readout(
+                &mut logits,
                 self.temperature_for(question, prompt.candidates.len()),
+                plan.options.extensions,
             )?;
             answers.insert(
                 id.clone(),

@@ -34,19 +34,29 @@ pub fn softmax(logits: &[f32]) -> Vec<f32> {
 /// This unchecked helper requires a positive finite temperature and finite
 /// logits. Use [`calibrate`] to validate model outputs before serving them.
 pub fn softmax_temperature(logits: &[f32], temperature: f32) -> Vec<f32> {
+    let mut probabilities = logits.to_vec();
+    softmax_temperature_in_place(&mut probabilities, temperature);
+    probabilities
+}
+
+fn softmax_temperature_in_place(logits: &mut [f32], temperature: f32) {
     if logits.is_empty() {
-        return Vec::new();
+        return;
     }
     let inv_t = temperature.recip();
     let max = logits.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-    let mut exp = Vec::with_capacity(logits.len());
     let mut sum = 0.0f64;
-    for &l in logits {
-        let e = ((l - max) * inv_t).exp() as f64;
-        exp.push(e);
-        sum += e;
+    for value in logits.iter_mut() {
+        // The existing exponential is FP32, so FP32 storage preserves it
+        // exactly. Promote to FP64 in the original sum/division order; do not
+        // replace normalization with FP32 division or reciprocal multiply.
+        let e = ((*value - max) * inv_t).exp();
+        *value = e;
+        sum += e as f64;
     }
-    exp.into_iter().map(|e| (e / sum) as f32).collect()
+    for value in logits {
+        *value = (*value as f64 / sum) as f32;
+    }
 }
 
 /// Numerically stable log-softmax.
@@ -158,6 +168,32 @@ pub fn confidence(probs: &[f32], def: &ConfidenceDef) -> f32 {
 /// Apply temperature and softmax to a logit vector, returning calibrated
 /// probabilities. Rejects nonfinite logits and invalid temperatures.
 pub fn calibrate(logits: &[f32], temperature: f32) -> Result<Vec<f32>> {
+    validate_inference_logits(logits, temperature)?;
+    validate_probabilities(softmax_temperature(logits, temperature))
+}
+
+/// Consume raw logits and normalize in the same allocation. FP32 exponential,
+/// FP64 ordered sum/division and final FP32 rounding match [`calibrate`]. Use
+/// the borrowed version when raw logits must remain available to the caller.
+pub fn calibrate_owned(mut logits: Vec<f32>, temperature: f32) -> Result<Vec<f32>> {
+    validate_inference_logits(&logits, temperature)?;
+    softmax_temperature_in_place(&mut logits, temperature);
+    validate_probabilities(logits)
+}
+
+pub(crate) fn calibrate_readout(
+    logits: &mut Vec<f32>,
+    temperature: f32,
+    preserve_logits: bool,
+) -> Result<Vec<f32>> {
+    if preserve_logits {
+        calibrate(logits, temperature)
+    } else {
+        calibrate_owned(std::mem::take(logits), temperature)
+    }
+}
+
+fn validate_inference_logits(logits: &[f32], temperature: f32) -> Result<()> {
     if !temperature.is_finite() || temperature <= 0.0 {
         return Err(Error::Calibration(format!(
             "temperature must be positive and finite, got {temperature}"
@@ -166,7 +202,10 @@ pub fn calibrate(logits: &[f32], temperature: f32) -> Result<Vec<f32>> {
     if logits.iter().any(|value| !value.is_finite()) {
         return Err(Error::Calibration("logits must be finite".into()));
     }
-    let probabilities = softmax_temperature(logits, temperature);
+    Ok(())
+}
+
+fn validate_probabilities(probabilities: Vec<f32>) -> Result<Vec<f32>> {
     if probabilities.iter().any(|value| !value.is_finite()) {
         return Err(Error::Calibration(
             "temperature scaling produced nonfinite probabilities".into(),
@@ -270,6 +309,124 @@ pub fn ece(preds: &[f32], correct: &[bool], bins: usize) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Keep the historical FP64 exponent scratch as an independent arithmetic
+    // reference. New inference reuses FP32 logits storage instead.
+    fn original_softmax(logits: &[f32], temperature: f32) -> Vec<f32> {
+        if logits.is_empty() {
+            return Vec::new();
+        }
+        let inv_t = temperature.recip();
+        let max = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        let mut exponents = Vec::with_capacity(logits.len());
+        let mut sum = 0.0f64;
+        for &logit in logits {
+            let exponent = ((logit - max) * inv_t).exp() as f64;
+            exponents.push(exponent);
+            sum += exponent;
+        }
+        exponents.into_iter().map(|e| (e / sum) as f32).collect()
+    }
+
+    #[test]
+    fn reused_probability_storage_matches_original_float_bits_and_owned_allocation() {
+        let mut seed = 0x7123_abcd_u64;
+        for size in [0, 1, 2, 3, 5, 10, 11, 63, 64, 127, 255, 256, 1024] {
+            for pattern in 0..16 {
+                let mut logits = Vec::with_capacity(size + 31);
+                for index in 0..size {
+                    seed = seed
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
+                    logits.push(match pattern {
+                        0 => 0.,
+                        1 => {
+                            if index % 2 == 0 {
+                                -0.
+                            } else {
+                                0.
+                            }
+                        }
+                        2 => {
+                            if index % 2 == 0 {
+                                f32::MAX
+                            } else {
+                                -f32::MAX
+                            }
+                        }
+                        3 => (index as f32 - size as f32 / 2.) * f32::MIN_POSITIVE,
+                        4 => (index as f32 - size as f32 / 2.) * 1e-5,
+                        5 => (index as f32 - size as f32 / 2.) * 100.,
+                        _ => ((seed >> 32) as u32 as f32 / u32::MAX as f32 - 0.5) * 31.,
+                    });
+                }
+                for temperature in [
+                    f32::MIN_POSITIVE,
+                    1e-20,
+                    0.03125,
+                    0.75,
+                    1.,
+                    2.40605,
+                    1e6,
+                    f32::MAX,
+                ] {
+                    let expected: Vec<_> = original_softmax(&logits, temperature)
+                        .iter()
+                        .map(|v| v.to_bits())
+                        .collect();
+                    let actual = calibrate(&logits, temperature).unwrap();
+                    assert_eq!(
+                        actual.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                        expected
+                    );
+                    let mut owned = Vec::with_capacity(logits.capacity());
+                    owned.extend_from_slice(&logits);
+                    let allocation = owned.as_ptr();
+                    let capacity = owned.capacity();
+                    let actual = calibrate_owned(owned, temperature).unwrap();
+                    assert_eq!(actual.as_ptr(), allocation);
+                    assert_eq!(actual.capacity(), capacity);
+                    assert_eq!(
+                        actual.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                        expected
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn readout_storage_reuse_preserves_raw_extensions_and_identical_validation() {
+        let logits = vec![1., -2., 3.];
+        let expected = original_softmax(&logits, 2.40605);
+        let mut retained = logits.clone();
+        assert_eq!(
+            calibrate_readout(&mut retained, 2.40605, true).unwrap(),
+            expected
+        );
+        assert_eq!(retained, logits);
+        let mut consumed = logits.clone();
+        let allocation = consumed.as_ptr();
+        let result = calibrate_readout(&mut consumed, 2.40605, false).unwrap();
+        assert_eq!(result, expected);
+        assert_eq!(result.as_ptr(), allocation);
+        assert_eq!(consumed.capacity(), 0);
+        for temperature in [0., -1., f32::NAN, f32::INFINITY, f32::from_bits(1)] {
+            assert_eq!(
+                calibrate(&logits, temperature).unwrap_err().to_string(),
+                calibrate_owned(logits.clone(), temperature)
+                    .unwrap_err()
+                    .to_string(),
+            );
+        }
+        for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let invalid = vec![1., invalid];
+            assert_eq!(
+                calibrate(&invalid, 1.).unwrap_err().to_string(),
+                calibrate_owned(invalid, 1.).unwrap_err().to_string(),
+            );
+        }
+    }
 
     #[test]
     fn softmax_sums_to_one() {

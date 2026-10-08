@@ -1,0 +1,26 @@
+   Compiling huncho-core v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-core)
+   Compiling huncho-backend v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-backend)
+   Compiling huncho-api v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-api)
+   Compiling huncho-cli v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-cli)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.32s
+     Running tests/onnx_head_batch.rs (target/debug/deps/onnx_head_batch-374136a1c256cd4c)
+
+running 1 test
+test cli_native_heads_bind_identity_and_actual_padding_and_refuse_missing_labels ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.87s
+
+     Running tests/onnx_integrated.rs (target/debug/deps/onnx_integrated-fb6e0bd77267f946)
+
+running 2 tests
+test device_buffer_and_graph_flags_refuse_cpu_and_invalid_profiles_without_accessing_gpu ... ok
+test native_raw_head_process_binds_identity_and_requires_exact_labeled_serving ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
+
+     Running tests/onnx_padded.rs (target/debug/deps/onnx_padded-699456dfb8880f6a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
