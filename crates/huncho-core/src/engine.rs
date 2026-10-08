@@ -24,6 +24,8 @@ mod batching;
 #[cfg(feature = "external-scores")]
 mod external_scores;
 mod fork_batch;
+mod qualification;
+pub use qualification::ServingQualificationToken;
 mod resumable;
 use batching::padded_groups;
 #[cfg(feature = "external-scores")]
@@ -187,6 +189,7 @@ pub struct Engine {
     response_cache: Option<Arc<Mutex<ResponseCache>>>,
     prompt_cache: Option<Arc<Mutex<PromptCache>>>,
     preparation_identity: Arc<()>,
+    serving_qualification: qualification::ServingQualification,
 }
 
 impl Engine {
@@ -204,6 +207,15 @@ impl Engine {
             .calibration
             .resolve(&backend_id.to_string(), &dtype);
         let mut capabilities = backend.capabilities();
+        if capabilities.extra.contains_key("native_execution")
+            && (backend.id() != backend_id
+                || capabilities.id != backend_id
+                || capabilities.dtype != dtype)
+        {
+            return Err(Error::Backend(
+                "native backend/dtype identity does not match the engine calibration key".into(),
+            ));
+        }
         let supports_fork = capabilities.supports_fork;
         let supports_fork_batch = backend.supports_fork_batch();
         let supports_padded_fork_batch = backend.supports_padded_fork_batch();
@@ -247,6 +259,7 @@ impl Engine {
             response_cache: None,
             prompt_cache: None,
             preparation_identity: Arc::new(()),
+            serving_qualification: Default::default(),
         })
     }
 
@@ -304,6 +317,7 @@ impl Engine {
             response_cache: self.response_cache.clone(),
             prompt_cache: self.prompt_cache.clone(),
             preparation_identity: self.preparation_identity.clone(),
+            serving_qualification: Default::default(),
         })
     }
 
@@ -312,6 +326,7 @@ impl Engine {
     /// and 1,024-entry bound; oversized responses and errors are not cached.
     /// Cached data includes input text and is held only for this engine's life.
     pub fn with_result_cache(mut self, max_bytes: usize) -> Self {
+        self.serving_qualification = Default::default();
         self.response_cache =
             (max_bytes > 0).then(|| Arc::new(Mutex::new(ResponseCache::new(max_bytes))));
         self
@@ -321,6 +336,7 @@ impl Engine {
     /// disables retention and cache-key/lock overhead. F5 owns its preparation.
     /// A charged-byte budget and 1,024-entry FIFO bound retained inputs/tokens.
     pub fn with_prompt_cache(mut self, max_bytes: usize) -> Self {
+        self.serving_qualification = Default::default();
         self.prompt_cache = (max_bytes > 0 && self.family() != Family::F5)
             .then(|| Arc::new(Mutex::new(PromptCache::new(max_bytes))));
         self
@@ -409,7 +425,8 @@ impl Engine {
             .clear_prefix_cache()
     }
 
-    /// Evaluate a request and produce a response.
+    /// Diagnostic evaluation, also used for fitting and conformance. For
+    /// calibrated production use `qualify_for_serving` and `eval_for_serving`.
     pub fn eval(&self, req: &SystemOneRequest, opts: &EvalOptions) -> Result<SystemOneResponse> {
         self.eval_with_stats(req, opts, &mut EvalStats::default())
     }
@@ -446,12 +463,11 @@ impl Engine {
         *stats = EvalStats::default();
         request.validate()?;
         self.validate_options(&options)?;
-        let key = self
-            .response_cache
-            .as_ref()
-            .filter(|_| reuse)
-            .map(|_| cache_key::request(&request, &options))
-            .transpose()?;
+        let key = if reuse {
+            self.result_cache_key(&request, &options)?
+        } else {
+            None
+        };
         let cached = if let (Some(cache), Some(key)) = (&self.response_cache, &key) {
             cache.lock().ok().and_then(|cache| cache.get(key))
         } else {
@@ -684,13 +700,7 @@ impl Engine {
         stats: &mut EvalStats,
     ) -> Result<SystemOneResponse> {
         *stats = EvalStats::default();
-        let key = if self.response_cache.is_some() {
-            // Preserve question/option order and all execution/extension options.
-            // Artifact, tokenizer, head and temperature identity are engine-local.
-            Some(cache_key::request(req, opts)?)
-        } else {
-            None
-        };
+        let key = self.result_cache_key(req, opts)?;
         if let (Some(key), Some(cache)) = (&key, &self.response_cache) {
             if let Ok(cache) = cache.lock() {
                 if let Some(response) = cache.get(key) {
@@ -706,6 +716,23 @@ impl Engine {
             }
         }
         Ok(response)
+    }
+
+    fn result_cache_key(
+        &self,
+        req: &SystemOneRequest,
+        opts: &EvalOptions,
+    ) -> Result<Option<Vec<u8>>> {
+        self.response_cache
+            .as_ref()
+            .map(|cache| {
+                let key = cache_key::request(req, opts)?;
+                Ok(cache
+                    .lock()
+                    .map_err(|_| Error::Backend("response cache lock poisoned".into()))?
+                    .namespace_key(key))
+            })
+            .transpose()
     }
 
     /// Execute fresh prompt preparation and model work regardless of configured

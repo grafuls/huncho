@@ -199,8 +199,11 @@ held-out cases; the CLI checks coverage and drift, not dataset provenance.
 Every native Candle, Clef, ONNX, llama.cpp and vLLM runtime also requires complete
 labeled startup qualification with `fit` metadata and no optimization flags.
 Temperature fallback does not authorize a different backend/device/precision.
-The explicit offline mock retains its demo path. General signed execution
-certificates and equivalent enforcement for library callers remain open.
+The explicit offline mock retains its demo path. Programmatic core serving and
+HTTP applications now enforce fresh in-process context/profile qualification;
+raw library evaluation remains diagnostic. General signed execution
+certificates and dataset provenance policy remain open.
+[Library setup and revocation](calibration.md#library-serving-qualification).
 
 `--max-prepared-per-model N` moves F1–F4 formatting/tokenization ahead of
 model execution on blocking workers. One slot covers a running preparation or

@@ -39,7 +39,12 @@ Every real serving runtime requires a pinned complete observed-label startup
 suite via `--qualification-golden MODEL=PATH`, including unoptimized packages
 marked `fit`. Actual implementations report `native_execution`; temperature
 fallback and unsigned receipts cannot bypass fresh checks. Explicit offline
-mock demos retain their path. See [calibration gates](calibration.md#conformance-probability-fidelity).
+mock demos retain their path. Native backend/dtype capability identity must
+match the engine's calibration key. The core production entry points and
+HTTP boundary enforce fresh in-process proofs as well as CLI startup checks;
+raw evaluation remains diagnostic. See
+[calibration gates](calibration.md#conformance-probability-fidelity) and
+[library setup](calibration.md#library-serving-qualification).
 
 Clef uses a whole-request backend (`forward_request`) because its joint head
 scores all questions together. See [Clef setup](clef.md).

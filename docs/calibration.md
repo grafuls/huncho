@@ -88,8 +88,49 @@ opens. The runtime reports `native_execution` in its capabilities/receipts;
 the explicit offline mock retains its demo path. Source `fit` metadata, a
 `default` fallback temperature or a retained unsigned receipt cannot replace
 fresh outcome checks. Quantized variants additionally require an exact
-backend:dtype `refit` entry. Library inference, `bench` and numerical-only
-`conform` remain available for analysis and do not authorize serving.
+backend:dtype `refit` entry. Diagnostic library inference, `bench` and
+numerical-only `conform` remain available for analysis and do not authorize
+serving.
+
+## Library serving qualification
+
+`Engine::qualify_for_serving(&suite, &options, cross_request_max_requests)` runs
+fresh complete observed-label conformance at the fixed thresholds. A passing
+report installs a private in-process proof for that actual engine, execution
+options and selected compute/runtime environment. Every replica/new context
+needs its own complete run. Diagnostic reports, source `fit` metadata and
+deserialized receipts cannot install proofs. Pending entries are refused;
+quantization requires an explicit exact backend:dtype `refit`, and vLLM and
+integrated ONNX heads require explicit fitted/refitted entries.
+
+Use `eval_for_serving` or `eval_for_serving_with_stats` for programmatic
+production evaluation. They check before model/cache work and retain an opaque
+qualification token to check again before returning a result. A new attempt
+revokes the previous proof even if it fails; a later successful run with the
+same options cannot authorize an older in-flight result. Cache configuration
+also revokes the proof. Qualification clears the response cache and advances
+its shared generation so delayed diagnostic plans cannot repopulate active
+entries. Pure unchanged offline mock demos keep their existing path.
+
+The HTTP server checks eager contexts before opening its listener and checks
+all actual replicas before admission and after inference/coalescing. Lazy
+factories cannot bypass the request boundary. Unqualified profiles return 503
+with `model_unqualified`, including when an exact response is retained.
+Programmatic HTTP applications use each actual handle's `serving_options` and
+`serving_cross_request_max_requests` after creating `AppState`, then qualify
+every `replica_engines()` context before calling `serve` or exposing `router`.
+Presentation-only extensions share the same proof; changed arithmetic or
+scheduling options require fresh qualification.
+
+All built-in real runtimes declare `native_execution`. Custom production
+runtimes must declare that capability and match their engine backend/dtype
+identity. Raw `eval`, prepared/external APIs and conformance remain explicit
+diagnostic interfaces; they do not claim serving authorization. The browser
+SDK has its separate fresh actual async-runtime gate. These proofs establish
+the existing numerical/outcome checks, not dataset independence/provenance or
+a signed portable execution certificate. Applications remain responsible for
+trusted pinned references and independent real held-out outcomes.
+[Boundary verification](verification/library-qualification-20261008/README.md).
 
 This rule closes a measured portability gap: the released Kev CPU FP32
 profile fails the complete held-out probability-delta gate, despite fitted

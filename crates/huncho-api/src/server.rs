@@ -19,6 +19,15 @@ impl Drop for EvictionTask {
 
 /// Run the HTTP server until it is asked to stop.
 pub async fn serve(state: Arc<AppState>) -> std::io::Result<()> {
+    // Programmatic API users get the same native qualification boundary as
+    // the CLI. Lazy factories are checked again before their first request.
+    for model in state.registry.read().await.models().values() {
+        model
+            .validate_serving_qualification(&state.config)
+            .map_err(|error| {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, error.to_string())
+            })?;
+    }
     let app = router()
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())

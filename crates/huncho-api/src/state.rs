@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, Weak};
 
-use huncho_core::engine::Engine;
+use huncho_core::engine::{Engine, EvalOptions, ServingQualificationToken};
 use tokio::sync::{RwLock, Semaphore};
 
 use crate::batch::BatchQueue;
@@ -51,9 +51,9 @@ impl ModelHandle {
             (2..=64).contains(rows) && *tokens > 0 && engine.supports_batch()
         });
         let max_prepared = batch.map_or(max_prepared, |(rows, _, _)| max_prepared.max(rows));
-        let preparation =
-            (max_prepared > 0 && (engine.family() != huncho_core::Family::F5 || batch.is_some()))
-                .then(|| Arc::new(Semaphore::new(usize::from(max_prepared))));
+        let preparation = (max_prepared > 0
+            && (engine.family() != huncho_core::Family::F5 || batch.is_some()))
+        .then(|| Arc::new(Semaphore::new(usize::from(max_prepared))));
         Self {
             capacity,
             engine,
@@ -70,6 +70,71 @@ impl ModelHandle {
     /// identity and prepared-packet ownership belong to one immutable group.
     pub fn replica_engines(&self) -> &[Arc<Engine>] {
         &self.pool.engines
+    }
+
+    /// Actual immutable HTTP execution options, including preparation/collation
+    /// configured for this handle. Library applications qualify every replica
+    /// against these options before exposing calibrated serving.
+    pub fn serving_options(&self, config: &ServerConfig, extensions: bool) -> EvalOptions {
+        EvalOptions {
+            extensions,
+            prefix_cache: config.prefix_cache && self.supports_prefix_cache(),
+            persistent_prefix_bytes: if config.prefix_cache && self.supports_prefix_cache() {
+                config.persistent_prefix_bytes / self.replica_engines().len()
+            } else {
+                0
+            },
+            max_batch_tokens: config.max_batch_tokens.filter(|_| self.supports_batch()),
+            max_batch_padding_percent: config.max_batch_padding_percent,
+            reference_readout: !config.candidate_readout,
+            prepare_all: self.preparation.is_some(),
+            cooperative_prefill: config.cooperative_prefill,
+            ..Default::default()
+        }
+    }
+
+    /// Actual cross-request collation profile, absent when no queue exists.
+    pub fn serving_cross_request_max_requests(&self, config: &ServerConfig) -> Option<usize> {
+        self.batch
+            .as_ref()
+            .map(|_| usize::from(config.batch_max_requests.unwrap()))
+    }
+
+    pub(crate) fn validate_serving_qualification(
+        &self,
+        config: &ServerConfig,
+    ) -> huncho_core::Result<()> {
+        self.serving_qualification_tokens(config).map(|_| ())
+    }
+
+    pub(crate) fn serving_qualification_tokens(
+        &self,
+        config: &ServerConfig,
+    ) -> huncho_core::Result<Vec<ServingQualificationToken>> {
+        let options = self.serving_options(config, false);
+        let cross_requests = self.serving_cross_request_max_requests(config);
+        self.replica_engines()
+            .iter()
+            .map(|engine| engine.serving_qualification_token(&options, cross_requests))
+            .collect()
+    }
+
+    pub(crate) fn validate_serving_qualification_tokens(
+        &self,
+        config: &ServerConfig,
+        tokens: &[ServingQualificationToken],
+    ) -> huncho_core::Result<()> {
+        let options = self.serving_options(config, false);
+        let cross_requests = self.serving_cross_request_max_requests(config);
+        if tokens.len() != self.replica_engines().len() {
+            return Err(huncho_core::Error::Conformance(
+                "serving replica pool changed".into(),
+            ));
+        }
+        for (engine, token) in self.replica_engines().iter().zip(tokens) {
+            engine.validate_serving_qualification_token(token, &options, cross_requests)?;
+        }
+        Ok(())
     }
 
     /// Registry ownership alone is insufficient: jobs can own permits or

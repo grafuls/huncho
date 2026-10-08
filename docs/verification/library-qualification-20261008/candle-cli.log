@@ -1,0 +1,20 @@
+   Compiling huncho-core v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-core)
+   Compiling huncho-backend v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-backend)
+   Compiling huncho-hub v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-hub)
+   Compiling huncho-api v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-api)
+   Compiling huncho-cli v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-cli)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.97s
+     Running tests/cooperative.rs (target/debug/deps/cooperative-89def9cd5d11accd)
+
+running 8 tests
+test cached_branch_cli_requires_actual_native_batches_and_fresh_labeled_gates ... ok
+test cooperative_conformance_requires_real_interleaving_on_unchanged_native_goldens ... ok
+test cpu_query_block_profile_binds_qualification_and_preserves_unchanged_goldens ... ok
+test direct_page_profile_keeps_frozen_gates_and_requires_fresh_labeled_prefix_qualification ... ok
+test grouped_cpu_gqa_binds_fresh_receipts_and_actual_prefix_interleaving ... ok
+test kv_pages_bind_fresh_receipts_and_actual_prefix_work_and_refuse_vacuous_serving ... ok
+test padded_native_cli_reports_actual_work_and_refuses_unlabeled_or_vacuous_startup ... ok
+test runtime_lora_binds_fresh_qualification_and_keeps_frozen_probabilities_and_refusal_gates ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 115.94s
+

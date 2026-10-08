@@ -1,0 +1,76 @@
+   Compiling huncho-core v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.09s
+     Running tests/serving_qualification.rs (target/debug/deps/serving_qualification-af5eeb8f4a923566)
+
+running 7 tests
+test changed_runtime_environment_refuses_before_serving_work ... FAILED
+test cross_request_profile_is_bound_to_actual_group_size_and_not_scalar_receipts ... FAILED
+test diagnostic_reports_and_fit_metadata_cannot_authorize_production ... FAILED
+test environment_check_child ... ignored, isolated child process changes its own environment
+test exact_variant_calibration_and_actual_prefix_profiles_are_required ... FAILED
+test fresh_replicas_and_cache_reconfiguration_do_not_inherit_proofs ... FAILED
+test rejection_errors_and_incomplete_labels_revoke_previous_authorization ... FAILED
+
+failures:
+
+---- changed_runtime_environment_refuses_before_serving_work stdout ----
+
+thread 'changed_runtime_environment_refuses_before_serving_work' (529562) panicked at crates/huncho-core/tests/serving_qualification.rs:367:5:
+
+running 1 test
+test environment_check_child ... FAILED
+
+failures:
+
+---- environment_check_child stdout ----
+
+thread 'environment_check_child' (529564) panicked at crates/huncho-core/tests/serving_qualification.rs:134:9:
+called `Result::unwrap()` on an `Err` value: Error("missing field `instructions`", line: 0, column: 0)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    environment_check_child
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- cross_request_profile_is_bound_to_actual_group_size_and_not_scalar_receipts stdout ----
+
+thread 'cross_request_profile_is_bound_to_actual_group_size_and_not_scalar_receipts' (529565) panicked at crates/huncho-core/tests/serving_qualification.rs:134:9:
+called `Result::unwrap()` on an `Err` value: Error("missing field `instructions`", line: 0, column: 0)
+
+---- diagnostic_reports_and_fit_metadata_cannot_authorize_production stdout ----
+
+thread 'diagnostic_reports_and_fit_metadata_cannot_authorize_production' (529566) panicked at crates/huncho-core/tests/serving_qualification.rs:134:9:
+called `Result::unwrap()` on an `Err` value: Error("missing field `instructions`", line: 0, column: 0)
+
+---- exact_variant_calibration_and_actual_prefix_profiles_are_required stdout ----
+
+thread 'exact_variant_calibration_and_actual_prefix_profiles_are_required' (529567) panicked at crates/huncho-core/tests/serving_qualification.rs:134:9:
+called `Result::unwrap()` on an `Err` value: Error("missing field `instructions`", line: 0, column: 0)
+
+---- fresh_replicas_and_cache_reconfiguration_do_not_inherit_proofs stdout ----
+
+thread 'fresh_replicas_and_cache_reconfiguration_do_not_inherit_proofs' (529568) panicked at crates/huncho-core/tests/serving_qualification.rs:134:9:
+called `Result::unwrap()` on an `Err` value: Error("missing field `instructions`", line: 0, column: 0)
+
+---- rejection_errors_and_incomplete_labels_revoke_previous_authorization stdout ----
+
+thread 'rejection_errors_and_incomplete_labels_revoke_previous_authorization' (529569) panicked at crates/huncho-core/tests/serving_qualification.rs:134:9:
+called `Result::unwrap()` on an `Err` value: Error("missing field `instructions`", line: 0, column: 0)
+
+
+failures:
+    changed_runtime_environment_refuses_before_serving_work
+    cross_request_profile_is_bound_to_actual_group_size_and_not_scalar_receipts
+    diagnostic_reports_and_fit_metadata_cannot_authorize_production
+    exact_variant_calibration_and_actual_prefix_profiles_are_required
+    fresh_replicas_and_cache_reconfiguration_do_not_inherit_proofs
+    rejection_errors_and_incomplete_labels_revoke_previous_authorization
+
+test result: FAILED. 0 passed; 6 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p huncho-core --test serving_qualification`

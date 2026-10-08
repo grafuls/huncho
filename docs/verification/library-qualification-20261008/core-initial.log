@@ -1,0 +1,11 @@
+   Compiling huncho-core v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-core)
+error[E0046]: not all trait items implemented, missing: `fork`
+  --> crates/huncho-core/tests/serving_qualification.rs:23:1
+   |
+23 | impl Backend for Fixture {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^ missing `fork` in implementation
+   |
+   = help: implement the missing item: `fn fork(&mut self, _: CacheHandle) -> Result<CacheHandle, huncho_core::Error> { todo!() }`
+
+For more information about this error, try `rustc --explain E0046`.
+error: could not compile `huncho-core` (test "serving_qualification") due to 1 previous error

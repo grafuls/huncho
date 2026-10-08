@@ -25,7 +25,7 @@ These variants remain unqualified.
 | O07 tokenizer/prompt caching | Available, bounded, default off | Model-specific hit rates and memory measurements |
 | O08 ONNX output/readout path | CPU gather/output reuse/scalar and batched integrated F1 raw heads and compile-checked CUDA device I/O available | Released graph exports; actual device qualification and device-resident head |
 | O09 fused/bounded compute | CPU SiLU/multiply, causal query blocks and unexpanded grouped K/V available | FlashAttention and further fused native/device kernels |
-| O10 precision/calibration gates | Every real serving runtime requires fresh labeled conformance | Released CPU acceptance remains rejected/pending; no GPU checks |
+| O10 precision/calibration gates | Every real CLI/core/HTTP serving context requires fresh labeled conformance; opaque attempt tokens and cache generations prevent stale authorization | Signed portable proofs/dataset provenance and released CPU acceptance remain open/rejected/pending; no GPU checks |
 | O11 native Kev prefix forks | Available | Released CPU paired/labeled acceptance |
 | O12 dynamic batching | Equal-length collation and bounded CPU Qwen/ModernBERT/masked ONNX feature/whole-schema Clef/integrated raw F1 right-padding and CPU Kev equal/padded shared-prefix batches available | Released graph calibration and device qualification |
 | O13 family head work | CPU Clef vectorized heads/grouped spans, optional Laya final marker queries and integrated ONNX F1 heads available | Released graph exports and Clef/Laya labeled qualification |
@@ -45,6 +45,25 @@ These variants remain unqualified.
 | O27 browser WASM/WebGPU | Separate CPU WASM F1 integrated-head SDK, packaging and fresh labeled gates available | Released exports/calibration, other families and browser scheduling; WebGPU deferred |
 
 ## Implemented increments
+
+### Fresh qualification for core and HTTP serving
+
+O10 now enforces fresh complete labeled qualification in the core production
+entry points and the public HTTP boundary, including lazy factories and every
+actual replica. Fixed numerical/outcome/paired thresholds are unchanged.
+Opaque tokens bind the exact attempt/context/options/runtime; revocation or a
+later successful attempt cannot authorize work started under an older proof.
+Response-cache generations prevent delayed diagnostic plans from restoring
+stale entries after a fresh gate. Constructor identity and exact quantized,
+vLLM and integrated-head calibration rules apply to programmatic serving too.
+
+Default mock demos and explicit raw diagnostic interfaces remain available.
+Serialized reports/unsigned receipts cannot authorize a fresh context; these
+in-process proofs do not attest dataset provenance. CPU native runtime/HTTP
+fixtures exercise the gate without changing goldens, labels or temperatures.
+Released Kev remains rejected/pending. Signed proofs, independent dataset
+policy, Apple work and actual GPU checks remain open/deferred.
+[Evidence and limits](verification/library-qualification-20261008/README.md).
 
 ### Direct CPU FP32 attention over immutable Kev pages
 

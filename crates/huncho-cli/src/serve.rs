@@ -433,40 +433,7 @@ impl RecordBindings {
 }
 
 fn requires_outcome_qualification(engine: &huncho_core::engine::Engine) -> bool {
-    [
-        "native_execution",
-        "projection_chunk_rows",
-        "attention_compute_dtype",
-        "attention_execution",
-        "gqa_execution",
-        "kv_storage",
-        "paged_attention",
-        "adapter_execution",
-        "device_path",
-        "joint_head_execution",
-        "joint_pool_execution",
-        "request_batch_execution",
-        "vllm_readout",
-        "onnx_execution_provider",
-        "onnx_intra_threads",
-        "onnx_native_batch",
-        "onnx_integrated_head",
-        "onnx_initializer_residency",
-        "onnx_device_io",
-        "onnx_cuda_graph",
-        "delta_rule_execution",
-        "causal_conv_execution",
-        "mlp_gate_execution",
-        "prefill_chunk_tokens",
-        "weight_quantization",
-        "cpu_kernel_build",
-        "cpu_blas_execution",
-        "laya_head_execution",
-        "llamacpp_execution",
-        "llamacpp_prefix_state",
-    ]
-    .iter()
-    .any(|key| engine.execution_metadata().contains_key(*key))
+    engine.requires_outcome_qualification()
 }
 
 fn qualify_optimizations(registry: &ModelRegistry, args: &ServeArgs) -> anyhow::Result<()> {
@@ -569,6 +536,15 @@ fn qualify_optimizations(registry: &ModelRegistry, args: &ServeArgs) -> anyhow::
         anyhow::ensure!(!(refit || outcome_profile || replicated) || suite.cases.iter().any(|case| !case.targets.is_empty()),
             "native, refitted or changed-profile serving for `{name}` requires held-out golden vectors with observed target labels");
         let evaluate = |engine: &huncho_core::engine::Engine| -> huncho_core::Result<_> {
+            if suite.cases.iter().any(|case| !case.targets.is_empty()) {
+                return engine.qualify_for_serving(
+                    &suite,
+                    &opts,
+                    args.batch_max_requests
+                        .filter(|_| engine.supports_batch())
+                        .map(usize::from),
+                );
+            }
             if let Some(rows) = args.batch_max_requests.filter(|_| engine.supports_batch()) {
                 run_suite_with_cross_request_batches(
                     engine,

@@ -4,12 +4,14 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 use crate::contract::{Answer, SystemOneResponse};
+use crate::error::{Error, Result};
 
 pub(crate) struct ResponseCache {
     entries: HashMap<Arc<[u8]>, (SystemOneResponse, usize)>,
     order: VecDeque<Arc<[u8]>>,
     bytes: usize,
     budget: usize,
+    generation: u64,
 }
 
 impl ResponseCache {
@@ -24,11 +26,29 @@ impl ResponseCache {
             order: VecDeque::new(),
             bytes: 0,
             budget,
+            generation: 0,
         }
     }
 
     pub(crate) fn get(&self, key: &[u8]) -> Option<SystemOneResponse> {
         self.entries.get(key).map(|(response, _)| response.clone())
+    }
+
+    pub(crate) fn namespace_key(&self, key: Vec<u8>) -> Vec<u8> {
+        let mut namespaced = Vec::with_capacity(8 + key.len());
+        namespaced.extend_from_slice(&self.generation.to_le_bytes());
+        namespaced.extend(key);
+        namespaced
+    }
+
+    pub(crate) fn clear(&mut self) -> Result<()> {
+        self.generation = self.generation.checked_add(1).ok_or_else(|| {
+            Error::Conformance("response cache qualification generation exhausted".into())
+        })?;
+        self.entries.clear();
+        self.order.clear();
+        self.bytes = 0;
+        Ok(())
     }
 
     fn cost(key: &[u8], response: &SystemOneResponse) -> Option<usize> {

@@ -109,6 +109,20 @@ async fn systemone(
                 .into(),
         ));
     }
+    let opts = engine.serving_options(
+        &state.config,
+        wants_extensions(&headers) || state.config.default_extensions,
+    );
+    let qualification_tokens = match engine.serving_qualification_tokens(&state.config) {
+        Ok(tokens) => tokens,
+        Err(error) => {
+            return error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "model_unqualified",
+                &error.to_string(),
+            )
+        }
+    };
     let admission = match engine.admission.clone().try_acquire_owned() {
         Ok(permit) => permit,
         Err(_) => {
@@ -120,24 +134,7 @@ async fn systemone(
         }
     };
     let admitted = GaugeGuard::new(&state.metrics.queue_depth);
-    let opts = EvalOptions {
-        extensions: wants_extensions(&headers) || state.config.default_extensions,
-        prefix_cache: state.config.prefix_cache && engine.supports_prefix_cache(),
-        persistent_prefix_bytes: if state.config.prefix_cache && engine.supports_prefix_cache() {
-            state.config.persistent_prefix_bytes / engine.replica_engines().len()
-        } else {
-            0
-        },
-        max_batch_tokens: state
-            .config
-            .max_batch_tokens
-            .filter(|_| engine.supports_batch()),
-        max_batch_padding_percent: state.config.max_batch_padding_percent,
-        reference_readout: !state.config.candidate_readout,
-        prepare_all: engine.preparation.is_some(),
-        cooperative_prefill: state.config.cooperative_prefill,
-        ..Default::default()
-    };
+    let qualification = engine.clone();
     let flight = if engine.flights.enabled() {
         match serde_json::to_vec(&(&req, &opts)) {
             Ok(key) => engine.flights.join(key),
@@ -182,6 +179,17 @@ async fn systemone(
         }
     };
 
+    // Qualification can be revoked while work/coalesced callers are waiting.
+    // Never publish a response under a changed context/profile/environment.
+    if let Err(error) =
+        qualification.validate_serving_qualification_tokens(&state.config, &qualification_tokens)
+    {
+        return error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "model_unqualified",
+            &error.to_string(),
+        );
+    }
     state
         .metrics
         .request_latency

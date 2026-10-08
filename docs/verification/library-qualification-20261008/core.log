@@ -1,0 +1,17 @@
+   Compiling huncho-core v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.50s
+     Running tests/serving_qualification.rs (target/debug/deps/serving_qualification-af5eeb8f4a923566)
+
+running 9 tests
+test changed_runtime_environment_refuses_before_serving_work ... ok
+test cross_request_profile_is_bound_to_actual_group_size_and_not_scalar_receipts ... ok
+test diagnostic_reports_and_fit_metadata_cannot_authorize_production ... ok
+test environment_check_child ... ignored, isolated child process changes its own environment
+test exact_variant_calibration_and_actual_prefix_profiles_are_required ... ok
+test fresh_qualification_discards_cached_diagnostic_results ... ok
+test fresh_replicas_and_cache_reconfiguration_do_not_inherit_proofs ... ok
+test native_constructor_identity_cannot_borrow_another_backend_or_dtype_calibration_key ... ok
+test rejection_errors_and_incomplete_labels_revoke_previous_authorization ... ok
+
+test result: ok. 8 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

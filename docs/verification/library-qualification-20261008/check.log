@@ -1,0 +1,6 @@
+    Checking huncho-core v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-core)
+    Checking huncho-backend v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-backend)
+    Checking huncho-hub v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-hub)
+    Checking huncho-api v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-api)
+    Checking huncho-cli v0.1.0 (/home/grafuls/Sources/huncho/crates/huncho-cli)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.92s
