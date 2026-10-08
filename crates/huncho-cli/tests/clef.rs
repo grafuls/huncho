@@ -49,6 +49,31 @@ fn native_clef_resolves_benchmarks_and_conforms_without_python() {
     ]);
     assert!(bench.contains("backend=clef"));
     assert!(root.join("huncho-model.json").is_file());
+    let replicas: Value = serde_json::from_str(&run(&[
+        "bench",
+        "--model",
+        ".",
+        "--dtype",
+        "fp32",
+        "--questions",
+        "3",
+        "--workload",
+        "mixed",
+        "--iterations",
+        "2",
+        "--concurrency",
+        "2",
+        "--replicas",
+        "2",
+        "--json",
+    ]))
+    .unwrap();
+    assert_eq!(replicas["replicas"], 2);
+    assert_eq!(replicas["work"]["forward_calls"], 2);
+    assert_eq!(replicas["replica_work"][0]["requests"], 1);
+    assert_eq!(replicas["replica_work"][1]["requests"], 1);
+    assert_eq!(replicas["replica_work"][0]["work"]["forward_calls"], 1);
+    assert_eq!(replicas["replica_work"][1]["work"]["forward_calls"], 1);
     run(&[
         "bench",
         "--manifest",

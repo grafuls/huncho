@@ -70,6 +70,82 @@ fn bench_distinguishes_repeated_result_reuse_from_distinct_model_work() {
 }
 
 #[test]
+fn replica_bench_accounts_for_every_timed_request_and_shared_result_cache() {
+    for repeated in [false, true] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_huncho"));
+        command.args([
+            "bench",
+            "--questions",
+            "3",
+            "--workload",
+            "mixed",
+            "--iterations",
+            "9",
+            "--concurrency",
+            "4",
+            "--replicas",
+            "2",
+            "--result-cache-bytes",
+            "1048576",
+            "--json",
+        ]);
+        if repeated {
+            command.arg("--repeat-inputs");
+        }
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["replicas"], 2);
+        assert_eq!(report["concurrency"], 4);
+        let contexts = report["replica_work"].as_array().unwrap();
+        assert_eq!(contexts.len(), 2);
+        assert_eq!(contexts[0]["requests"], 5);
+        assert_eq!(contexts[1]["requests"], 4);
+        for field in ["forward_calls", "processed_tokens", "result_cache_hits"] {
+            let total: u64 = contexts
+                .iter()
+                .map(|context| context["work"][field].as_u64().unwrap())
+                .sum();
+            assert_eq!(total, report["work"][field].as_u64().unwrap());
+        }
+        assert_eq!(
+            report["work"]["forward_calls"],
+            if repeated { 0 } else { 27 }
+        );
+        assert_eq!(
+            report["work"]["result_cache_hits"],
+            if repeated { 9 } else { 0 }
+        );
+    }
+    for arguments in [
+        vec!["--replicas", "2", "--concurrency", "1"],
+        vec!["--replicas", "2", "--concurrency", "2", "--iterations", "1"],
+        vec!["--replicas", "9"],
+        vec![
+            "--replicas",
+            "2",
+            "--concurrency",
+            "2",
+            "--prefix-cache",
+            "--persistent-prefix-bytes",
+            "1",
+        ],
+        vec!["--persistent-prefix-bytes", "100"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_huncho"))
+            .arg("bench")
+            .args(arguments)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+    }
+}
+
+#[test]
 fn calibration_json_dry_run_accepts_false_and_leaves_manifest_unchanged() {
     let tmp = tempfile::tempdir().unwrap();
     let manifest = tmp.path().join("huncho-model.json");

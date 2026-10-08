@@ -60,6 +60,12 @@ pub struct BenchArgs {
     #[arg(long, default_value = "1")]
     pub concurrency: usize,
 
+    /// Shared-weight CPU execution contexts (1–8). Clients bind round-robin
+    /// to contexts; each context is warmed before timing.
+    #[arg(long, env = "HUNCHO_REPLICAS", default_value_t = 1,
+        value_parser = clap::value_parser!(u8).range(1..=8))]
+    pub replicas: u8,
+
     /// Choice questions only, or a mix of choice/score/noul.
     #[arg(long, value_enum, default_value = "choice")]
     pub workload: Workload,
@@ -106,6 +112,20 @@ pub fn run(args: BenchArgs) -> anyhow::Result<()> {
         args.questions > 0 && args.iterations > 0 && args.concurrency > 0,
         "questions, iterations and concurrency must be positive"
     );
+    let replica_count = usize::from(args.replicas);
+    anyhow::ensure!((1..=8).contains(&replica_count), "replicas must be 1..8");
+    anyhow::ensure!(
+        replica_count <= args.concurrency.min(args.iterations),
+        "replicas must not exceed timed clients or iterations"
+    );
+    anyhow::ensure!(
+        args.persistent_prefix_bytes == 0 || args.prefix_cache,
+        "persistent prefix bytes requires prefix reuse"
+    );
+    anyhow::ensure!(
+        args.persistent_prefix_bytes == 0 || args.persistent_prefix_bytes >= replica_count,
+        "persistent prefix budget must provide at least one byte per replica"
+    );
     let backend = BackendChoice::parse(&args.backend)?;
     let dtype = args.dtype.as_deref();
     let engine: Engine = if let Some(model) = &args.model {
@@ -126,71 +146,94 @@ pub fn run(args: BenchArgs) -> anyhow::Result<()> {
     };
 
     let engine = engine.with_result_cache(args.result_cache_bytes);
+    anyhow::ensure!(
+        replica_count == 1 || engine.device() == "CPU",
+        "replica benchmarks currently support CPU only"
+    );
+    let mut engines = vec![engine];
+    for _ in 1..replica_count {
+        let replica = engines[0].replica()?;
+        engines.push(replica);
+    }
+    let engine = &engines[0];
     let warmup_case = if args.repeat_inputs { 0 } else { usize::MAX };
     let options = EvalOptions {
         reference_readout: args.reference_readout,
         prefix_cache: args.prefix_cache,
-        persistent_prefix_bytes: args.persistent_prefix_bytes,
+        persistent_prefix_bytes: args.persistent_prefix_bytes / replica_count,
         max_batch_tokens: args.max_batch_tokens,
         ..Default::default()
     };
-    engine.eval(
-        &make_request(
-            args.questions,
-            args.long_state,
-            args.workload,
-            warmup_case,
-            &engine.manifest().name,
-        ),
-        &options,
-    )?;
+    for context in &engines {
+        context.eval(
+            &make_request(
+                args.questions,
+                args.long_state,
+                args.workload,
+                warmup_case,
+                &context.manifest().name,
+            ),
+            &options,
+        )?;
+    }
     let n = args.iterations;
     let workers = args.concurrency.min(n);
     let barrier = std::sync::Barrier::new(workers + 1);
-    let (mut latencies, work, wall) = std::thread::scope(|scope| -> anyhow::Result<_> {
-        let mut handles = Vec::with_capacity(workers);
-        for worker in 0..workers {
-            let engine = &engine;
-            let args = &args;
-            let barrier = &barrier;
-            let options = &options;
-            handles.push(
-                scope.spawn(move || -> anyhow::Result<(Vec<f64>, EvalStats)> {
-                    let mut latencies = Vec::new();
-                    let mut work = EvalStats::default();
-                    barrier.wait();
-                    for iteration in (worker..n).step_by(workers) {
-                        let case = if args.repeat_inputs { 0 } else { iteration };
-                        let request = make_request(
-                            args.questions,
-                            args.long_state,
-                            args.workload,
-                            case,
-                            &engine.manifest().name,
-                        );
-                        let start = Instant::now();
-                        let mut stats = EvalStats::default();
-                        engine.eval_with_stats(&request, options, &mut stats)?;
-                        work.accumulate(&stats);
-                        latencies.push(start.elapsed().as_secs_f64() * 1000.0);
-                    }
-                    Ok((latencies, work))
-                }),
-            );
-        }
-        let start = Instant::now();
-        barrier.wait();
-        let mut latencies = Vec::with_capacity(n);
-        let mut work = EvalStats::default();
-        for handle in handles {
-            let (worker_latencies, worker_work) = handle
-                .join()
-                .map_err(|_| anyhow::anyhow!("benchmark worker panicked"))??;
-            latencies.extend(worker_latencies);
-            work.accumulate(&worker_work);
-        }
-        Ok((latencies, work, start.elapsed().as_secs_f64()))
-    })?;
+    let (mut latencies, work, replica_work, wall) =
+        std::thread::scope(|scope| -> anyhow::Result<_> {
+            let mut handles = Vec::with_capacity(workers);
+            for worker in 0..workers {
+                let replica = worker % replica_count;
+                let engine = &engines[replica];
+                let args = &args;
+                let barrier = &barrier;
+                let options = &options;
+                handles.push(scope.spawn(
+                    move || -> anyhow::Result<(usize, Vec<f64>, EvalStats)> {
+                        let mut latencies = Vec::new();
+                        let mut work = EvalStats::default();
+                        barrier.wait();
+                        for iteration in (worker..n).step_by(workers) {
+                            let case = if args.repeat_inputs { 0 } else { iteration };
+                            let request = make_request(
+                                args.questions,
+                                args.long_state,
+                                args.workload,
+                                case,
+                                &engine.manifest().name,
+                            );
+                            let start = Instant::now();
+                            let mut stats = EvalStats::default();
+                            engine.eval_with_stats(&request, options, &mut stats)?;
+                            work.accumulate(&stats);
+                            latencies.push(start.elapsed().as_secs_f64() * 1000.0);
+                        }
+                        Ok((replica, latencies, work))
+                    },
+                ));
+            }
+            let start = Instant::now();
+            barrier.wait();
+            let mut latencies = Vec::with_capacity(n);
+            let mut work = EvalStats::default();
+            let mut replica_work: Vec<_> = (0..replica_count)
+                .map(|index| ReplicaWork {
+                    index,
+                    requests: 0,
+                    work: EvalStats::default(),
+                })
+                .collect();
+            for handle in handles {
+                let (replica, worker_latencies, worker_work) = handle
+                    .join()
+                    .map_err(|_| anyhow::anyhow!("benchmark worker panicked"))??;
+                replica_work[replica].requests += worker_latencies.len();
+                replica_work[replica].work.accumulate(&worker_work);
+                latencies.extend(worker_latencies);
+                work.accumulate(&worker_work);
+            }
+            Ok((latencies, work, replica_work, start.elapsed().as_secs_f64()))
+        })?;
 
     latencies.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let p50 = percentile(&latencies, 0.50);
@@ -206,6 +249,9 @@ pub fn run(args: BenchArgs) -> anyhow::Result<()> {
                 "model": engine.manifest().name, "backend": engine.backend_id().to_string(),
                 "dtype": engine.dtype(), "device": engine.device(), "execution_metadata": engine.execution_metadata(), "questions": args.questions,
                 "iterations": n, "concurrency": workers, "workload": args.workload,
+                "replicas": replica_count, "replica_work": replica_work,
+                "client_assignment": "worker modulo replica count",
+                "persistent_prefix_bytes_per_replica": options.persistent_prefix_bytes,
             "repeat_inputs": args.repeat_inputs, "long_state": args.long_state,
             "result_cache_bytes": args.result_cache_bytes,
             "reference_readout": args.reference_readout,
@@ -227,7 +273,7 @@ pub fn run(args: BenchArgs) -> anyhow::Result<()> {
         engine.device()
     );
     println!(
-        "  workload: {:?}; concurrency: {workers}; repeated inputs: {}",
+        "  workload: {:?}; concurrency: {workers}; replicas: {replica_count}; repeated inputs: {}",
         args.workload, args.repeat_inputs
     );
     println!("  mean   : {mean:.3} ms");
@@ -247,6 +293,13 @@ pub fn run(args: BenchArgs) -> anyhow::Result<()> {
     println!("  exact result cache hits: {}", work.result_cache_hits);
     println!("  prepared prompt cache hits: {}", work.prompt_cache_hits);
     Ok(())
+}
+
+#[derive(serde::Serialize)]
+struct ReplicaWork {
+    index: usize,
+    requests: usize,
+    work: EvalStats,
 }
 
 fn percentile(sorted: &[f64], q: f64) -> f64 {
@@ -373,6 +426,7 @@ mod tests {
             questions: 5,
             iterations: 5,
             concurrency: 3,
+            replicas: 2,
             workload: Workload::Mixed,
             repeat_inputs: false,
             result_cache_bytes: 0,

@@ -630,8 +630,8 @@ cancellation ownership. Existing default and native prefix/batch checks pass.
 
 Released Kev/Laya/Nimble pool qualification and workload throughput/RSS/affinity
 measurements remain open. Each concurrent job retains its own activations and
-state and can contend for cores/memory bandwidth. ONNX replica loading,
-replica-aware benchmark summaries and cross-request worker scaling remain open;
+state and can contend for cores/memory bandwidth. ONNX replica loading and
+cross-request worker scaling remain open;
 GPU and Apple checks are not performed.
 
 
@@ -730,3 +730,21 @@ and F5 remains whole-request inference. This enables overlap without loading
 duplicate model weights; activation memory, shared CPU thread contention and
 full released-model calibration/throughput remain workload qualification tasks.
 No GPU execution or Apple work is performed.
+
+## Per-context CPU replica benchmarks (2026-10-08)
+
+O14 workload measurement now has `bench --replicas 1..8`, independent of
+`--concurrency`. Every real context is warmed; clients bind round-robin to
+contexts and JSON retains per-context timed requests and physical work.
+Global work is the sum of those context counters. Shared result/prompt caches
+and the divided global prefix budget match the pool's storage semantics.
+Inactive context counts and invalid budgets are rejected before timing.
+
+Process checks cover uneven client/request distribution, all typed questions,
+distinct inputs versus exact shared-cache hits, counter totals, bounds and
+unsupported combinations. Native F5 process coverage submits one complete
+schema on each of two actual contexts and requires two whole-request forwards.
+The measurement includes wait on each statically assigned context; it does not
+simulate HTTP admission/idle-context dispatch or certify probability quality.
+Fixed-affinity released-model throughput/RSS and fresh per-context labeled
+acceptance remain open. Actual GPU checks remain deferred.

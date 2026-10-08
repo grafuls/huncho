@@ -680,5 +680,16 @@ The in-process API exposes `Engine::replica()` and
 They do not authorize calibration themselves; library callers own that gate.
 Registry pool construction is atomic on failure. The cross-request library
 worker remains serial; use the supported CLI combinations when measuring
-replica throughput. Full released-model pool qualification, CPU affinity per
-context and replica-aware benchmark summaries remain outstanding.
+replica throughput. Full released-model pool qualification and CPU affinity per
+context remain outstanding.
+
+`huncho bench --replicas N --concurrency C` measures the native CPU contexts
+directly, with N <= min(C, iterations) and a maximum of eight. Every context
+warms before timing; clients bind by worker index modulo N. Latencies include
+any wait on that assigned context. JSON reports `replica_work` with each
+context's timed request count and physical work, alongside aggregate counters.
+The global persistent-prefix budget is divided across contexts as in serving;
+exact prompt/result caches remain shared. Changing N while keeping a fixed
+host thread budget can expose oversubscription. This is a warm closed-loop
+engine benchmark, with no HTTP admission, idle-context dispatch, CPU affinity
+management, peak-RSS measurement or calibration approval.
