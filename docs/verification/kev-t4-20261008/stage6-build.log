@@ -1,0 +1,11 @@
+warning: candle-kernels@0.11.0: Compiling 11 of 11 PTX kernels
+warning: candle-kernels@0.11.0: Using 32 threads for compilation
+warning: candle-kernels@0.11.0: Compiling 15 of 15 kernels
+   Compiling huncho-core v0.1.0 (/var/tmp/huncho-optimization-20261007/stage6-source/crates/huncho-core)
+   Compiling huncho-backend v0.1.0 (/var/tmp/huncho-optimization-20261007/stage6-source/crates/huncho-backend)
+   Compiling huncho-api v0.1.0 (/var/tmp/huncho-optimization-20261007/stage6-source/crates/huncho-api)
+   Compiling huncho-hub v0.1.0 (/var/tmp/huncho-optimization-20261007/stage6-source/crates/huncho-hub)
+   Compiling huncho-cli v0.1.0 (/var/tmp/huncho-optimization-20261007/stage6-source/crates/huncho-cli)
+    Finished `release` profile [optimized] target(s) in 1m 07s
+048269f7fa780bbc5b84e54287719c9c4ce13f852555801040c75754770d638f  /var/tmp/huncho-optimization-20261007/huncho-stage6
+7935dd3a16924d8708b281374630ae8a7f11a78d74c7c836c0baa85445e03903  /var/tmp/huncho-optimization-20261007/huncho-stage6-20261008.tar.gz

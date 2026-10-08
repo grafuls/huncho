@@ -1,0 +1,322 @@
+{
+  "schema_version": "1.0",
+  "backend": "candle",
+  "dtype": "fp16",
+  "basis": "observed outcomes on independent held-out raw logits; offline FP64 analysis",
+  "scope": "application-specific; not a runtime/optimization release qualification",
+  "ece_bins": 15,
+  "baseline_entry": {
+    "temperature": 2.40605,
+    "confidence": "peak",
+    "status": "fit"
+  },
+  "refit_entry": {
+    "temperature": 2.3698595,
+    "per_type_temperatures": {
+      "choice": 2.8377154,
+      "noul": 1.993916,
+      "score": 2.375609
+    },
+    "temperature_by_options": {
+      "choice:2": 2.8377154,
+      "noul:2": 1.993916,
+      "score:3-5": 2.375609
+    },
+    "confidence": "peak",
+    "status": "refit"
+  },
+  "inputs": {
+    "fit": {
+      "sha256": "48a9e822cc68304df635bae26f718faaa18fb6fcbdb13682caf0dd2f08dff2e6"
+    },
+    "eval": {
+      "sha256": "ba7957f4b4b91b63776fae3ec1ab6ccf9c7eecd394b6312300a579ca407bebcc"
+    },
+    "baseline_manifest": {
+      "sha256": "b32072ebd7b54e2ed6c9c02df247e2812a8d65d3bade46bdb8b2d7211ac665a4"
+    },
+    "refit_manifest": {
+      "sha256": "5af4e1c50be57f934ef53728a5db7e4c822849e9eca97839f2a6635b6ba0e772"
+    }
+  },
+  "fit": {
+    "choice": {
+      "cases": 256,
+      "targets": {
+        "0": 112,
+        "1": 144
+      },
+      "baseline": {
+        "cases": 256,
+        "accuracy": 0.9296875,
+        "nll": 0.18837815248092807,
+        "brier": 0.1062180354650732,
+        "ece": 0.030527069973660732,
+        "mean_max_probability": 0.9423709866486883
+      },
+      "refit": {
+        "cases": 256,
+        "accuracy": 0.9296875,
+        "nll": 0.184954805338751,
+        "brier": 0.10533071315489237,
+        "ece": 0.017638734624142005,
+        "mean_max_probability": 0.9292812382497381
+      }
+    },
+    "noul": {
+      "cases": 256,
+      "targets": {
+        "1": 165,
+        "0": 91
+      },
+      "baseline": {
+        "cases": 256,
+        "accuracy": 0.9140625,
+        "nll": 0.239291120170551,
+        "brier": 0.1355906815976619,
+        "ece": 0.05136132239556575,
+        "mean_max_probability": 0.8859902253034667
+      },
+      "refit": {
+        "cases": 256,
+        "accuracy": 0.9140625,
+        "nll": 0.23452970299050632,
+        "brier": 0.13298583504343678,
+        "ece": 0.027255991666573873,
+        "mean_max_probability": 0.9092066637014525
+      }
+    },
+    "score": {
+      "cases": 256,
+      "targets": {
+        "3": 54,
+        "2": 45,
+        "1": 66,
+        "4": 47,
+        "0": 44
+      },
+      "baseline": {
+        "cases": 256,
+        "accuracy": 0.703125,
+        "nll": 0.7428244826115891,
+        "brier": 0.41647538284815067,
+        "ece": 0.08254020467023856,
+        "mean_max_probability": 0.682352601128479
+      },
+      "refit": {
+        "cases": 256,
+        "accuracy": 0.703125,
+        "nll": 0.7427818469496463,
+        "brier": 0.4162501339770295,
+        "ece": 0.07684082175529343,
+        "mean_max_probability": 0.6853163351021468
+      }
+    }
+  },
+  "evaluation": {
+    "choice": {
+      "baseline": {
+        "cases": 512,
+        "accuracy": 0.947265625,
+        "nll": 0.16764935639980003,
+        "brier": 0.09013842875319816,
+        "ece": 0.02786437243928083,
+        "mean_max_probability": 0.9580382293775184
+      },
+      "refit": {
+        "cases": 512,
+        "accuracy": 0.947265625,
+        "nll": 0.16180567444496852,
+        "brier": 0.08963419688621728,
+        "ece": 0.01900174251570852,
+        "mean_max_probability": 0.9471261222613666
+      },
+      "paired_deltas": {
+        "nll": {
+          "delta": -0.005843681954831509,
+          "percentile_95": [
+            -0.014705914348137061,
+            0.0016195017103147885
+          ]
+        },
+        "brier": {
+          "delta": -0.0005042318669808837,
+          "percentile_95": [
+            -0.0021858800896264186,
+            0.001086838218658931
+          ]
+        },
+        "ece": {
+          "delta": -0.00886262992357231,
+          "percentile_95": [
+            -0.015780530017584678,
+            0.0071574735576831715
+          ]
+        }
+      },
+      "effective_temperatures": [
+        2.8377154
+      ],
+      "bootstrap": {
+        "repetitions": 1000,
+        "seed": 20261007,
+        "method": "paired row percentile; refit temperatures held fixed"
+      }
+    },
+    "noul": {
+      "baseline": {
+        "cases": 512,
+        "accuracy": 0.904296875,
+        "nll": 0.23096179141320503,
+        "brier": 0.13461820671770555,
+        "ece": 0.03608428030344574,
+        "mean_max_probability": 0.8893221365805217
+      },
+      "refit": {
+        "cases": 512,
+        "accuracy": 0.904296875,
+        "nll": 0.22594023209591205,
+        "brier": 0.13380667488173087,
+        "ece": 0.02557840119290218,
+        "mean_max_probability": 0.9118926769696684
+      },
+      "paired_deltas": {
+        "nll": {
+          "delta": -0.0050215593172929784,
+          "percentile_95": [
+            -0.011421122922129295,
+            0.00216893326220019
+          ]
+        },
+        "brier": {
+          "delta": -0.0008115318359746826,
+          "percentile_95": [
+            -0.0033191263370668384,
+            0.0018334710741951254
+          ]
+        },
+        "ece": {
+          "delta": -0.010505879110543556,
+          "percentile_95": [
+            -0.023207140610928458,
+            0.01277581170718458
+          ]
+        }
+      },
+      "effective_temperatures": [
+        1.993916
+      ],
+      "bootstrap": {
+        "repetitions": 1000,
+        "seed": 20261007,
+        "method": "paired row percentile; refit temperatures held fixed"
+      }
+    },
+    "score": {
+      "baseline": {
+        "cases": 512,
+        "accuracy": 0.671875,
+        "nll": 0.7405598280060495,
+        "brier": 0.43125998877164856,
+        "ece": 0.04128078933228792,
+        "mean_max_probability": 0.6844068786894559
+      },
+      "refit": {
+        "cases": 512,
+        "accuracy": 0.671875,
+        "nll": 0.7405924036619949,
+        "brier": 0.43141329408614437,
+        "ece": 0.04406720425448596,
+        "mean_max_probability": 0.6873022608153007
+      },
+      "paired_deltas": {
+        "nll": {
+          "delta": 3.257565594538825e-05,
+          "percentile_95": [
+            -0.0006447616787919053,
+            0.0007623081561954903
+          ]
+        },
+        "brier": {
+          "delta": 0.00015330531449581075,
+          "percentile_95": [
+            -0.00018917320865302623,
+            0.0004937193411196361
+          ]
+        },
+        "ece": {
+          "delta": 0.002786414922198041,
+          "percentile_95": [
+            -0.008478130061383017,
+            0.015232485014067265
+          ]
+        }
+      },
+      "effective_temperatures": [
+        2.375609
+      ],
+      "bootstrap": {
+        "repetitions": 1000,
+        "seed": 20261007,
+        "method": "paired row percentile; refit temperatures held fixed"
+      }
+    },
+    "all": {
+      "baseline": {
+        "cases": 1536,
+        "accuracy": 0.8411458333333334,
+        "nll": 0.3797236586063515,
+        "brier": 0.21867220808085075,
+        "ece": 0.015302207776606147,
+        "mean_max_probability": 0.8439224148824986
+      },
+      "refit": {
+        "cases": 1536,
+        "accuracy": 0.8411458333333334,
+        "nll": 0.37611277006762517,
+        "brier": 0.21828472195136417,
+        "ece": 0.016949720331852488,
+        "mean_max_probability": 0.848773686682112
+      },
+      "paired_deltas": {
+        "nll": {
+          "delta": -0.00361088853872632,
+          "percentile_95": [
+            -0.007738328790853066,
+            8.983379126398239e-05
+          ]
+        },
+        "brier": {
+          "delta": -0.00038748612948658057,
+          "percentile_95": [
+            -0.0015154690883938393,
+            0.0007437233004720933
+          ]
+        },
+        "ece": {
+          "delta": 0.0016475125552463405,
+          "percentile_95": [
+            -0.00976738589689466,
+            0.0132954207164356
+          ]
+        }
+      },
+      "effective_temperatures": [
+        1.993916,
+        2.375609,
+        2.8377154
+      ],
+      "bootstrap": {
+        "repetitions": 1000,
+        "seed": 20261007,
+        "method": "paired row percentile; refit temperatures held fixed"
+      }
+    }
+  },
+  "limitations": [
+    "unknown overlap with model training",
+    "bootstrap excludes fitting-temperature uncertainty",
+    "fixed prompts/cardinalities and sample distribution; no universal calibration claim",
+    "numerical conformance still requires actual independent model execution"
+  ]
+}

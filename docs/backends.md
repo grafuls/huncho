@@ -23,9 +23,10 @@ scores all questions together. See [Clef setup](clef.md).
 |---|---|---|---|
 | `MockBackend` | `huncho-backend` | ✅ built-in | Deterministic, dependency-free. The **offline reference** for the conformance harness and demos. |
 | `ClefBackend` | `huncho-backend` | `clef` | Native Rust/Candle Qwen3.5 and trained F5 joint schema head; CPU, optional CUDA. No Python runtime. |
-| `NullBackend` | `huncho-backend` | ✅ built-in | Always-empty output, useful for tests / shelling out. |
-| `OnnxBackend` | `huncho-backend` | ⚙️ feature-gated | ONNX Runtime (CPU/CUDA via EPs). Built with the `onnx` feature (off by default). |
-| `CandleBackend` | `huncho-backend` | ⚙️ feature-gated | Loads Hugging Face **safetensors** directly via `candle` (CPU). Built with the `candle` feature (off by default). The primary path for real `convaiinnovations/laya`. |
+| `NullBackend` | `huncho-backend` | ✅ built-in | Reports an unloaded-backend error; placeholder for unavailable models. |
+| `OnnxBackend` | `huncho-backend` | ⚙️ feature-gated | ONNX Runtime on CPU today; CUDA EP registration and device I/O binding remain pending. Built with `onnx`. |
+| `CandleBackend` | `huncho-backend` | ⚙️ feature-gated | Native ModernBERT/Laya, FP32 on CPU by default; explicit optional CUDA path requires labeled qualification. Built with `candle`; GPU kernels require `cuda`. |
+| `Qwen3_5Backend` | `huncho-backend` | ⚙️ feature-gated | Kev F2 pointers and F3 candidate logits over Qwen3.5/merged LoRA. CPU, optional CUDA; F3 GPU selection is explicit and requires labeled qualification. |
 
 `MockBackend` emits a `Features` (hidden-state) output so the engine's
 feature-projection heads (F1/F2/F4) and the mean-fallback projection are all
@@ -111,12 +112,26 @@ At load time it:
 
 - remaps weight keys `encoder.*` → `model.*` (matching `convaiinnovations/laya`'s
   layout) and drops non-encoder tensors (`temperature`, `act_head.*`);
-- converts F16 weights to F32 for CPU inference;
+- converts F16/BF16 weights to F32 on CPU before optional device transfer;
 - normalizes a transformers-5.0 `rope_parameters` config object into the flat
   `global_rope_theta` / `local_rope_theta` fields candle expects;
 - runs the base `ModernBert` encoder (not `ForMaskedLM`) via
-  `ModernBert::load`, then extracts hidden states at the requested option-marker
-  positions with `index_select`.
+  `ModernBert::load`, then runs retained trained Laya `head.*`, `type_emb.*`
+  and `scorer.*` tensors when present. Bare encoders return selected hidden
+  states with `index_select`.
+
+ModernBERT and F3 Qwen retain CPU defaults, including `HUNCHO_DEVICE=auto`.
+`HUNCHO_DEVICE=cuda` or `cuda:N` explicitly selects their newly wired CUDA
+paths in a `cuda` build; unavailable devices fail instead of falling back.
+ModernBERT still executes FP32 and rejects other dtype labels. F3 honors its
+supported requested dtype, keeps the vocabulary head on the same device, and
+stages source conversion/LoRA merging on CPU. BF16 GPU execution requires
+native BF16 support. Both paths report `device_path` execution metadata and
+require a complete labeled startup suite in CLI serving. Actual T4 fixtures
+pass BF16 source staging, candidate weights on device and batch row checks
+([retained CUDA log](verification/kev-t4-20261007/stage5-cuda-fixtures.log)).
+Fixture coverage does not qualify released Laya/Nimble checkpoints; those
+full-model GPU checks remain pending. See [qualification controls](operations.md).
 
 `huncho convert --backend candle` writes a manifest whose artifact is
 `model.safetensors`. The weights/config are fetched separately (e.g. `hf
@@ -174,8 +189,12 @@ Kev's ordered-level formula; choice confidence uses the existing peak formula.
 
 Qwen3.5 LoRA checkpoints run on CPU (fp32 by default) or CUDA (fp16 by default),
 with an FP32 pointer head on the selected device and a limit of 8,192 tokens
-per complete row. KV/recurrent prefix caching is not
-implemented, so the state is recomputed for each question. Qwen3 checkpoints,
+per complete row. Independent questions remain the default. Native KV/recurrent
+prefix fan-out and exact-length question batching are opt-in and require
+qualification; the native full Kev/T4 FP16 variants failed the tighter paired
+gate. Experimental projection/attention profiles have separate identities and
+gates. See [optimization validation](kev-optimization-validation.md).
+Qwen3 checkpoints,
 full-weight Kev releases, option isolation, and trained special embeddings are
 rejected explicitly. This implementation does not claim the upstream server's
 64k state window. Offline reference fixtures test prompt tokens and calibrated

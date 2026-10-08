@@ -1,0 +1,39 @@
+{
+  "source_archive_sha256": "7935dd3a16924d8708b281374630ae8a7f11a78d74c7c836c0baa85445e03903",
+  "baseline_commit": "571f93c547e0853f79ea195cd85920fc70440bff",
+  "rustc": "1.97.1 (8bab26f4f 2026-07-14) Fedora 1.97.1-1.fc44",
+  "commands": [
+    {
+      "command": "cargo test --offline --workspace",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo test --offline --workspace --features huncho-cli/clef",
+      "exit_code": 0
+    },
+    {
+      "command": "cargo clippy --offline --workspace --all-targets --features huncho-cli/onnx,huncho-cli/clef",
+      "environment": {
+        "ORT_LIB_LOCATION": "/tmp/tmp.rcTYfMCJfG/onnxruntime-linux-x64-1.28.0/lib",
+        "ORT_PREFER_DYNAMIC_LINK": "1",
+        "LD_LIBRARY_PATH": "/tmp/tmp.rcTYfMCJfG/onnxruntime-linux-x64-1.28.0/lib"
+      },
+      "exit_code": 0,
+      "warnings": "Existing manifest/prompt/test/convert lint warnings; no new preparation-path warning."
+    },
+    {
+      "command": "python3 -m unittest discover -s scripts/tests -v",
+      "exit_code": 0,
+      "tests": 14
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "limits": [
+    "Manual command receipts from this session; raw local output is in tool history.",
+    "CPU fixtures and static checks do not qualify a released CUDA checkpoint.",
+    "Repository source was compared byte-for-byte against the stage6 source archive."
+  ]
+}

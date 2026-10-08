@@ -1,0 +1,32 @@
+{
+  "model": "kev-4b",
+  "backend": "candle",
+  "dtype": "fp16",
+  "device": "GPU (CUDA device 0)",
+  "questions": 5,
+  "iterations": 10,
+  "concurrency": 1,
+  "workload": "mixed",
+  "repeat_inputs": true,
+  "long_state": false,
+  "result_cache_bytes": 1048576,
+  "reference_readout": false,
+  "prefix_cache": false,
+  "max_batch_tokens": null,
+  "work": {
+    "forward_calls": 0,
+    "prefill_calls": 0,
+    "processed_tokens": 0,
+    "reused_prefix_tokens": 0,
+    "cache_forks": 0,
+    "batch_calls": 0,
+    "result_cache_hits": 10
+  },
+  "mean_ms": 0.005386300000000001,
+  "p50_ms": 0.0036509999999999997,
+  "p95_ms": 0.012514,
+  "p99_ms": 0.012514,
+  "requests_per_second": 28502.7775956767,
+  "questions_per_second": 142513.88797838351,
+  "measurement": "warm closed-loop in-process engine evaluation"
+}

@@ -1,0 +1,54 @@
+1c5203c1564b1d676b4c364ed6a5a237542e80937e36551d5cfee0bee5668275  /var/tmp/huncho-optimization-20261007/precision-diagnostic-test-retained
+warning: candle-kernels@0.11.0: Compiling 11 of 11 PTX kernels
+warning: candle-kernels@0.11.0: Using 32 threads for compilation
+warning: candle-kernels@0.11.0: Compiling 15 of 15 kernels
+   Compiling huncho-core v0.1.0 (/var/tmp/huncho-optimization-20261007/stage5-source/crates/huncho-core)
+   Compiling huncho-backend v0.1.0 (/var/tmp/huncho-optimization-20261007/stage5-source/crates/huncho-backend)
+   Compiling huncho-hub v0.1.0 (/var/tmp/huncho-optimization-20261007/stage5-source/crates/huncho-hub)
+   Compiling huncho-api v0.1.0 (/var/tmp/huncho-optimization-20261007/stage5-source/crates/huncho-api)
+   Compiling huncho-cli v0.1.0 (/var/tmp/huncho-optimization-20261007/stage5-source/crates/huncho-cli)
+    Finished `release` profile [optimized] target(s) in 1m 06s
+a0877ecbd23ea3a5efe28f4ca53349c46723c5c34f56f31bc33b5a8fcbe63491  /var/tmp/huncho-optimization-20261007/huncho-stage5
+5ef1d721edf43f5eb9b9c1611fc51ce2e5bcb1d3d89efc887200852ce26bbb59  /var/tmp/huncho-optimization-20261007/huncho-stage5-20261007.tar.gz
+warning: candle-kernels@0.11.0: Compiling 11 of 11 PTX kernels
+warning: candle-kernels@0.11.0: Using 32 threads for compilation
+warning: candle-kernels@0.11.0: Compiling 15 of 15 kernels
+   Compiling huncho-core v0.1.0 (/var/tmp/huncho-optimization-20261007/stage5-source/crates/huncho-core)
+   Compiling huncho-backend v0.1.0 (/var/tmp/huncho-optimization-20261007/stage5-source/crates/huncho-backend)
+    Finished `release` profile [optimized] target(s) in 43.48s
+  Executable tests/candidate_readout.rs (/var/tmp/huncho-t4-build/source/target/release/deps/candidate_readout-7e81276f9ef7d8b0)
+  Executable tests/candle_integration.rs (/var/tmp/huncho-t4-build/source/target/release/deps/candle_integration-4b9ec3895aa85451)
+  Executable tests/native_batch.rs (/var/tmp/huncho-t4-build/source/target/release/deps/native_batch-74029d8faed70952)
+warning: candle-kernels@0.11.0: Compiling 11 of 11 PTX kernels
+warning: candle-kernels@0.11.0: Using 32 threads for compilation
+warning: candle-kernels@0.11.0: Compiling 15 of 15 kernels
+    Finished `release` profile [optimized] target(s) in 0.18s
+     Running tests/candle_integration.rs (/var/tmp/huncho-t4-build/source/target/release/deps/candle_integration-4b9ec3895aa85451)
+
+running 1 test
+test cuda_modernbert_stages_bf16_checkpoints_and_preserves_cpu_readouts ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.42s
+
+warning: candle-kernels@0.11.0: Compiling 11 of 11 PTX kernels
+warning: candle-kernels@0.11.0: Using 32 threads for compilation
+warning: candle-kernels@0.11.0: Compiling 15 of 15 kernels
+    Finished `release` profile [optimized] target(s) in 0.18s
+     Running tests/candidate_readout.rs (/var/tmp/huncho-t4-build/source/target/release/deps/candidate_readout-7e81276f9ef7d8b0)
+
+running 1 test
+test cuda_candidate_projection_keeps_the_vocabulary_head_on_the_execution_device ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 1.26s
+
+warning: candle-kernels@0.11.0: Compiling 11 of 11 PTX kernels
+warning: candle-kernels@0.11.0: Using 32 threads for compilation
+warning: candle-kernels@0.11.0: Compiling 15 of 15 kernels
+    Finished `release` profile [optimized] target(s) in 0.18s
+     Running tests/native_batch.rs (/var/tmp/huncho-t4-build/source/target/release/deps/native_batch-74029d8faed70952)
+
+running 1 test
+test cuda_modernbert_batches_preserve_rows_and_candidate_positions ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.31s
+

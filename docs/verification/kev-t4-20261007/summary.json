@@ -1,0 +1,566 @@
+{
+  "conformance": {
+    "conform-cpu-fp32-batch": {
+      "model": "kev-4b",
+      "backend": "candle",
+      "dtype": "fp16",
+      "device": "GPU (CUDA device 0)",
+      "reference_readout": false,
+      "prefix_cache": false,
+      "max_batch_tokens": 4096,
+      "work": {
+        "forward_calls": 16,
+        "prefill_calls": 0,
+        "processed_tokens": 1951,
+        "reused_prefix_tokens": 0,
+        "cache_forks": 0,
+        "batch_calls": 3
+      },
+      "cases": [
+        {
+          "id": "short",
+          "max_prob_delta": 0.0002553165,
+          "argmax_match": true,
+          "ece": 0.044058442
+        },
+        {
+          "id": "negated",
+          "max_prob_delta": 0.00027531385,
+          "argmax_match": true,
+          "ece": 0.025790513
+        },
+        {
+          "id": "structured",
+          "max_prob_delta": 0.00032818317,
+          "argmax_match": true,
+          "ece": 0.15605246
+        },
+        {
+          "id": "long",
+          "max_prob_delta": 0.0002395697,
+          "argmax_match": true,
+          "ece": 0.042668063
+        },
+        {
+          "id": "equal-length",
+          "max_prob_delta": 0.00088483095,
+          "argmax_match": true,
+          "ece": 0.049056143
+        },
+        {
+          "id": "single",
+          "max_prob_delta": 0.00012633204,
+          "argmax_match": true,
+          "ece": 0.3058148
+        }
+      ],
+      "max_prob_delta": 0.00088483095,
+      "argmax_agreement": 1.0,
+      "ece": 9.5143914e-05,
+      "passed": false,
+      "optimization_parity": {
+        "max_prob_delta": 0.00037246943,
+        "argmax_agreement": 1.0
+      }
+    },
+    "conform-cpu-fp32-independent": {
+      "model": "kev-4b",
+      "backend": "candle",
+      "dtype": "fp16",
+      "device": "GPU (CUDA device 0)",
+      "reference_readout": false,
+      "prefix_cache": false,
+      "max_batch_tokens": null,
+      "work": {
+        "forward_calls": 19,
+        "prefill_calls": 0,
+        "processed_tokens": 1951,
+        "reused_prefix_tokens": 0,
+        "cache_forks": 0,
+        "batch_calls": 0
+      },
+      "cases": [
+        {
+          "id": "short",
+          "max_prob_delta": 0.0002553165,
+          "argmax_match": true,
+          "ece": 0.044058442
+        },
+        {
+          "id": "negated",
+          "max_prob_delta": 0.00027531385,
+          "argmax_match": true,
+          "ece": 0.025790513
+        },
+        {
+          "id": "structured",
+          "max_prob_delta": 0.00032818317,
+          "argmax_match": true,
+          "ece": 0.15605246
+        },
+        {
+          "id": "long",
+          "max_prob_delta": 0.0002395697,
+          "argmax_match": true,
+          "ece": 0.042668063
+        },
+        {
+          "id": "equal-length",
+          "max_prob_delta": 0.0005123615,
+          "argmax_match": true,
+          "ece": 0.04893743
+        },
+        {
+          "id": "single",
+          "max_prob_delta": 0.00012633204,
+          "argmax_match": true,
+          "ece": 0.3058148
+        }
+      ],
+      "max_prob_delta": 0.0005123615,
+      "argmax_agreement": 1.0,
+      "ece": 5.7660043e-05,
+      "passed": true
+    },
+    "conform-cpu-fp32-prefix": {
+      "model": "kev-4b",
+      "backend": "candle",
+      "dtype": "fp16",
+      "device": "GPU (CUDA device 0)",
+      "reference_readout": false,
+      "prefix_cache": true,
+      "max_batch_tokens": null,
+      "work": {
+        "forward_calls": 19,
+        "prefill_calls": 5,
+        "processed_tokens": 865,
+        "reused_prefix_tokens": 1620,
+        "cache_forks": 18,
+        "batch_calls": 0
+      },
+      "cases": [
+        {
+          "id": "short",
+          "max_prob_delta": 0.00026077032,
+          "argmax_match": true,
+          "ece": 0.044081133
+        },
+        {
+          "id": "negated",
+          "max_prob_delta": 0.0001104828,
+          "argmax_match": true,
+          "ece": 0.025882939
+        },
+        {
+          "id": "structured",
+          "max_prob_delta": 0.0031434298,
+          "argmax_match": true,
+          "ece": 0.15681829
+        },
+        {
+          "id": "long",
+          "max_prob_delta": 7.3194504e-05,
+          "argmax_match": true,
+          "ece": 0.04256354
+        },
+        {
+          "id": "equal-length",
+          "max_prob_delta": 0.00031346083,
+          "argmax_match": true,
+          "ece": 0.048897117
+        },
+        {
+          "id": "single",
+          "max_prob_delta": 0.00012633204,
+          "argmax_match": true,
+          "ece": 0.3058148
+        }
+      ],
+      "max_prob_delta": 0.0031434298,
+      "argmax_agreement": 1.0,
+      "ece": 0.00016751885,
+      "passed": false,
+      "optimization_parity": {
+        "max_prob_delta": 0.002896309,
+        "argmax_agreement": 1.0
+      }
+    },
+    "conform-cuda-fp16-batch": {
+      "model": "kev-4b",
+      "backend": "candle",
+      "dtype": "fp16",
+      "device": "GPU (CUDA device 0)",
+      "reference_readout": false,
+      "prefix_cache": false,
+      "max_batch_tokens": 4096,
+      "work": {
+        "forward_calls": 16,
+        "prefill_calls": 0,
+        "processed_tokens": 1951,
+        "reused_prefix_tokens": 0,
+        "cache_forks": 0,
+        "batch_calls": 3
+      },
+      "cases": [
+        {
+          "id": "short",
+          "max_prob_delta": 4.656613e-10,
+          "argmax_match": true,
+          "ece": 0.044058442
+        },
+        {
+          "id": "negated",
+          "max_prob_delta": 0.0,
+          "argmax_match": true,
+          "ece": 0.025790513
+        },
+        {
+          "id": "structured",
+          "max_prob_delta": 0.0,
+          "argmax_match": true,
+          "ece": 0.15605246
+        },
+        {
+          "id": "long",
+          "max_prob_delta": 0.0,
+          "argmax_match": true,
+          "ece": 0.042668063
+        },
+        {
+          "id": "equal-length",
+          "max_prob_delta": 0.00037246943,
+          "argmax_match": true,
+          "ece": 0.049056143
+        },
+        {
+          "id": "single",
+          "max_prob_delta": 0.0,
+          "argmax_match": true,
+          "ece": 0.3058148
+        }
+      ],
+      "max_prob_delta": 0.00037246943,
+      "argmax_agreement": 1.0,
+      "ece": 3.748387e-05,
+      "passed": false,
+      "optimization_parity": {
+        "max_prob_delta": 0.00037246943,
+        "argmax_agreement": 1.0
+      }
+    },
+    "conform-cuda-fp16-independent": {
+      "model": "kev-4b",
+      "backend": "candle",
+      "dtype": "fp16",
+      "device": "GPU (CUDA device 0)",
+      "reference_readout": false,
+      "prefix_cache": false,
+      "max_batch_tokens": null,
+      "work": {
+        "forward_calls": 19,
+        "prefill_calls": 0,
+        "processed_tokens": 1951,
+        "reused_prefix_tokens": 0,
+        "cache_forks": 0,
+        "batch_calls": 0
+      },
+      "cases": [
+        {
+          "id": "short",
+          "max_prob_delta": 4.656613e-10,
+          "argmax_match": true,
+          "ece": 0.044058442
+        },
+        {
+          "id": "negated",
+          "max_prob_delta": 0.0,
+          "argmax_match": true,
+          "ece": 0.025790513
+        },
+        {
+          "id": "structured",
+          "max_prob_delta": 0.0,
+          "argmax_match": true,
+          "ece": 0.15605246
+        },
+        {
+          "id": "long",
+          "max_prob_delta": 0.0,
+          "argmax_match": true,
+          "ece": 0.042668063
+        },
+        {
+          "id": "equal-length",
+          "max_prob_delta": 4.656613e-10,
+          "argmax_match": true,
+          "ece": 0.04893743
+        },
+        {
+          "id": "single",
+          "max_prob_delta": 0.0,
+          "argmax_match": true,
+          "ece": 0.3058148
+        }
+      ],
+      "max_prob_delta": 4.656613e-10,
+      "argmax_agreement": 1.0,
+      "ece": 0.0,
+      "passed": true
+    },
+    "conform-cuda-fp16-prefix": {
+      "model": "kev-4b",
+      "backend": "candle",
+      "dtype": "fp16",
+      "device": "GPU (CUDA device 0)",
+      "reference_readout": false,
+      "prefix_cache": true,
+      "max_batch_tokens": null,
+      "work": {
+        "forward_calls": 19,
+        "prefill_calls": 5,
+        "processed_tokens": 865,
+        "reused_prefix_tokens": 1620,
+        "cache_forks": 18,
+        "batch_calls": 0
+      },
+      "cases": [
+        {
+          "id": "short",
+          "max_prob_delta": 4.6029687e-05,
+          "argmax_match": true,
+          "ece": 0.044081133
+        },
+        {
+          "id": "negated",
+          "max_prob_delta": 0.00018244982,
+          "argmax_match": true,
+          "ece": 0.025882939
+        },
+        {
+          "id": "structured",
+          "max_prob_delta": 0.002896309,
+          "argmax_match": true,
+          "ece": 0.15681829
+        },
+        {
+          "id": "long",
+          "max_prob_delta": 0.00027891248,
+          "argmax_match": true,
+          "ece": 0.04256354
+        },
+        {
+          "id": "equal-length",
+          "max_prob_delta": 0.0003130436,
+          "argmax_match": true,
+          "ece": 0.048897117
+        },
+        {
+          "id": "single",
+          "max_prob_delta": 0.0,
+          "argmax_match": true,
+          "ece": 0.3058148
+        }
+      ],
+      "max_prob_delta": 0.002896309,
+      "argmax_agreement": 1.0,
+      "ece": 0.00010985881,
+      "passed": false,
+      "optimization_parity": {
+        "max_prob_delta": 0.002896309,
+        "argmax_agreement": 1.0
+      }
+    }
+  },
+  "benchmarks": {
+    "bench-long-batch": {
+      "model": "kev-4b",
+      "backend": "candle",
+      "dtype": "fp16",
+      "device": "GPU (CUDA device 0)",
+      "questions": 5,
+      "iterations": 10,
+      "concurrency": 1,
+      "workload": "mixed",
+      "repeat_inputs": false,
+      "long_state": true,
+      "reference_readout": false,
+      "prefix_cache": false,
+      "max_batch_tokens": 4096,
+      "work": {
+        "forward_calls": 30,
+        "prefill_calls": 0,
+        "processed_tokens": 27040,
+        "reused_prefix_tokens": 0,
+        "cache_forks": 0,
+        "batch_calls": 20
+      },
+      "mean_ms": 24881.456725199998,
+      "p50_ms": 24913.642925,
+      "p95_ms": 25160.602481,
+      "p99_ms": 25160.602481,
+      "requests_per_second": 0.04018943864734533,
+      "questions_per_second": 0.20094719323672666,
+      "measurement": "warm closed-loop in-process engine evaluation"
+    },
+    "bench-long-independent": {
+      "model": "kev-4b",
+      "backend": "candle",
+      "dtype": "fp16",
+      "device": "GPU (CUDA device 0)",
+      "questions": 5,
+      "iterations": 10,
+      "concurrency": 1,
+      "workload": "mixed",
+      "repeat_inputs": false,
+      "long_state": true,
+      "reference_readout": false,
+      "prefix_cache": false,
+      "max_batch_tokens": null,
+      "work": {
+        "forward_calls": 50,
+        "prefill_calls": 0,
+        "processed_tokens": 27040,
+        "reused_prefix_tokens": 0,
+        "cache_forks": 0,
+        "batch_calls": 0
+      },
+      "mean_ms": 23813.5801568,
+      "p50_ms": 23820.720106,
+      "p95_ms": 24019.881274,
+      "p99_ms": 24019.881274,
+      "requests_per_second": 0.04199239429482226,
+      "questions_per_second": 0.2099619714741113,
+      "measurement": "warm closed-loop in-process engine evaluation"
+    },
+    "bench-long-prefix": {
+      "model": "kev-4b",
+      "backend": "candle",
+      "dtype": "fp16",
+      "device": "GPU (CUDA device 0)",
+      "questions": 5,
+      "iterations": 10,
+      "concurrency": 1,
+      "workload": "mixed",
+      "repeat_inputs": false,
+      "long_state": true,
+      "reference_readout": false,
+      "prefix_cache": true,
+      "max_batch_tokens": null,
+      "work": {
+        "forward_calls": 50,
+        "prefill_calls": 10,
+        "processed_tokens": 6280,
+        "reused_prefix_tokens": 25950,
+        "cache_forks": 50,
+        "batch_calls": 0
+      },
+      "mean_ms": 5631.8879365,
+      "p50_ms": 5664.097468999999,
+      "p95_ms": 5694.344387,
+      "p99_ms": 5694.344387,
+      "requests_per_second": 0.1775368424751991,
+      "questions_per_second": 0.8876842123759955,
+      "measurement": "warm closed-loop in-process engine evaluation"
+    },
+    "bench-short-batch": {
+      "model": "kev-4b",
+      "backend": "candle",
+      "dtype": "fp16",
+      "device": "GPU (CUDA device 0)",
+      "questions": 5,
+      "iterations": 10,
+      "concurrency": 1,
+      "workload": "mixed",
+      "repeat_inputs": false,
+      "long_state": false,
+      "reference_readout": false,
+      "prefix_cache": false,
+      "max_batch_tokens": 4096,
+      "work": {
+        "forward_calls": 30,
+        "prefill_calls": 0,
+        "processed_tokens": 1690,
+        "reused_prefix_tokens": 0,
+        "cache_forks": 0,
+        "batch_calls": 20
+      },
+      "mean_ms": 1571.5733987,
+      "p50_ms": 1573.225509,
+      "p95_ms": 1585.7391750000002,
+      "p99_ms": 1585.7391750000002,
+      "requests_per_second": 0.636286427980204,
+      "questions_per_second": 3.1814321399010197,
+      "measurement": "warm closed-loop in-process engine evaluation"
+    },
+    "bench-short-independent": {
+      "model": "kev-4b",
+      "backend": "candle",
+      "dtype": "fp16",
+      "device": "GPU (CUDA device 0)",
+      "questions": 5,
+      "iterations": 10,
+      "concurrency": 1,
+      "workload": "mixed",
+      "repeat_inputs": false,
+      "long_state": false,
+      "reference_readout": false,
+      "prefix_cache": false,
+      "max_batch_tokens": null,
+      "work": {
+        "forward_calls": 50,
+        "prefill_calls": 0,
+        "processed_tokens": 1690,
+        "reused_prefix_tokens": 0,
+        "cache_forks": 0,
+        "batch_calls": 0
+      },
+      "mean_ms": 1613.7358562000002,
+      "p50_ms": 1617.541195,
+      "p95_ms": 1622.838058,
+      "p99_ms": 1622.838058,
+      "requests_per_second": 0.619663082493405,
+      "questions_per_second": 3.098315412467025,
+      "measurement": "warm closed-loop in-process engine evaluation"
+    },
+    "bench-short-prefix": {
+      "model": "kev-4b",
+      "backend": "candle",
+      "dtype": "fp16",
+      "device": "GPU (CUDA device 0)",
+      "questions": 5,
+      "iterations": 10,
+      "concurrency": 1,
+      "workload": "mixed",
+      "repeat_inputs": false,
+      "long_state": false,
+      "reference_readout": false,
+      "prefix_cache": true,
+      "max_batch_tokens": null,
+      "work": {
+        "forward_calls": 50,
+        "prefill_calls": 10,
+        "processed_tokens": 1210,
+        "reused_prefix_tokens": 600,
+        "cache_forks": 50,
+        "batch_calls": 0
+      },
+      "mean_ms": 1246.0167376000002,
+      "p50_ms": 1246.8272709999999,
+      "p95_ms": 1249.6807000000001,
+      "p99_ms": 1249.6807000000001,
+      "requests_per_second": 0.8025095625783549,
+      "questions_per_second": 4.012547812891775,
+      "measurement": "warm closed-loop in-process engine evaluation"
+    }
+  },
+  "load_failures": {
+    "conform-cuda-fp32-batch": "Error: backend error: moving Qwen3.5 weights to device: DriverError(CUDA_ERROR_OUT_OF_MEMORY, \"out of memory\")",
+    "conform-cuda-fp32-independent": "Error: backend error: moving Qwen3.5 weights to device: DriverError(CUDA_ERROR_OUT_OF_MEMORY, \"out of memory\")",
+    "conform-cuda-fp32-prefix": "Error: backend error: moving Qwen3.5 weights to device: DriverError(CUDA_ERROR_OUT_OF_MEMORY, \"out of memory\")"
+  },
+  "binaries": {
+    "reference": "93b76f583017727c9cc5e9a09b4ccc3573153583eb232776c7172914204bdc66",
+    "optimized": "1318521d03141a42c530e38bb1fc0ab1149d210ae55cb1200bc5462f3399642e"
+  },
+  "source_snapshot_sha256": "91a081f33303a1cce10c0afc189350ccb6c3156fc72d8518bf89584479ec0cc8"
+}

@@ -1,0 +1,51 @@
+{
+  "schema_version": "1.0",
+  "model": "jaredpalmer/kev-4b",
+  "adapter_revision": "6cfce5c2fa4b4bd64026336ab649c5ca78857d52",
+  "base_revision": "1001bb4d826a52d1f399e183466143f4da7b741b",
+  "temperature": 2.40605,
+  "source_archive_sha256": "7935dd3a16924d8708b281374630ae8a7f11a78d74c7c836c0baa85445e03903",
+  "binary_sha256": "048269f7fa780bbc5b84e54287719c9c4ce13f852555801040c75754770d638f",
+  "build_affinity": [
+    0,
+    2,
+    4,
+    6,
+    8,
+    10,
+    12,
+    14
+  ],
+  "scripts": {
+    "huncho-stage6-build.sh": "402a8ae2d2c44fb19d20b77f99f352133f808266fb736b3144050bb5c231c21d",
+    "huncho-stage6-qualification.sh": "b8a807ecef376234f7b51fe255969d35bc6a72cf5d91bae385a8ce5d749af223",
+    "huncho-stage6-preparation-pilot.py": "d9e39c970757cc7dfdde426ee7ac1afb489755e984e510ddffe8e3eabe635424",
+    "qualification-runner.py": "cb5e7189957b11d5e068923277aa4d175f5c855890baaecd8f9694da6f6d5a49"
+  },
+  "status": "numerical preparation and HTTP equality/work gates passed; HTTP pilot slower; CPU thread pilot complete; labeled GPU preparation gate interrupted at user request",
+  "limits": [
+    "Independent unchanged FP16 CUDA profile; no prefix, batch, projection chunk or FP32 attention.",
+    "The numerical gate alone does not establish held-out calibration or performance.",
+    "Prior installed/reference and stage 2\u20135 binaries remain retained."
+  ],
+  "numerical_report_sha256": "311fdfd3600408a09dc65d568873c4a1f2ba754010b8cb55aeb51105ba7c16f9",
+  "numerical_identity_sha256": "262385a0b699aafc11cc9eb95a8da73b2fc803245c9a0511c3b9b5df9b86eb45",
+  "host": "x37-h17-000-r740xd.rdu3.labs.perfscale.redhat.com",
+  "source_archive": "/var/tmp/huncho-optimization-20261007/huncho-stage6-20261008.tar.gz",
+  "retained_binary": "/var/tmp/huncho-optimization-20261007/huncho-stage6",
+  "http_pilot_sha256": "c2484e8189c33386ba7686a8448951b32bb3693c868eea732a143f123ca6472d",
+  "cpu_pilot_sha256": "9758c40a69a9b6744c0e9f65b5f750c2f91965a4c418393f73da5ffa82281c4c",
+  "build_receipt_sha256": "1ec569b8f4de3b3bb300ef0857543f997b6fdc7b1a0410bcc754b8be71138c86",
+  "labeled_audit_directory": "/var/tmp/huncho-optimization-20261007/stage6-preparation-labeled",
+  "completion_receipt": "/var/tmp/huncho-optimization-20261007/stage6-qualification.exit",
+  "observed_labeled_run": {
+    "process_id": 309701,
+    "status": "interrupted; GPU checks deferred at user request",
+    "device": "Tesla T4",
+    "dtype": "fp16",
+    "prepare_all": true,
+    "expected_cases": 1536,
+    "qualified": false,
+    "interruption_record": "stage6-user-deferred-gpu.json"
+  }
+}

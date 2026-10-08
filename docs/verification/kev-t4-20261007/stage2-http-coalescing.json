@@ -1,0 +1,145 @@
+{
+  "schema_version": "1.0",
+  "model": "kev-4b",
+  "dtype": "fp16",
+  "device": "CUDA Tesla T4",
+  "temperature": 2.40605,
+  "binary_sha256": "bb0671e41bdd30d82b8615daef4b342fd061712e6092d8a9cf3dd0907869e65f",
+  "source_snapshot_sha256": "5b78c9b0f4b3b9d0533f5c89d754b53d4cb550db15b239388eaaf9b68e1f5360",
+  "script_sha256": "a98ca2b0ef300f86934662ce060a7c731b841e5786140824d0178debb6a695e8",
+  "kernel": "5.14.0-427.13.1.el9_4.x86_64",
+  "boot_id": "923553ba-2a89-483d-87eb-290074af3523",
+  "driver": "580.178.04",
+  "baseline": {
+    "coalesce_bytes": 0,
+    "concurrency": 8,
+    "bursts": [
+      {
+        "wall_ms": 6628.755752999496,
+        "request_mean_ms": 3723.776675374893,
+        "request_latencies_ms": [
+          4965.155006000714,
+          6626.345249998849,
+          5795.451009998942,
+          825.392415999886,
+          2480.147764999856,
+          4136.276081999313,
+          3308.1044080008724,
+          1653.341466000711
+        ],
+        "logical_tokens_per_request": 84,
+        "body_sha256": "6014d20ff83a71fe238827af6f5568f6260e585b78287cf3ae9a09e65ec7c7e9",
+        "input_sha256": "cc79533d9780ea697b812b3fbd7166c74c396c9703534743187c6c85784700c6"
+      },
+      {
+        "wall_ms": 6656.875164999292,
+        "request_mean_ms": 3739.9063603750164,
+        "request_latencies_ms": [
+          830.3386959996715,
+          3321.638110999629,
+          1660.1181250007357,
+          4153.678905000561,
+          6655.476483998427,
+          2489.8392090017296,
+          5820.6768709987955,
+          4987.484482000582
+        ],
+        "logical_tokens_per_request": 84,
+        "body_sha256": "ba6e3548b7f5141bc5ae4a01b46fd4d5ca3a44f292501a9f9b194777820673f1",
+        "input_sha256": "8d4f4d533b61db1fad7a5ef2e9c1408c492ac3f79745027162a079035cde23f2"
+      },
+      {
+        "wall_ms": 6697.2525130004215,
+        "request_mean_ms": 3763.2710981256423,
+        "request_latencies_ms": [
+          5018.909829999757,
+          2505.33336800072,
+          6695.929131001321,
+          835.1592480012187,
+          4180.668996999884,
+          5857.4829019999015,
+          1669.60977600138,
+          3343.075533000956
+        ],
+        "logical_tokens_per_request": 84,
+        "body_sha256": "231c67bfc4e12027ebe911ec28b18d69cb9b90c0379705004a7d6aec8d602084",
+        "input_sha256": "2eac727dc130f0ebe81f9232bdefd401a95574e75fce220470baf320b24eb8fd"
+      }
+    ],
+    "work": {
+      "huncho_requests_coalesced": 0,
+      "huncho_result_cache_hits": 0,
+      "huncho_tokens_prefilled": 2016
+    },
+    "mean_burst_wall_ms": 6660.961143666403
+  },
+  "coalesced": {
+    "coalesce_bytes": 1048576,
+    "concurrency": 8,
+    "bursts": [
+      {
+        "wall_ms": 848.7063480006327,
+        "request_mean_ms": 846.0140906256584,
+        "request_latencies_ms": [
+          845.7958630006033,
+          845.7870490001369,
+          845.438626000032,
+          846.2316340010148,
+          845.5901150009595,
+          845.9938619998866,
+          846.3720280014968,
+          846.9035480011371
+        ],
+        "logical_tokens_per_request": 84,
+        "body_sha256": "6014d20ff83a71fe238827af6f5568f6260e585b78287cf3ae9a09e65ec7c7e9",
+        "input_sha256": "cc79533d9780ea697b812b3fbd7166c74c396c9703534743187c6c85784700c6"
+      },
+      {
+        "wall_ms": 849.0063859990187,
+        "request_mean_ms": 847.7474511250875,
+        "request_latencies_ms": [
+          847.1414579998964,
+          848.503258999699,
+          847.7373700006865,
+          848.120310000013,
+          847.848518000319,
+          847.2473679994437,
+          847.7739890004159,
+          847.6073370002268
+        ],
+        "logical_tokens_per_request": 84,
+        "body_sha256": "ba6e3548b7f5141bc5ae4a01b46fd4d5ca3a44f292501a9f9b194777820673f1",
+        "input_sha256": "8d4f4d533b61db1fad7a5ef2e9c1408c492ac3f79745027162a079035cde23f2"
+      },
+      {
+        "wall_ms": 848.1950240002334,
+        "request_mean_ms": 846.9270186249105,
+        "request_latencies_ms": [
+          846.1606220007525,
+          847.7654359994631,
+          846.9347560003371,
+          846.4054240012047,
+          846.602511999663,
+          846.9903639997938,
+          846.6895539986581,
+          847.8674809994118
+        ],
+        "logical_tokens_per_request": 84,
+        "body_sha256": "231c67bfc4e12027ebe911ec28b18d69cb9b90c0379705004a7d6aec8d602084",
+        "input_sha256": "2eac727dc130f0ebe81f9232bdefd401a95574e75fce220470baf320b24eb8fd"
+      }
+    ],
+    "work": {
+      "huncho_requests_coalesced": 21,
+      "huncho_result_cache_hits": 0,
+      "huncho_tokens_prefilled": 252
+    },
+    "mean_burst_wall_ms": 848.635919333295
+  },
+  "exact_body_agreement": true,
+  "limits": [
+    "three loopback eight-caller bursts after warmup; not open-loop saturation or production p99",
+    "same-input duplicate workload; no completed-response retention, prefix reuse or tensor batching",
+    "CUDA FP16 independent startup qualification uses unchanged goldens and corrected tie order"
+  ]
+}

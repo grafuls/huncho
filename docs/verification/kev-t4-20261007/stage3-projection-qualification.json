@@ -1,0 +1,62 @@
+{
+  "schema_version": "1.0",
+  "model": "kev-4b",
+  "temperature": 2.40605,
+  "dtype": "fp16",
+  "device": "CUDA Tesla T4",
+  "results": [
+    {
+      "chunk_rows": 64,
+      "mode": "independent",
+      "exit_code": 0,
+      "elapsed_seconds": 58.77789011599998,
+      "passed": true,
+      "max_prob_delta": 0.0004569292,
+      "argmax_agreement": 1.0,
+      "ece_drift": 2.6933849e-05,
+      "optimization_parity": null,
+      "golden_sha256": "4e8cd428d9aa79fcbb34d93d0135786f012c5a2f777a46f6dc8812b2c6676568"
+    },
+    {
+      "chunk_rows": 64,
+      "mode": "prefix",
+      "exit_code": 1,
+      "elapsed_seconds": 67.46274108800026,
+      "passed": false,
+      "max_prob_delta": 0.0004569292,
+      "argmax_agreement": 1.0,
+      "ece_drift": 4.989654e-05,
+      "optimization_parity": {
+        "max_prob_delta": 0.00039118528,
+        "argmax_agreement": 1.0
+      },
+      "golden_sha256": "4e8cd428d9aa79fcbb34d93d0135786f012c5a2f777a46f6dc8812b2c6676568"
+    },
+    {
+      "chunk_rows": 64,
+      "mode": "batch",
+      "exit_code": 0,
+      "elapsed_seconds": 78.29263382200043,
+      "passed": true,
+      "max_prob_delta": 0.0004569292,
+      "argmax_agreement": 1.0,
+      "ece_drift": 2.6933849e-05,
+      "optimization_parity": {
+        "max_prob_delta": 0.0,
+        "argmax_agreement": 1.0
+      },
+      "golden_sha256": "4e8cd428d9aa79fcbb34d93d0135786f012c5a2f777a46f6dc8812b2c6676568"
+    }
+  ],
+  "binary_sha256": "34e2cb8090421acc6ff9e9962a8253c81fd4fb636e44f765d22ccd29493342f3",
+  "source_snapshot_sha256": "8021f6f895be8dc098b0c166d21328379b276d5c471fa40cc48e9b610f969ed6",
+  "script_sha256": "b6ffd0a5e54c47716e828b3eed8edb6dc8caee978a276a9762684b8279894599",
+  "kernel": "5.14.0-427.13.1.el9_4.x86_64",
+  "boot_id": "923553ba-2a89-483d-87eb-290074af3523",
+  "driver": "580.178.04",
+  "limits": [
+    "six pinned numerical regression cases/19 questions; no labeled held-out acceptance from this run",
+    "unchanged external delta/argmax/ECE and paired delta 1e-4 gates; native independent reference retained",
+    "experimental fixed-row projections, no temperature refit or attention padding"
+  ]
+}

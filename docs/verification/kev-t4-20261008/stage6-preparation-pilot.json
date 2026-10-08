@@ -1,0 +1,195 @@
+{
+  "schema_version": "1.0",
+  "diagnostic_pilot": true,
+  "started_utc": "2026-10-08T08:47:45.983641+00:00",
+  "finished_utc": "2026-10-08T08:53:12.379719+00:00",
+  "model": "kev-4b",
+  "device": "Tesla T4",
+  "dtype": "fp16",
+  "temperature": 2.40605,
+  "affinity": [
+    0,
+    2,
+    4,
+    6,
+    8,
+    10,
+    12,
+    14
+  ],
+  "threads": 8,
+  "binary_sha256": "048269f7fa780bbc5b84e54287719c9c4ce13f852555801040c75754770d638f",
+  "source_archive_sha256": "7935dd3a16924d8708b281374630ae8a7f11a78d74c7c836c0baa85445e03903",
+  "golden_sha256": "4e8cd428d9aa79fcbb34d93d0135786f012c5a2f777a46f6dc8812b2c6676568",
+  "script_sha256": "d9e39c970757cc7dfdde426ee7ac1afb489755e984e510ddffe8e3eabe635424",
+  "request_sha256": [
+    "d81dc6724c761990a3dc5395a6b02345abdf009fc84978ac7782cedb88130e6b",
+    "7ed094c44c76feaa7d45e249a7799217c9b94b2257b2af0e874a08116ea1201f",
+    "50cd8b57281bc4180db2d7faac26550cda48140ccc2ceb5e025942ebcfe10696",
+    "e47d3efca4eeeef3959268c9cb95e3ade755f6f977a6c9252edc93f85526d54e",
+    "f1095bf71518d7f6f7ca2c3cb3b2d378fac75e2df6a8b0fee825623936f3c6a2",
+    "742e9ebfa3e6599afb35f33c5724c712bf9b9cfe7d028475b2a76fa80a05cf13",
+    "8d8ff64a7528e5db9bc2c2d2bf7d8fad1a74a5a1796a5aecb11bf65263724c8a",
+    "64ead8ade6a22f21f02bbf4d321f87c958273df680186d023b4a49ba5f5e11b1"
+  ],
+  "results": [
+    {
+      "repetition": 0,
+      "preparation_slots": 0,
+      "requests": 8,
+      "questions": 24,
+      "burst_seconds": 12.27494876399578,
+      "mean_request_seconds": 6.893761821625958,
+      "request_seconds": [
+        7.655455312007689,
+        6.12086845599697,
+        3.058781485000509,
+        10.733372624003096,
+        1.5282903740007896,
+        4.58815003199561,
+        12.272208734997548,
+        9.192967555005453
+      ],
+      "byte_identical_to_disabled": true,
+      "physical_work": {
+        "huncho_batch_count": 0.0,
+        "huncho_fork_count": 0.0,
+        "huncho_prompt_cache_hits": 0.0,
+        "huncho_questions_prepared": 0.0,
+        "huncho_requests_coalesced": 0.0,
+        "huncho_result_cache_hits": 0.0,
+        "huncho_tokens_prefilled": 1344.0
+      },
+      "response_sha256": [
+        "93a3b1aaa59316e01de7a6ea2b49cc009583f0581608e9736e6387b7195fa4ef",
+        "9bfff6521bf2c201dc0f5e2b7444445eb8c777de65b5089e671405fca249631e",
+        "bf94f011fa81c9dc1578a019ff711f27ca80a1aac56aa950c1d79e9617db63b2",
+        "69ef2b731958dd2b265ba57d1f8c80bea5ab8e363c5be8596459b867da7f1ed1",
+        "fe3a49bd62f09fdf2f03e98b9d0f6a6999809a08f85075b39731323242efb11e",
+        "a72bbed9d09eb9b57c2e084a5ae69da0eb0ecaf420744cd5b950b3a7a1369a56",
+        "87f386c0b1e7e4c0f3c42c4344aa1ce7bb86e070984c1522244e60d21b7a3c50",
+        "7bbcc932311f4b817be99065ebb8ea2eac8ce19c046c6b280bbc9d743aedc0fb"
+      ]
+    },
+    {
+      "repetition": 1,
+      "preparation_slots": 1,
+      "requests": 8,
+      "questions": 24,
+      "burst_seconds": 12.655759702000069,
+      "mean_request_seconds": 7.1107831813751545,
+      "request_seconds": [
+        4.731580598003347,
+        12.653232374999789,
+        6.314630682012648,
+        3.1541082259936957,
+        7.900797219990636,
+        9.484320768999169,
+        11.067065790004563,
+        1.5805297909973888
+      ],
+      "byte_identical_to_disabled": true,
+      "physical_work": {
+        "huncho_batch_count": 0.0,
+        "huncho_fork_count": 0.0,
+        "huncho_prompt_cache_hits": 0.0,
+        "huncho_questions_prepared": 24.0,
+        "huncho_requests_coalesced": 0.0,
+        "huncho_result_cache_hits": 0.0,
+        "huncho_tokens_prefilled": 1344.0
+      },
+      "response_sha256": [
+        "93a3b1aaa59316e01de7a6ea2b49cc009583f0581608e9736e6387b7195fa4ef",
+        "9bfff6521bf2c201dc0f5e2b7444445eb8c777de65b5089e671405fca249631e",
+        "bf94f011fa81c9dc1578a019ff711f27ca80a1aac56aa950c1d79e9617db63b2",
+        "69ef2b731958dd2b265ba57d1f8c80bea5ab8e363c5be8596459b867da7f1ed1",
+        "fe3a49bd62f09fdf2f03e98b9d0f6a6999809a08f85075b39731323242efb11e",
+        "a72bbed9d09eb9b57c2e084a5ae69da0eb0ecaf420744cd5b950b3a7a1369a56",
+        "87f386c0b1e7e4c0f3c42c4344aa1ce7bb86e070984c1522244e60d21b7a3c50",
+        "7bbcc932311f4b817be99065ebb8ea2eac8ce19c046c6b280bbc9d743aedc0fb"
+      ]
+    },
+    {
+      "repetition": 2,
+      "preparation_slots": 1,
+      "requests": 8,
+      "questions": 24,
+      "burst_seconds": 12.538835791012389,
+      "mean_request_seconds": 7.046192663374313,
+      "request_seconds": [
+        1.5655494129896397,
+        3.1277343620022293,
+        10.969267242995556,
+        7.828302303008968,
+        6.2577320220007095,
+        12.53615442699811,
+        9.392869543997222,
+        4.691931993002072
+      ],
+      "byte_identical_to_disabled": true,
+      "physical_work": {
+        "huncho_batch_count": 0.0,
+        "huncho_fork_count": 0.0,
+        "huncho_prompt_cache_hits": 0.0,
+        "huncho_questions_prepared": 24.0,
+        "huncho_requests_coalesced": 0.0,
+        "huncho_result_cache_hits": 0.0,
+        "huncho_tokens_prefilled": 1344.0
+      },
+      "response_sha256": [
+        "93a3b1aaa59316e01de7a6ea2b49cc009583f0581608e9736e6387b7195fa4ef",
+        "9bfff6521bf2c201dc0f5e2b7444445eb8c777de65b5089e671405fca249631e",
+        "bf94f011fa81c9dc1578a019ff711f27ca80a1aac56aa950c1d79e9617db63b2",
+        "69ef2b731958dd2b265ba57d1f8c80bea5ab8e363c5be8596459b867da7f1ed1",
+        "fe3a49bd62f09fdf2f03e98b9d0f6a6999809a08f85075b39731323242efb11e",
+        "a72bbed9d09eb9b57c2e084a5ae69da0eb0ecaf420744cd5b950b3a7a1369a56",
+        "87f386c0b1e7e4c0f3c42c4344aa1ce7bb86e070984c1522244e60d21b7a3c50",
+        "7bbcc932311f4b817be99065ebb8ea2eac8ce19c046c6b280bbc9d743aedc0fb"
+      ]
+    },
+    {
+      "repetition": 3,
+      "preparation_slots": 0,
+      "requests": 8,
+      "questions": 24,
+      "burst_seconds": 12.298625505995005,
+      "mean_request_seconds": 6.9088500972520706,
+      "request_seconds": [
+        6.136142472998472,
+        12.295924784004455,
+        9.21499322699674,
+        3.063217283008271,
+        7.673792395013152,
+        4.599900934001198,
+        10.753516917000525,
+        1.5333127649937524
+      ],
+      "byte_identical_to_disabled": true,
+      "physical_work": {
+        "huncho_batch_count": 0.0,
+        "huncho_fork_count": 0.0,
+        "huncho_prompt_cache_hits": 0.0,
+        "huncho_questions_prepared": 0.0,
+        "huncho_requests_coalesced": 0.0,
+        "huncho_result_cache_hits": 0.0,
+        "huncho_tokens_prefilled": 1344.0
+      },
+      "response_sha256": [
+        "93a3b1aaa59316e01de7a6ea2b49cc009583f0581608e9736e6387b7195fa4ef",
+        "9bfff6521bf2c201dc0f5e2b7444445eb8c777de65b5089e671405fca249631e",
+        "bf94f011fa81c9dc1578a019ff711f27ca80a1aac56aa950c1d79e9617db63b2",
+        "69ef2b731958dd2b265ba57d1f8c80bea5ab8e363c5be8596459b867da7f1ed1",
+        "fe3a49bd62f09fdf2f03e98b9d0f6a6999809a08f85075b39731323242efb11e",
+        "a72bbed9d09eb9b57c2e084a5ae69da0eb0ecaf420744cd5b950b3a7a1369a56",
+        "87f386c0b1e7e4c0f3c42c4344aa1ce7bb86e070984c1522244e60d21b7a3c50",
+        "7bbcc932311f4b817be99065ebb8ea2eac8ce19c046c6b280bbc9d743aedc0fb"
+      ]
+    }
+  ],
+  "limits": [
+    "Two eight-client bursts per mode, alternating order; not production throughput or p99.",
+    "Distinct states with the pinned short structured mixed-question template; no caches/coalescing/batching/prefix.",
+    "Unchanged numerical startup gate on every server; held-out labeled preparation gate runs separately.",
+    "CPU thread pilot may run concurrently on other NUMA cores; no frequency or system-wide isolation."
+  ]
+}

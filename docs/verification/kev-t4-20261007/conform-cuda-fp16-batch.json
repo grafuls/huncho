@@ -1,0 +1,63 @@
+{
+  "model": "kev-4b",
+  "backend": "candle",
+  "dtype": "fp16",
+  "device": "GPU (CUDA device 0)",
+  "reference_readout": false,
+  "prefix_cache": false,
+  "max_batch_tokens": 4096,
+  "work": {
+    "forward_calls": 16,
+    "prefill_calls": 0,
+    "processed_tokens": 1951,
+    "reused_prefix_tokens": 0,
+    "cache_forks": 0,
+    "batch_calls": 3
+  },
+  "cases": [
+    {
+      "id": "short",
+      "max_prob_delta": 4.656613e-10,
+      "argmax_match": true,
+      "ece": 0.044058442
+    },
+    {
+      "id": "negated",
+      "max_prob_delta": 0.0,
+      "argmax_match": true,
+      "ece": 0.025790513
+    },
+    {
+      "id": "structured",
+      "max_prob_delta": 0.0,
+      "argmax_match": true,
+      "ece": 0.15605246
+    },
+    {
+      "id": "long",
+      "max_prob_delta": 0.0,
+      "argmax_match": true,
+      "ece": 0.042668063
+    },
+    {
+      "id": "equal-length",
+      "max_prob_delta": 0.00037246943,
+      "argmax_match": true,
+      "ece": 0.049056143
+    },
+    {
+      "id": "single",
+      "max_prob_delta": 0.0,
+      "argmax_match": true,
+      "ece": 0.3058148
+    }
+  ],
+  "max_prob_delta": 0.00037246943,
+  "argmax_agreement": 1.0,
+  "ece": 3.748387e-05,
+  "passed": false,
+  "optimization_parity": {
+    "max_prob_delta": 0.00037246943,
+    "argmax_agreement": 1.0
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "reference_binary": "/var/tmp/huncho-t4-build/huncho-kev-tested",
+  "reference_binary_sha256": "93b76f583017727c9cc5e9a09b4ccc3573153583eb232776c7172914204bdc66",
+  "suite_sha256": "9cd9d07e96d816d278d6235e28bd5c64d86fa402f7ea3e5d6c2e2ee63ca8593f",
+  "adapter_revision": "6cfce5c2fa4b4bd64026336ab649c5ca78857d52",
+  "base_revision": "1001bb4d826a52d1f399e183466143f4da7b741b",
+  "device": "cpu",
+  "dtype": "fp32",
+  "temperature": 2.40605,
+  "basis": "unlabeled independent-forward regression, not outcome calibration",
+  "measurements": [
+    {
+      "case": "short",
+      "seconds": 15.64055373500014,
+      "usage": {
+        "input_tokens": 69,
+        "output_tokens": 0
+      }
+    },
+    {
+      "case": "negated",
+      "seconds": 21.016939107001235,
+      "usage": {
+        "input_tokens": 96,
+        "output_tokens": 0
+      }
+    },
+    {
+      "case": "structured",
+      "seconds": 28.47508060999826,
+      "usage": {
+        "input_tokens": 132,
+        "output_tokens": 0
+      }
+    },
+    {
+      "case": "long",
+      "seconds": 315.5204677329966,
+      "usage": {
+        "input_tokens": 1491,
+        "output_tokens": 0
+      }
+    },
+    {
+      "case": "equal-length",
+      "seconds": 31.381898371000716,
+      "usage": {
+        "input_tokens": 138,
+        "output_tokens": 0
+      }
+    },
+    {
+      "case": "single",
+      "seconds": 5.644908880996809,
+      "usage": {
+        "input_tokens": 25,
+        "output_tokens": 0
+      }
+    }
+  ]
+}

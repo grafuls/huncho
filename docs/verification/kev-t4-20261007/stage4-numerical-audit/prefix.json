@@ -1,0 +1,68 @@
+{
+  "model": "kev-4b",
+  "backend": "candle",
+  "dtype": "fp16",
+  "device": "GPU (CUDA device 0)",
+  "execution_metadata": {
+    "attention_compute_dtype": "fp32",
+    "projection_chunk_rows": "64"
+  },
+  "reference_readout": false,
+  "prefix_cache": true,
+  "max_batch_tokens": null,
+  "work": {
+    "forward_calls": 19,
+    "prefill_calls": 5,
+    "processed_tokens": 865,
+    "reused_prefix_tokens": 1620,
+    "cache_forks": 18,
+    "batch_calls": 0,
+    "result_cache_hits": 0
+  },
+  "cases": [
+    {
+      "id": "short",
+      "max_prob_delta": 0.00018644333,
+      "argmax_match": true,
+      "ece": 0.04400927
+    },
+    {
+      "id": "negated",
+      "max_prob_delta": 0.00014942884,
+      "argmax_match": true,
+      "ece": 0.02574406
+    },
+    {
+      "id": "structured",
+      "max_prob_delta": 0.00022524595,
+      "argmax_match": true,
+      "ece": 0.15595317
+    },
+    {
+      "id": "long",
+      "max_prob_delta": 0.00019450486,
+      "argmax_match": true,
+      "ece": 0.0428586
+    },
+    {
+      "id": "equal-length",
+      "max_prob_delta": 0.0005196333,
+      "argmax_match": true,
+      "ece": 0.048823368
+    },
+    {
+      "id": "single",
+      "max_prob_delta": 0.00012011081,
+      "argmax_match": true,
+      "ece": 0.3057204
+    }
+  ],
+  "max_prob_delta": 0.0005196333,
+  "argmax_agreement": 1.0,
+  "ece": 0.000041678548,
+  "passed": false,
+  "optimization_parity": {
+    "max_prob_delta": 0.00021833181,
+    "argmax_agreement": 1.0
+  }
+}

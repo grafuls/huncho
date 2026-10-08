@@ -1,0 +1,311 @@
+{
+  "schema_version": "1.0",
+  "family": "F2",
+  "cases": [
+    {
+      "id": "short",
+      "request": {
+        "model": "kev-4b",
+        "state": "The sky is blue.",
+        "questions": {
+          "color": {
+            "type": "choice",
+            "instructions": "What color is the sky?",
+            "criteria": {
+              "blue": null,
+              "red": null,
+              "green": null
+            }
+          },
+          "blue": {
+            "type": "noul",
+            "instructions": "Is the sky blue?"
+          },
+          "rating": {
+            "type": "score",
+            "instructions": "How accurately does blue describe the sky?",
+            "criteria": [
+              "Incorrect",
+              "Partially correct",
+              "Correct"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "blue": {
+          "yes": 0.9940856,
+          "no": 0.005914399999999986
+        },
+        "color": {
+          "blue": 0.9950988,
+          "green": 0.0024116589,
+          "red": 0.002489496
+        },
+        "rating": {
+          "0": 0.045728263,
+          "1": 0.07539294,
+          "2": 0.8788788
+        }
+      }
+    },
+    {
+      "id": "negated",
+      "request": {
+        "model": "kev-4b",
+        "state": "The sky looks red at sunset. It is not blue right now.",
+        "questions": {
+          "color": {
+            "type": "choice",
+            "instructions": "What color is the sky?",
+            "criteria": {
+              "blue": null,
+              "red": null,
+              "green": null
+            }
+          },
+          "blue": {
+            "type": "noul",
+            "instructions": "Is the sky blue?"
+          },
+          "rating": {
+            "type": "score",
+            "instructions": "How accurately does blue describe the sky?",
+            "criteria": [
+              "Incorrect",
+              "Partially correct",
+              "Correct"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "blue": {
+          "yes": 0.011050143,
+          "no": 0.988949857
+        },
+        "color": {
+          "blue": 0.0069322507,
+          "green": 0.0056001944,
+          "red": 0.9874675
+        },
+        "rating": {
+          "0": 0.9460328,
+          "1": 0.03285902,
+          "2": 0.02110816
+        }
+      }
+    },
+    {
+      "id": "structured",
+      "request": {
+        "model": "kev-4b",
+        "state": {
+          "weather": {
+            "sky": "green",
+            "time": "night"
+          },
+          "observations": [
+            "red clouds",
+            "no blue visible"
+          ]
+        },
+        "questions": {
+          "color": {
+            "type": "choice",
+            "instructions": "What color is the sky?",
+            "criteria": {
+              "blue": null,
+              "red": null,
+              "green": null
+            }
+          },
+          "blue": {
+            "type": "noul",
+            "instructions": "Is the sky blue?"
+          },
+          "rating": {
+            "type": "score",
+            "instructions": "How accurately does blue describe the sky?",
+            "criteria": [
+              "Incorrect",
+              "Partially correct",
+              "Correct"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "blue": {
+          "yes": 0.044938684,
+          "no": 0.955061316
+        },
+        "color": {
+          "blue": 0.0728086,
+          "green": 0.6668849,
+          "red": 0.26030648
+        },
+        "rating": {
+          "0": 0.909779,
+          "1": 0.050617598,
+          "2": 0.039603367
+        }
+      }
+    },
+    {
+      "id": "long",
+      "request": {
+        "model": "kev-4b",
+        "state": "Observation 0: the sky was blue and the clouds were white. Observation 1: the sky was blue and the clouds were white. Observation 2: the sky was blue and the clouds were white. Observation 3: the sky was blue and the clouds were white. Observation 4: the sky was blue and the clouds were white. Observation 5: the sky was blue and the clouds were white. Observation 6: the sky was blue and the clouds were white. Observation 7: the sky was blue and the clouds were white. Observation 8: the sky was blue and the clouds were white. Observation 9: the sky was blue and the clouds were white. Observation 10: the sky was blue and the clouds were white. Observation 11: the sky was blue and the clouds were white. Observation 12: the sky was blue and the clouds were white. Observation 13: the sky was blue and the clouds were white. Observation 14: the sky was blue and the clouds were white. Observation 15: the sky was blue and the clouds were white. Observation 16: the sky was blue and the clouds were white. Observation 17: the sky was blue and the clouds were white. Observation 18: the sky was blue and the clouds were white. Observation 19: the sky was blue and the clouds were white. Observation 20: the sky was blue and the clouds were white. Observation 21: the sky was blue and the clouds were white. Observation 22: the sky was blue and the clouds were white. Observation 23: the sky was blue and the clouds were white. Observation 24: the sky was blue and the clouds were white. Observation 25: the sky was blue and the clouds were white. Observation 26: the sky was blue and the clouds were white. Observation 27: the sky was blue and the clouds were white. Observation 28: the sky was blue and the clouds were white. Observation 29: the sky was blue and the clouds were white. Observation 30: the sky was blue and the clouds were white. Observation 31: the sky was blue and the clouds were white. Final observation: the sky is red.",
+        "questions": {
+          "color": {
+            "type": "choice",
+            "instructions": "What color is the sky?",
+            "criteria": {
+              "blue": null,
+              "red": null,
+              "green": null
+            }
+          },
+          "blue": {
+            "type": "noul",
+            "instructions": "Is the sky blue?"
+          },
+          "rating": {
+            "type": "score",
+            "instructions": "How accurately does blue describe the sky?",
+            "criteria": [
+              "Incorrect",
+              "Partially correct",
+              "Correct"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "blue": {
+          "yes": 0.035339884,
+          "no": 0.964660116
+        },
+        "color": {
+          "blue": 0.054966208,
+          "green": 0.004408665,
+          "red": 0.94062513
+        },
+        "rating": {
+          "0": 0.96710706,
+          "1": 0.018344535,
+          "2": 0.014548426
+        }
+      }
+    },
+    {
+      "id": "equal-length",
+      "request": {
+        "model": "kev-4b",
+        "state": "The sky is blue.",
+        "questions": {
+          "first": {
+            "type": "choice",
+            "instructions": "What color is the sky?",
+            "criteria": {
+              "blue": null,
+              "red": null,
+              "green": null
+            }
+          },
+          "second": {
+            "type": "choice",
+            "instructions": "What color is the sky?",
+            "criteria": {
+              "green": null,
+              "red": null,
+              "blue": null
+            }
+          },
+          "noul1": {
+            "type": "noul",
+            "instructions": "Is the sky blue?"
+          },
+          "noul2": {
+            "type": "noul",
+            "instructions": "Is the sky red?"
+          },
+          "score1": {
+            "type": "score",
+            "instructions": "How accurately does blue describe the sky?",
+            "criteria": [
+              "Incorrect",
+              "Partially correct",
+              "Correct"
+            ]
+          },
+          "score2": {
+            "type": "score",
+            "instructions": "How accurately does blue describe the sky?",
+            "criteria": [
+              "Correct",
+              "Partially correct",
+              "Incorrect"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "first": {
+          "blue": 0.9950988,
+          "green": 0.0024116589,
+          "red": 0.002489496
+        },
+        "noul1": {
+          "yes": 0.9940856,
+          "no": 0.005914399999999986
+        },
+        "noul2": {
+          "yes": 0.0028048106,
+          "no": 0.9971951894
+        },
+        "score1": {
+          "0": 0.045728263,
+          "1": 0.07539294,
+          "2": 0.8788788
+        },
+        "score2": {
+          "0": 0.84500015,
+          "1": 0.1133619,
+          "2": 0.041637965
+        },
+        "second": {
+          "blue": 0.99688065,
+          "green": 0.001789198,
+          "red": 0.0013301454
+        }
+      }
+    },
+    {
+      "id": "single",
+      "request": {
+        "model": "kev-4b",
+        "state": "The sky color cannot be determined.",
+        "questions": {
+          "uncertain": {
+            "type": "choice",
+            "instructions": "What color is the sky?",
+            "criteria": {
+              "blue": null,
+              "red": null,
+              "green": null
+            }
+          }
+        }
+      },
+      "expected": {
+        "uncertain": {
+          "blue": 0.69417757,
+          "green": 0.09265058,
+          "red": 0.21317187
+        }
+      }
+    }
+  ]
+}

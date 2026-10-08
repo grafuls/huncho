@@ -16,8 +16,12 @@ may still use the previous separate `huncho` / `huncho-cuda` layout.
 The default `HUNCHO_DEVICE=auto` selects CUDA for Kev and Clef when GPU 0 passes an
 initialization and kernel probe, otherwise CPU. No NVIDIA software is required
 on CPU hosts. Use `huncho` in existing scripts that called `huncho-cuda`.
-CUDA acceleration currently applies to Kev and Clef; other backends keep their existing
-device support. `HUNCHO_CLEF_DEVICE` remains a legacy alias;
+ModernBERT and F3 Qwen retain CPU defaults, including `auto`. Their newly wired
+CUDA loaders require explicit `HUNCHO_DEVICE=cuda` / `cuda:N` and labeled
+startup qualification; full released Laya/Nimble GPU validation remains pending.
+ModernBERT executes FP32; F3 honors supported requested precision. ONNX GPU
+EP registration remains pending. `HUNCHO_CLEF_DEVICE` remains a legacy alias
+for Kev/Clef;
 `HUNCHO_DEVICE` takes precedence.
 
 ## GPU requirements
@@ -44,8 +48,12 @@ slow and still needs enough RAM.
 Kev-4B uses FP16 on CUDA, with FP32 pointer projections. Source weights and
 LoRA merging are staged in system RAM before transfer to the GPU. Keep enough
 system RAM for the checkpoint as well as GPU memory for weights and inference.
-Kev supports an 8,192-token complete row; prefix caching and multi-GPU sharding
-are not implemented.
+Kev supports an 8,192-token complete row. Request-local prefix caching and
+question batching are implemented as opt-in paths, but their native CUDA FP16
+variants failed probability parity; keep them disabled for this variant.
+Experimental kernel profiles require separate qualification. Multi-GPU
+sharding and quantization remain pending. See
+[optimization validation](kev-optimization-validation.md).
 
 See [Kev T4 validation](kev-cuda-validation.md) for tested versions, numerical
 agreement, and measured memory use with the full Kev-4B checkpoint.

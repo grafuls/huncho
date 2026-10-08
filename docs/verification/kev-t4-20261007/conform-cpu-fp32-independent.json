@@ -1,0 +1,59 @@
+{
+  "model": "kev-4b",
+  "backend": "candle",
+  "dtype": "fp16",
+  "device": "GPU (CUDA device 0)",
+  "reference_readout": false,
+  "prefix_cache": false,
+  "max_batch_tokens": null,
+  "work": {
+    "forward_calls": 19,
+    "prefill_calls": 0,
+    "processed_tokens": 1951,
+    "reused_prefix_tokens": 0,
+    "cache_forks": 0,
+    "batch_calls": 0
+  },
+  "cases": [
+    {
+      "id": "short",
+      "max_prob_delta": 0.0002553165,
+      "argmax_match": true,
+      "ece": 0.044058442
+    },
+    {
+      "id": "negated",
+      "max_prob_delta": 0.00027531385,
+      "argmax_match": true,
+      "ece": 0.025790513
+    },
+    {
+      "id": "structured",
+      "max_prob_delta": 0.00032818317,
+      "argmax_match": true,
+      "ece": 0.15605246
+    },
+    {
+      "id": "long",
+      "max_prob_delta": 0.0002395697,
+      "argmax_match": true,
+      "ece": 0.042668063
+    },
+    {
+      "id": "equal-length",
+      "max_prob_delta": 0.0005123615,
+      "argmax_match": true,
+      "ece": 0.04893743
+    },
+    {
+      "id": "single",
+      "max_prob_delta": 0.00012633204,
+      "argmax_match": true,
+      "ece": 0.3058148
+    }
+  ],
+  "max_prob_delta": 0.0005123615,
+  "argmax_agreement": 1.0,
+  "ece": 5.7660043e-05,
+  "passed": true
+}

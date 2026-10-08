@@ -1,0 +1,38 @@
+{
+  "schema_version": "1.0",
+  "collected_utc": "2026-10-08",
+  "host": "x37-h17-000-r740xd.rdu3.labs.perfscale.redhat.com",
+  "kernel": "5.14.0-427.13.1.el9_4.x86_64",
+  "boot_id": "923553ba-2a89-483d-87eb-290074af3523",
+  "driver": "580.178.04",
+  "stage3": {
+    "source_archive_sha256": "8021f6f895be8dc098b0c166d21328379b276d5c471fa40cc48e9b610f969ed6",
+    "binary_sha256": "34e2cb8090421acc6ff9e9962a8253c81fd4fb636e44f765d22ccd29493342f3",
+    "golden_sha256": "82744929277493ed765080346a5cce0015ad9a9c55f6ea61218e6a6fa71beacb",
+    "report_sha256": "d3a2504ba32901e02b0acd661d28990b99534b544094a8613ea13d0bb4e38d20",
+    "run_script_sha256": "fa4c0e7134440abac8e9d4b9c18c5ed55bfa98fc23a11b55dc7bf091a86f2c95",
+    "exit_code": 1,
+    "passed": false,
+    "cases_over_external_delta_gate": 85,
+    "temperature": 2.40605
+  },
+  "stage4": {
+    "identity_sha256": "ad5042e8868cc11409d186df39f066dafb1e3f243648b9da6f48c6a584919960",
+    "exit_code": 1,
+    "scope": "Six numerical cases/19 questions; prefix rejected, independent and batch passed; no labeled acceptance."
+  },
+  "stage5": {
+    "source_archive_sha256": "5ef1d721edf43f5eb9b9c1611fc51ce2e5bcb1d3d89efc887200852ce26bbb59",
+    "binary_sha256": "a0877ecbd23ea3a5efe28f4ca53349c46723c5c34f56f31bc33b5a8fcbe63491",
+    "fixture_log_sha256": "85bf8c7b5b99fafa225800dbb9ea7d72d56a46b24183911089e063dad1a85e5c",
+    "run_script_sha256": "967055f34fbd8c4933ada61d5084bd63391ab277b8f9aed48218e3c1645c6e63",
+    "exit_code": 0,
+    "independent_report_sha256": "7222ab46c5250914a91f81833c62d16457683ad401d2ff9ef810ab23c8d4bb2f",
+    "scope": "ModernBERT and F3 CUDA fixture execution plus unchanged independent Kev numerical regression. No released Laya/Nimble qualification."
+  },
+  "limits": [
+    "No changed arithmetic profile or refitted temperature is enabled.",
+    "Full reports are retained; six-case numerical passes do not override held-out rejection.",
+    "The labeled suite checks application-specific outcomes; overlap with model training remains unknown."
+  ]
+}

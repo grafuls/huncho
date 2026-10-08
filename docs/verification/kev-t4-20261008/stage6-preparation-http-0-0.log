@@ -1,0 +1,10 @@
+[2m2026-10-08T08:47:46.030828Z[0m [32m INFO[0m resolving 1 model reference(s) from the Hugging Face Hub; the serve listener comes up only after they are ready
+[2m2026-10-08T08:47:46.030873Z[0m [32m INFO[0m loading model `/root/.cache/huggingface/hub/models--jaredpalmer--kev-4b/snapshots/6cfce5c2fa4b4bd64026336ab649c5ca78857d52` (fetching base weights if needed, then materializing; first load can take a couple of minutes)...
+[2m2026-10-08T08:47:46.030997Z[0m [32m INFO[0m selected model runtime [3mmodel[0m[2m=[0mkev-4b [3mbackend[0m[2m=[0mcandle [3mdtype[0m[2m=[0mfp16
+[2m2026-10-08T08:47:46.031008Z[0m [32m INFO[0m loading tokenizer from /root/.cache/huggingface/hub/models--jaredpalmer--kev-4b/snapshots/6cfce5c2fa4b4bd64026336ab649c5ca78857d52/tokenizer.json
+[2m2026-10-08T08:47:46.953400Z[0m [32m INFO[0m loading Qwen3.5 on GPU (CUDA device 0) with fp16 weights
+[2m2026-10-08T08:48:26.503040Z[0m [32m INFO[0m registered model `kev-4b` on GPU (CUDA device 0) (from `/root/.cache/huggingface/hub/models--jaredpalmer--kev-4b/snapshots/6cfce5c2fa4b4bd64026336ab649c5ca78857d52`)
+[2m2026-10-08T08:48:43.748805Z[0m [32m INFO[0m qualification passed against pinned goldens (with independent parity for optimized paths) [3mmodel[0m[2m=[0m"kev-4b" [3mdevice[0m[2m=[0m"GPU (CUDA device 0)" [3mdtype[0m[2m=[0m"fp16"
+[2m2026-10-08T08:48:43.748957Z[0m [32m INFO[0m huncho starting (bind=127.0.0.1:18268, mock=false)
+[2m2026-10-08T08:48:43.749037Z[0m [32m INFO[0m huncho listening on 127.0.0.1:18268
+[2m2026-10-08T08:48:57.554995Z[0m [32m INFO[0m huncho shutdown complete

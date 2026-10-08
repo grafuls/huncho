@@ -1,0 +1,60 @@
+{
+  "model": "kev-4b",
+  "backend": "candle",
+  "dtype": "fp32",
+  "device": "CPU",
+  "reference_readout": false,
+  "prefix_cache": false,
+  "max_batch_tokens": null,
+  "work": {
+    "forward_calls": 19,
+    "prefill_calls": 0,
+    "processed_tokens": 1951,
+    "reused_prefix_tokens": 0,
+    "cache_forks": 0,
+    "batch_calls": 0,
+    "result_cache_hits": 0
+  },
+  "cases": [
+    {
+      "id": "short",
+      "max_prob_delta": 9.778887e-9,
+      "argmax_match": true,
+      "ece": 0.04397893
+    },
+    {
+      "id": "negated",
+      "max_prob_delta": 0.0,
+      "argmax_match": true,
+      "ece": 0.025849938
+    },
+    {
+      "id": "structured",
+      "max_prob_delta": 0.0,
+      "argmax_match": true,
+      "ece": 0.15609159
+    },
+    {
+      "id": "long",
+      "max_prob_delta": 0.0,
+      "argmax_match": true,
+      "ece": 0.0425359
+    },
+    {
+      "id": "equal-length",
+      "max_prob_delta": 9.778887e-9,
+      "argmax_match": true,
+      "ece": 0.048810136
+    },
+    {
+      "id": "single",
+      "max_prob_delta": 0.0,
+      "argmax_match": true,
+      "ece": 0.30582243
+    }
+  ],
+  "max_prob_delta": 9.778887e-9,
+  "argmax_agreement": 1.0,
+  "ece": 0.0,
+  "passed": true
+}

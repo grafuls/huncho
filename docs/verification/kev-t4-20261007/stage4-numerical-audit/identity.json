@@ -1,0 +1,101 @@
+{
+  "schema_version": "1.0",
+  "started_utc": "2026-10-07T17:33:43.638643+00:00",
+  "binary": "/var/tmp/huncho-optimization-20261007/huncho-stage4",
+  "binary_sha256": "1fdfa5455f3e3ecd38d249cc0406c3dd9f0c9b61dcd97e146eeca198483cc588",
+  "script_sha256": "400074e0c43acd7fab9e605f77b0b8e814f9becf05d2297803d36d1a7a759ceb",
+  "golden_sha256": "4e8cd428d9aa79fcbb34d93d0135786f012c5a2f777a46f6dc8812b2c6676568",
+  "package": "/root/.cache/huggingface/hub/models--jaredpalmer--kev-4b/snapshots/6cfce5c2fa4b4bd64026336ab649c5ca78857d52",
+  "package_files": {
+    "huncho-model.json": "b32072ebd7b54e2ed6c9c02df247e2812a8d65d3bade46bdb8b2d7211ac665a4",
+    "head.pt": "dd633435998ecc751ac538717a3742e32149500fabf7d7276287dbf0693f347c",
+    "tokenizer.json": "06b9509352d2af50381ab2247e083b80d32d5c0aba91c272ca9ff729b6a0e523",
+    "adapter_config.json": "8a05dfd6c5e7f61a62e6db5d8de8093a8dbbd105aa7ee7b5e7b73f6249f45617",
+    "adapter_model.safetensors": "90e817356246e7f18bfa7ca3d31794cd4fbeb3332a66a84cb51d9ceae925f2b2"
+  },
+  "adapter": {
+    "repo": "jaredpalmer/kev-4b",
+    "revision": "6cfce5c2fa4b4bd64026336ab649c5ca78857d52",
+    "rank": 16
+  },
+  "backbone_source": {
+    "kind": "hf",
+    "repo": "Qwen/Qwen3.5-4B-Base",
+    "revision": "1001bb4d826a52d1f399e183466143f4da7b741b"
+  },
+  "calibration": {
+    "default": {
+      "temperature": 2.40605,
+      "confidence": "peak",
+      "status": "fit"
+    },
+    "entries": {}
+  },
+  "resolved_calibration": {
+    "temperature": 2.40605,
+    "confidence": "peak",
+    "status": "fit"
+  },
+  "device_selection": "cuda",
+  "dtype": "fp16",
+  "projection_chunk_rows": 64,
+  "fp32_attention": true,
+  "kernel": "5.14.0-427.13.1.el9_4.x86_64",
+  "numerical_only": true,
+  "results": [
+    {
+      "mode": "independent",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds_including_load": 59.07235579499866,
+      "report_sha256": "96764fa5c2f39e1012b3ec3a3a32da6628d091acd21d4b726579e58bdd666c00",
+      "max_prob_delta": 0.00045901537,
+      "argmax_agreement": 1.0,
+      "ece_drift": 4.7549605e-05,
+      "optimization_parity": null,
+      "outcome_calibration": null
+    },
+    {
+      "mode": "prefix",
+      "passed": false,
+      "exit_code": 1,
+      "elapsed_seconds_including_load": 67.12898358199891,
+      "report_sha256": "e22c8e7cc1bff30035e19d366730bed1f6b3877afc1f3368741486a95eaa1569",
+      "max_prob_delta": 0.0005196333,
+      "argmax_agreement": 1.0,
+      "ece_drift": 4.1678548e-05,
+      "optimization_parity": {
+        "max_prob_delta": 0.00021833181,
+        "argmax_agreement": 1.0
+      },
+      "outcome_calibration": null
+    },
+    {
+      "mode": "batch",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds_including_load": 76.71850807600094,
+      "report_sha256": "12475fc927de59b9a039d49760bf8e27f8f69cbdb4c599a9409f43c694ff5e3f",
+      "max_prob_delta": 0.00045901537,
+      "argmax_agreement": 1.0,
+      "ece_drift": 4.7549605e-05,
+      "optimization_parity": {
+        "max_prob_delta": 0.0,
+        "argmax_agreement": 1.0
+      },
+      "outcome_calibration": null
+    }
+  ],
+  "qualified": false,
+  "limits": [
+    "Acceptance applies to the supplied independent vectors and observed outcomes only.",
+    "The runner records pins/hashes but cannot prove training overlap or fit/evaluation separation.",
+    "No speed or universal calibration claim; base revisions are recorded, base shards are not rehashed.",
+    "Single-question suites cannot qualify prefix or batch paths; use separate representative fan-out cases."
+  ],
+  "source_archive_sha256": "a076563f93490d0b67fbe7b616b659997a759d75d819e41d8410a91569d5b8a2",
+  "boot_id": "923553ba-2a89-483d-87eb-290074af3523",
+  "gpu_inventory": "Tesla T4, GPU-a5a076b6-ea8d-6dbf-4104-4d06dbd7cfac, 580.178.04",
+  "rayon_num_threads": "16",
+  "finished_utc": "2026-10-07T17:37:07.431105+00:00"
+}

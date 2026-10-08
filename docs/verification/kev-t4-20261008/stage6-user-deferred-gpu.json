@@ -1,0 +1,7 @@
+{
+  "observed_utc": "2026-10-08T09:34:16.132671+00:00",
+  "reason": "User requested skipping Apple Silicon and deferring checks against actual GPUs.",
+  "process_id": 309701,
+  "operation": "SIGTERM if the verified stage6 labeled conformance process was still running",
+  "qualification_claim": false
+}

@@ -1,0 +1,3 @@
+[2m2026-10-08T08:43:00.346034Z[0m [32m INFO[0m selected model runtime [3mmodel[0m[2m=[0mkev-4b [3mbackend[0m[2m=[0mcandle [3mdtype[0m[2m=[0mfp32
+[2m2026-10-08T08:43:00.346083Z[0m [32m INFO[0m loading tokenizer from /root/.cache/huggingface/hub/models--jaredpalmer--kev-4b/snapshots/6cfce5c2fa4b4bd64026336ab649c5ca78857d52/tokenizer.json
+[2m2026-10-08T08:43:00.983896Z[0m [32m INFO[0m loading Qwen3.5 on CPU with fp32 weights

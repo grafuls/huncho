@@ -1,0 +1,42 @@
+warning: candle-kernels@0.11.0: Compiling 11 of 11 PTX kernels
+warning: candle-kernels@0.11.0: Using 32 threads for compilation
+warning: candle-kernels@0.11.0: Compiling 15 of 15 kernels
+    Finished `release` profile [optimized] target(s) in 0.19s
+     Running tests/clef_reference.rs (/var/tmp/huncho-t4-build/source/target/release/deps/clef_reference-605748df5727c0f7)
+
+running 4 tests
+test native_clef_cuda_matches_reference_tokens_spans_and_logits ... ok
+test native_clef_matches_reference_tokens_spans_and_logits ... ok
+test native_clef_rejects_unsupported_contracts_and_cpu_bf16 ... ok
+test native_tokenizer_never_truncates_or_pads_prompt_fragments ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.07s
+
+     Running tests/kev_reference.rs (/var/tmp/huncho-t4-build/source/target/release/deps/kev_reference-0044ac35d5d96da7)
+
+running 3 tests
+test kev_bf16_checkpoint_runs_as_fp16_on_cuda ... ok
+test kev_candle_matches_upstream_probabilities ... ok
+test kev_cuda_matches_upstream_probabilities ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.54s
+
+     Running tests/native_batch.rs (/var/tmp/huncho-t4-build/source/target/release/deps/native_batch-74029d8faed70952)
+
+running 3 tests
+test cuda_pointer_batches_preserve_probabilities_and_reject_cache_branches ... ok
+test modernbert_batches_preserve_rows_and_candidate_positions ... ok
+test qwen_pointer_batches_preserve_probabilities_and_reject_cache_branches ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.74s
+
+     Running tests/prefix_cache.rs (/var/tmp/huncho-t4-build/source/target/release/deps/prefix_cache-e37e06423ae55743)
+
+running 4 tests
+test cache_handles_are_owned_bounded_and_transactional ... ok
+test cuda_forks_chunks_and_short_prefixes_preserve_probabilities ... ok
+test engine_fanout_preserves_wire_usage_and_releases_on_later_errors ... ok
+test native_forks_chunks_and_short_prefixes_preserve_probabilities ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.50s
+

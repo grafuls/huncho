@@ -1,0 +1,33 @@
+{
+  "model": "kev-4b",
+  "backend": "candle",
+  "dtype": "fp32",
+  "device": "CPU",
+  "execution_metadata": {},
+  "questions": 5,
+  "iterations": 5,
+  "concurrency": 1,
+  "workload": "mixed",
+  "repeat_inputs": false,
+  "long_state": false,
+  "result_cache_bytes": 0,
+  "reference_readout": false,
+  "prefix_cache": false,
+  "max_batch_tokens": null,
+  "work": {
+    "forward_calls": 25,
+    "prefill_calls": 0,
+    "processed_tokens": 845,
+    "reused_prefix_tokens": 0,
+    "cache_forks": 0,
+    "batch_calls": 0,
+    "result_cache_hits": 0
+  },
+  "mean_ms": 39382.4789876,
+  "p50_ms": 39382.103123999994,
+  "p95_ms": 39392.329686,
+  "p99_ms": 39392.329686,
+  "requests_per_second": 0.02539195263603778,
+  "questions_per_second": 0.1269597631801889,
+  "measurement": "warm closed-loop in-process engine evaluation"
+}
