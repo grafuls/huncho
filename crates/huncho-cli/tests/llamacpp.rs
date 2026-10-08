@@ -128,6 +128,38 @@ fn real_cpu_runtime_selects_exact_dtype_and_keeps_numerical_and_labeled_acceptan
     assert_eq!(report["dtype"], "gguf-f32");
     assert_eq!(report["passed"], true);
     assert!(report["max_prob_delta"].as_f64().unwrap() < 1e-6);
+    let prefix = command(&[
+        "conform",
+        "--model",
+        pkg.to_str().unwrap(),
+        "--golden",
+        golden.to_str().unwrap(),
+        "--prefix-cache",
+        "--persistent-prefix-bytes",
+        "1048576",
+        "--json",
+    ]);
+    assert!(
+        prefix.status.success(),
+        "{}",
+        String::from_utf8_lossy(&prefix.stderr)
+    );
+    let prefix: Value = serde_json::from_slice(&prefix.stdout).unwrap();
+    assert_eq!(prefix["passed"], true);
+    assert_eq!(
+        prefix["execution_metadata"]["llamacpp_prefix_state"],
+        "full-hybrid-sequence-snapshot-v1"
+    );
+    assert!(
+        prefix["optimization_parity"]["max_prob_delta"]
+            .as_f64()
+            .unwrap()
+            <= 1e-4
+    );
+    assert_eq!(prefix["optimization_parity"]["argmax_agreement"], 1.);
+    assert!(prefix["work"]["cache_forks"].as_u64().unwrap() > 0);
+    assert!(prefix["work"]["persistent_prefix_hits"].as_u64().unwrap() > 0);
+    assert!(prefix["outcome_calibration"].is_null());
     let audit: Value = serde_json::from_slice(&std::fs::read(&receipt).unwrap()).unwrap();
     assert_eq!(audit["outcome_gates_passed"], false);
     assert!(std::fs::read_to_string(&receipt)

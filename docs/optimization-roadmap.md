@@ -32,7 +32,7 @@ also show drift. Packed CPU fitting/held-out evaluation is still running.
 | O18 quantization | Experimental Candle and llama.cpp CPU Q8/Q4 packages available | Portable Q8/Q4 fit/held-out job running; other families open |
 | O19 retained/paged prefixes | Bounded immutable CPU snapshots available | Paging, branch collation and tenant policies |
 | O20 Metal | Skipped by user | Apple work deferred |
-| O21 llama.cpp | CPU F2/F3 and pending FP32/FP16/Q8/Q4 exports available | Native prefix/batches and released fitting/qualification |
+| O21 llama.cpp | CPU F2/F3, bounded full-state F2 prefix forks and pending FP32/FP16/Q8/Q4 exports available | Native batches and released fitting/qualification |
 | O22 shared bases/residency | Immutable CPU bases shared across isolated merges | Lazy resident loading/eviction and runtime LoRA dispatch |
 | O23 vLLM custom readouts | Open | Actual no-decode family implementation and qualification |
 | O24 distributed/sharded inference | Open | Implementation; actual multi-GPU qualification deferred |
@@ -41,6 +41,28 @@ also show drift. Packed CPU fitting/held-out evaluation is still running.
 | O27 browser WASM/WebGPU | Open | Separate actual browser runtime, packaging and gates |
 
 ## Implemented increments
+
+### llama.cpp full hybrid prefix snapshots
+
+Kev F2 now supports request-local prefix reuse and optional exact retained
+prefixes on the pinned CPU runtime. Full native sequence serialization preserves
+attention KV and recurrent/convolution state together. Forks share immutable
+bytes; each suffix clears/restores its own snapshot into sequence zero and uses
+explicit absolute positions. Success commits a new branch snapshot; validation,
+native, readout or allocation failure leaves the previous snapshot usable.
+Process-unique handles use the same allocator as Candle/Mock, preventing
+cross-runtime ownership collisions. Replicas copy no live/retained state.
+
+Each context bounds live handles to 64, retained keys to 16 and total charged
+snapshot/key/entry payload to 512 MiB. Caller retention defaults off and must
+fit the same limit. Native model/context memory is additional. Snapshot
+copy/restore can dominate short suffixes, so no speedup is inferred. Prefix and
+retention options remain off by default and require nonvacuous external/paired
+plus complete labeled serving gates. Fixture FP32/FP16/Q8/Q4 checks and real CLI
+conformance cover unchanged goldens, forks, continuation, failed validation,
+independent interleaving, replay hits, release/eviction, bounds and replica/foreign
+handle rejection. Native multi-sequence batching/paging and released model
+acceptance remain open; GPU/Apple execution was not tested.
 
 ### Laya final-layer marker queries
 

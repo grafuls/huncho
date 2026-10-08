@@ -43,7 +43,7 @@ fn native_cpu_pointer_matches_frozen_upstream_and_resets_state() {
         serde_json::from_slice(&std::fs::read(root.join("golden.json")).unwrap()).unwrap();
     let mut llama =
         LlamaCppBackend::load(root, &m, "gguf-f32", LlamaOptions { threads: 2 }).unwrap();
-    assert!(!llama.capabilities().supports_fork);
+    assert!(llama.capabilities().supports_fork);
     assert!(!llama.supports_batch());
     assert_eq!(llama.capabilities().extra["device"], "CPU");
     let mut worst_raw = 0.0f32;
@@ -96,6 +96,135 @@ fn native_cpu_pointer_matches_frozen_upstream_and_resets_state() {
     let mut cached = ForwardInput::new(vec![1], vec![0]);
     cached.retain_cache = true;
     assert!(llama.forward(cached).is_err());
+}
+
+#[test]
+fn full_hybrid_prefix_snapshots_preserve_frozen_pointer_scores_and_isolate_forks() {
+    use huncho_core::{
+        backend::{CacheHandle, PrefillWork},
+        calibration::argmax,
+    };
+    let root = Path::new("tests/fixtures/tiny_kev");
+    let m = manifest();
+    let golden: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(root.join("golden.json")).unwrap()).unwrap();
+    for dtype in ["gguf-f32", "gguf-f16"] {
+        let mut m = m.clone();
+        m.backbone.artifacts.get_mut(&BackendId::LlamaCpp).unwrap()[0].path = format!(
+            "../llamacpp/kev-{}.gguf",
+            if dtype == "gguf-f32" { "f32" } else { "f16" }
+        );
+        m.backbone.artifacts.get_mut(&BackendId::LlamaCpp).unwrap()[0].dtype = dtype.into();
+        let mut backend = LlamaCppBackend::load(root, &m, dtype, LlamaOptions::default()).unwrap();
+        let mut replica = backend.replica().unwrap();
+        let mut tested = 0;
+        for case in golden["cases"].as_array().unwrap() {
+            for row in case["rows"].as_array().unwrap() {
+                let tokens: Vec<u32> = serde_json::from_value(row["tokens"].clone()).unwrap();
+                let positions: Vec<usize> =
+                    serde_json::from_value(row["positions"].clone()).unwrap();
+                let independent = backend
+                    .forward(ForwardInput::new(tokens.clone(), positions.clone()))
+                    .unwrap();
+                for split in [1, 3, 7, 19] {
+                    if positions.iter().any(|&p| p < split) {
+                        continue;
+                    }
+                    let mut work = PrefillWork::default();
+                    let prefill = backend
+                        .prefill_cached_with_work(&tokens[..split], 1024 * 1024, &mut work)
+                        .unwrap();
+                    let parent = prefill.handle;
+                    assert!(!prefill.hit);
+                    assert_eq!(work.forward_calls, 1);
+                    assert_eq!(work.processed_tokens, split as u64);
+                    assert!(replica.fork(parent).is_err());
+                    let a = backend.fork(parent).unwrap();
+                    let b = backend.fork(parent).unwrap();
+                    backend.release_cache(parent).unwrap();
+                    let mut input = ForwardInput::new(
+                        tokens[split..].to_vec(),
+                        positions.iter().map(|p| p - split).collect(),
+                    );
+                    input.fork_from = Some(a);
+                    let branched = backend.forward(input.clone()).unwrap();
+                    // Independent inference between branches cannot alter saved
+                    // recurrent state, convolution history or absolute KV offsets.
+                    backend
+                        .forward(ForwardInput::new(vec![7, 3, 1], vec![0]))
+                        .unwrap();
+                    input.fork_from = Some(b);
+                    let again = backend.forward(input.clone()).unwrap();
+                    assert_eq!(branched.values().data(), again.values().data());
+                    let p = calibrate(branched.values().data(), 2.40605).unwrap();
+                    let reference = calibrate(independent.values().data(), 2.40605).unwrap();
+                    assert_eq!(argmax(&p), argmax(&reference));
+                    assert!(p.iter().zip(reference).all(|(a, b)| (a - b).abs() <= 1e-4));
+                    let frozen: Vec<f32> =
+                        serde_json::from_value(row["probabilities"].clone()).unwrap();
+                    assert!(p.iter().zip(frozen).all(|(a, b)| (a - b).abs() <= 1e-3));
+                    // Bad validation is transactional: the original branch still
+                    // resumes from the full successful prefix+suffix state.
+                    let mut bad = ForwardInput::new(vec![384], vec![0]);
+                    bad.fork_from = Some(a);
+                    assert!(backend.forward(bad).is_err());
+                    let mut continuation = ForwardInput::new(vec![1, 2], vec![1, 0, 1]);
+                    continuation.fork_from = Some(a);
+                    let next = backend.forward(continuation.clone()).unwrap();
+                    continuation.fork_from = Some(b);
+                    assert_eq!(
+                        next.values().data(),
+                        backend.forward(continuation).unwrap().values().data()
+                    );
+                    backend.release_cache(a).unwrap();
+                    backend.release_cache(b).unwrap();
+                    let mut hit_work = PrefillWork::default();
+                    let hit = backend
+                        .prefill_cached_with_work(&tokens[..split], 1024 * 1024, &mut hit_work)
+                        .unwrap();
+                    assert!(hit.hit);
+                    assert_eq!(hit_work.forward_calls, 0);
+                    assert_eq!(hit_work.processed_tokens, 0);
+                    backend.clear_prefix_cache().unwrap();
+                    // Clearing retained snapshots does not invalidate live users.
+                    let fork = backend.fork(hit.handle).unwrap();
+                    backend.release_cache(hit.handle).unwrap();
+                    backend.release_cache(fork).unwrap();
+                    assert!(backend.release_cache(fork).is_err());
+                    tested += 1;
+                }
+            }
+        }
+        assert!(tested >= 4, "nonvacuous split-prefix coverage required");
+        assert!(backend.fork(CacheHandle { id: u64::MAX }).is_err());
+        let mut other = huncho_backend::MockBackend::new();
+        let foreign = other.prefill(&[1, 2]).unwrap();
+        let own = backend.prefill(&[1, 2]).unwrap();
+        assert_ne!(foreign.id, own.id);
+        assert!(backend.fork(foreign).is_err());
+        assert!(other.fork(own).is_err());
+        backend.release_cache(own).unwrap();
+        other.release_cache(foreign).unwrap();
+        assert!(backend.prefill(&[]).is_err());
+        assert!(backend.prefill(&vec![1; 513]).is_err());
+        let parent = backend.prefill(&[1, 2, 3]).unwrap();
+        let handles: Vec<_> = (0..63).map(|_| backend.fork(parent).unwrap()).collect();
+        assert!(backend.fork(parent).is_err());
+        assert!(backend.prefill(&[1]).is_err());
+        for handle in handles {
+            backend.release_cache(handle).unwrap();
+        }
+        backend.release_cache(parent).unwrap();
+        for _ in 0..67 {
+            let handle = backend.prefill(&[1]).unwrap();
+            backend.release_cache(handle).unwrap();
+        }
+        let parent = backend.prefill(&vec![1; 512]).unwrap();
+        let mut input = ForwardInput::new(vec![1], vec![0]);
+        input.fork_from = Some(parent);
+        assert!(backend.forward(input).is_err());
+        backend.release_cache(parent).unwrap();
+    }
 }
 
 #[test]
@@ -165,9 +294,27 @@ fn pinned_cpu_quantization_preserves_fp32_readouts_and_runs_actual_packed_tensor
                 );
                 assert_eq!(
                     out.values().data(),
-                    native.forward(input).unwrap().values().data()
+                    native.forward(input.clone()).unwrap().values().data()
                 );
                 let actual = calibrate(out.values().data(), 2.40605).unwrap();
+                if input.positions.iter().all(|&p| p >= 3) {
+                    let parent = native.prefill(&input.tokens[..3]).unwrap();
+                    let branch = native.fork(parent).unwrap();
+                    native.release_cache(parent).unwrap();
+                    let mut suffix = ForwardInput::new(
+                        input.tokens[3..].to_vec(),
+                        input.positions.iter().map(|p| p - 3).collect(),
+                    );
+                    suffix.fork_from = Some(branch);
+                    let p = calibrate(native.forward(suffix).unwrap().values().data(), 2.40605)
+                        .unwrap();
+                    assert_eq!(
+                        huncho_core::calibration::argmax(&p),
+                        huncho_core::calibration::argmax(&actual)
+                    );
+                    assert!(p.iter().zip(&actual).all(|(a, b)| (a - b).abs() <= 1e-4));
+                    native.release_cache(branch).unwrap();
+                }
                 let expected: Vec<f32> =
                     serde_json::from_value(row["probabilities"].clone()).unwrap();
                 for (a, b) in actual.iter().zip(expected) {

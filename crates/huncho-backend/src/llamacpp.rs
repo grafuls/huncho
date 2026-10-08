@@ -11,6 +11,8 @@ use huncho_core::{
     Error, Result,
 };
 use llama_cpp_sys_2 as ffi;
+mod cache;
+use huncho_core::backend::{CachedPrefill, PrefillWork};
 use std::{
     collections::BTreeMap,
     ffi::{CStr, CString},
@@ -75,6 +77,8 @@ pub struct LlamaCppBackend {
     options: LlamaOptions,
     tokens: Vec<i32>,
     outputs: Vec<i8>,
+    positions: Vec<i32>,
+    prefixes: cache::Prefixes,
 }
 
 impl LlamaCppBackend {
@@ -194,6 +198,10 @@ impl LlamaCppBackend {
         ]);
         if manifest.family == Family::F2 {
             extra.insert("pointer_head_dtype".into(), "fp32".into());
+            extra.insert(
+                "llamacpp_prefix_state".into(),
+                "full-hybrid-sequence-snapshot-v1".into(),
+            );
         }
         if let Some(profile) = quantization {
             extra.insert("weight_quantization".into(), profile);
@@ -207,11 +215,14 @@ impl LlamaCppBackend {
                 dtype: dtype.into(),
                 max_context: manifest.backbone.max_context,
                 families: vec![manifest.family],
+                supports_fork: manifest.family == Family::F2,
                 extra,
                 ..Default::default()
             },
             tokens: Vec::new(),
             outputs: Vec::new(),
+            positions: Vec::new(),
+            prefixes: cache::Prefixes::default(),
         })
     }
 }
@@ -278,12 +289,39 @@ impl Backend for LlamaCppBackend {
             options: self.options,
             tokens: Vec::new(),
             outputs: Vec::new(),
+            positions: Vec::new(),
+            prefixes: cache::Prefixes::default(),
         }))
     }
-    fn fork(&mut self, _handle: CacheHandle) -> Result<CacheHandle> {
-        Err(Error::Unsupported(
-            "llama.cpp hybrid prefix forks are not exposed by this profile".into(),
-        ))
+    fn fork(&mut self, handle: CacheHandle) -> Result<CacheHandle> {
+        let snapshot = self.prefix(handle)?;
+        self.prefixes.insert(snapshot)
+    }
+    fn release_cache(&mut self, handle: CacheHandle) -> Result<()> {
+        self.prefixes
+            .handles
+            .remove(&handle.id)
+            .map(|_| ())
+            .ok_or_else(|| Error::Backend("unknown or foreign llama.cpp prefix handle".into()))
+    }
+    fn clear_prefix_cache(&mut self) -> Result<()> {
+        self.prefixes.clear_retained();
+        Ok(())
+    }
+    fn prefill(&mut self, tokens: &[u32]) -> Result<CacheHandle> {
+        self.cached_prefill(tokens, 0, &mut PrefillWork::default())
+            .map(|cached| cached.handle)
+    }
+    fn prefill_cached(&mut self, tokens: &[u32], max_bytes: usize) -> Result<CachedPrefill> {
+        self.cached_prefill(tokens, max_bytes, &mut PrefillWork::default())
+    }
+    fn prefill_cached_with_work(
+        &mut self,
+        tokens: &[u32],
+        max_bytes: usize,
+        work: &mut PrefillWork,
+    ) -> Result<CachedPrefill> {
+        self.cached_prefill(tokens, max_bytes, work)
     }
     fn forward(&mut self, input: ForwardInput) -> Result<ForwardOutput> {
         let n = input.tokens.len();
@@ -296,12 +334,10 @@ impl Backend for LlamaCppBackend {
                 .iter()
                 .any(|&token| token as usize >= self.context.model.vocab)
             || input.positions.len() >= MAX_OUTPUTS
-            || input.fork_from.is_some()
             || input.retain_cache
         {
             return Err(Error::Request(
-                "invalid llama.cpp independent tokens/readouts or unsupported cache continuation"
-                    .into(),
+                "invalid llama.cpp tokens/readouts or unsupported implicit cache retention".into(),
             ));
         }
         if input.logit_codes.as_ref().is_some_and(|codes| {
@@ -319,29 +355,75 @@ impl Backend for LlamaCppBackend {
                 "vocabulary codes do not apply to a pointer head".into(),
             ));
         }
-        self.tokens.clear();
-        self.tokens
-            .extend(input.tokens.iter().map(|&token| token as i32));
-        self.outputs.clear();
-        self.outputs.resize(n, 0);
-        for &position in &input.positions {
-            self.outputs[position] = 1;
-        }
-        if matches!(self.readout.as_ref(), Readout::Pointer(_)) {
-            self.outputs[n - 1] = 1;
-        }
-        let memory = unsafe { ffi::llama_get_memory(self.context.pointer.as_ptr()) };
-        if memory.is_null() {
-            return Err(Error::Backend(
-                "llama.cpp omitted hybrid model memory".into(),
+        let prefix = input
+            .fork_from
+            .map(|handle| self.prefix(handle))
+            .transpose()?;
+        let offset = prefix.as_ref().map_or(0, |snapshot| snapshot.tokens);
+        if n > self.capabilities.max_context.saturating_sub(offset) {
+            return Err(Error::Request(
+                "llama.cpp prefix plus suffix exceeds context".into(),
             ));
         }
-        unsafe { ffi::llama_memory_clear(memory, true) };
+        self.clear_memory()?;
+        let result = (|| {
+            if let Some(snapshot) = &prefix {
+                self.restore(snapshot)?;
+            }
+            self.decode_tokens(
+                &input.tokens,
+                &input.positions,
+                offset,
+                matches!(self.readout.as_ref(), Readout::Pointer(_)),
+            )?;
+            let output = self.read_output(&input)?;
+            if output.values().data().iter().any(|v| !v.is_finite()) {
+                return Err(Error::Backend(
+                    "llama.cpp returned non-finite raw logits".into(),
+                ));
+            }
+            if let Some(handle) = input.fork_from {
+                let snapshot = self.snapshot(offset + n)?;
+                // Commit only after native execution, owned readout and snapshot
+                // succeeded. Other immutable forks/parent retain their bytes.
+                self.prefixes.handles.insert(handle.id, snapshot);
+            }
+            Ok(output)
+        })();
+        if result.is_err() {
+            let _ = self.clear_memory();
+        }
+        result
+    }
+}
+
+impl LlamaCppBackend {
+    fn decode_tokens(
+        &mut self,
+        tokens: &[u32],
+        readouts: &[usize],
+        offset: usize,
+        pointer_readout: bool,
+    ) -> Result<()> {
+        let n = tokens.len();
+        self.tokens.clear();
+        self.tokens.extend(tokens.iter().map(|&token| token as i32));
+        self.positions.clear();
+        self.positions
+            .extend((offset..offset + n).map(|p| p as i32));
+        self.outputs.clear();
+        self.outputs.resize(n, 0);
+        for &position in readouts {
+            self.outputs[position] = 1;
+        }
+        if pointer_readout {
+            self.outputs[n - 1] = 1;
+        }
         let batch = ffi::llama_batch {
             n_tokens: n as i32,
             token: self.tokens.as_mut_ptr(),
             embd: ptr::null_mut(),
-            pos: ptr::null_mut(),
+            pos: self.positions.as_mut_ptr(),
             n_seq_id: ptr::null_mut(),
             seq_id: ptr::null_mut(),
             logits: self.outputs.as_mut_ptr(),
@@ -352,6 +434,11 @@ impl Backend for LlamaCppBackend {
                 "llama.cpp prefill failed with status {code}"
             )));
         }
+        Ok(())
+    }
+
+    fn read_output(&self, input: &ForwardInput) -> Result<ForwardOutput> {
+        let n = input.tokens.len();
         let values = match self.readout.as_ref() {
             Readout::Pointer(head) => {
                 let hidden = self.context.model.hidden;
@@ -404,11 +491,11 @@ impl Backend for LlamaCppBackend {
                 "llama.cpp returned non-finite raw logits".into(),
             ));
         }
-        if let Some(codes) = input.logit_codes {
+        if let Some(codes) = &input.logit_codes {
             let width = codes.len();
             Ok(ForwardOutput::SelectedLogits {
                 positions: input.positions.clone(),
-                codes,
+                codes: codes.clone(),
                 values: CoreTensor::new(vec![input.positions.len(), width], values)?,
             })
         } else {

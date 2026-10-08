@@ -53,8 +53,39 @@ GGML quantizers are rejected, rather than assigned an ambiguous profile.
 Each independent call clears the context's hybrid state. CPU replicas share
 immutable weights/head but own separate contexts and buffers; `--replicas`
 uses the existing pool and gates every context. Multiply native threads by
-replicas when budgeting CPU capacity. This profile exposes no prefix forks,
-persistent prefixes, native request batches or multi-adapter attachment.
+replicas when budgeting CPU capacity. Kev F2 also exposes optional prefix
+prefill/forks and exact retained prefixes through the existing engine flags.
+Each immutable snapshot uses the pinned
+[full sequence-state API](https://github.com/ggml-org/llama.cpp/blob/26394b4e6749a41c3633db040e0987500a5f7013/include/llama.h#L877):
+attention KV and recurrent/convolution state are serialized together. Forks
+share immutable bytes. Before a suffix, sequence zero is cleared and restored,
+then explicit absolute positions are submitted. Successful continuations commit
+a new snapshot only after readout/snapshot creation; failed calls retain the
+old branch. Independent calls and other forks cannot change saved bytes.
+
+`llamacpp_prefix_state=full-hybrid-sequence-snapshot-v1` binds this profile.
+There are at most 64 live handles and 512 MiB of charged snapshot/key/entry
+storage per context; native model/context allocations are additional. Optional
+retention uses a caller budget of 0–512 MiB and at most 16 exact token prefixes,
+evicts FIFO, and defaults to zero. Clearing retention keeps live handles valid.
+Oversized snapshots fail explicitly; no tokens or cache state are truncated.
+This is CPU state-copy reuse, not paging or native multi-sequence attention.
+Copying a large recurrent state can outweigh prefill savings. No native request
+batches, cooperative chunks or multi-adapter attachment are exposed yet.
+
+```bash
+HUNCHO_DEVICE=cpu HUNCHO_LLAMA_THREADS=4 huncho conform \
+  --model /path/to/gguf-package --backend llamacpp \
+  --golden /path/to/unchanged-heldout.json --prefix-cache --json
+# Optional retention also requires nonzero replay hits during conformance.
+HUNCHO_DEVICE=cpu huncho conform --model /path/to/gguf-package \
+  --golden /path/to/unchanged-heldout.json --prefix-cache \
+  --persistent-prefix-bytes 16777216 --json
+```
+
+Prefix serving remains opt-in and requires the unchanged external, paired and
+complete observed-label startup gates for every context. Numerical fixture
+checks grant no serving acceptance or released-checkpoint performance claim.
 
 ## New-package conversion
 
@@ -140,6 +171,6 @@ backbone and released tokenizer, pending entries and rejection of unrefitted
 serving. This is a packaging check with only two packed fixture projections.
 
 No full released-model fit/held-out qualification, CPU performance claim or
-GPU/Apple check is included. Larger contexts, prefix/fork ownership, graph-side
+GPU/Apple check is included. Larger contexts, native multi-sequence batching, graph-side
 candidate projection, ONNX-independent heads and additional model families
 remain separate roadmap work.

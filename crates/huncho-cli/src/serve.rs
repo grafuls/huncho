@@ -417,6 +417,7 @@ fn requires_outcome_qualification(engine: &huncho_core::engine::Engine) -> bool 
         "cpu_blas_execution",
         "laya_head_execution",
         "llamacpp_execution",
+        "llamacpp_prefix_state",
     ]
     .iter()
     .any(|key| engine.execution_metadata().contains_key(*key))
@@ -951,6 +952,7 @@ mod qualification_tests {
             ("mlp_gate_execution", "cpu-fused-silu-mul-v1"),
             ("cpu_kernel_build", "x86_64:avx,avx2,f16c,fma"),
             ("llamacpp_execution", "cpu-qwen35-masked-prefill-v1"),
+            ("llamacpp_prefix_state", "full-hybrid-sequence-snapshot-v1"),
         ] {
             let registry = registry_with_execution_metadata(
                 0.0,
