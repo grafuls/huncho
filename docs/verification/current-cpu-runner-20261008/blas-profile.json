@@ -1,0 +1,1 @@
+{"cpu_blas_config": "OpenBLAS 0.3.29 DYNAMIC_ARCH NO_AFFINITY USE_LOCKING Haswell SINGLE_THREADED", "cpu_blas_core": "Haswell", "cpu_blas_execution": "openblas-lp64-fp32-v1", "cpu_blas_library_sha256": "cdbd139a1b9779434533ecb4c0079bb2e30d724006d91bdd59b10366644ff0d2", "cpu_blas_threads": "1"}

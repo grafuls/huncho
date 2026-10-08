@@ -24,13 +24,14 @@ def options(**overrides):
     args = SimpleNamespace(device="cpu", dtype="fp16", projection_chunk_rows=64,
         fp32_attention=True, batch_tokens=4096, numerical_only=False, prepare_all=False,
         cpu_delta_rule=False, cpu_causal_conv=False, prefill_chunk_tokens=0, cpu_kernel_build=None, persistent_prefix_bytes=0, batch_max_requests=None)
+    vars(args).update(cpu_fused_gate=False, cooperative_prefill=False, cpu_blas_library=None, cpu_blas_profile=None, cpu_blas_threads=1, cpu_blas_metadata=None)
     vars(args).update(overrides)
     return args
 
 
 def report():
     return {"backend": "candle", "dtype": "fp16", "device": "CPU",
-        "execution_metadata": {"projection_chunk_rows": "64", "attention_compute_dtype": "fp32"},
+        "execution_metadata": {"native_execution": "candle-qwen35-v1", "projection_chunk_rows": "64", "attention_compute_dtype": "fp32"},
         "cases": [{"id": "observed"}], "prefix_cache": True, "max_batch_tokens": None,
         "work": {"cache_forks": 2}, "outcome_calibration": {"questions": 1},
         "max_prob_delta": .0005, "argmax_agreement": 1., "ece": .0001,
@@ -38,6 +39,52 @@ def report():
 
 
 class RuntimeQualificationTests(unittest.TestCase):
+    def test_native_execution_identity_cannot_be_missing_or_substituted(self):
+        for value in [None, "candle-modernbert-v1"]:
+            data = report()
+            if value is None:
+                data["execution_metadata"].pop("native_execution")
+            else:
+                data["execution_metadata"]["native_execution"] = value
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "kernel profile"):
+                qualifier.verify_report(data, options(), suite(), "prefix")
+
+    def test_cooperative_prefix_requires_actual_interleaving_and_exact_options(self):
+        args = options(cooperative_prefill=True, prefill_chunk_tokens=2)
+        data = report()
+        data.update(prepare_all=True, cooperative_prefill=True)
+        data["execution_metadata"]["prefill_chunk_tokens"] = "2"
+        data["work"].update(prepared_questions=2, chunked_prefills=2, prefill_yields=1)
+        with self.assertRaisesRegex(ValueError, "interleaved"):
+            qualifier.verify_report(data, args, suite(), "prefix")
+        data["work"]["prefill_interleaves"] = 1
+        self.assertTrue(qualifier.verify_report(data, args, suite(), "prefix"))
+        for change in [{"cooperative_prefill": False}, {"prepare_all": False}]:
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                qualifier.verify_report(dict(data, **change), args, suite(), "prefix")
+
+    def test_blas_and_fused_gate_metadata_must_match_the_explicit_request(self):
+        profile = {"cpu_blas_execution":"openblas-lp64-fp32-v1", "cpu_blas_library_sha256":"a"*64,
+            "cpu_blas_config":"OpenBLAS pinned", "cpu_blas_core":"Haswell", "cpu_blas_threads":"1"}
+        args = options(dtype="fp32", cpu_blas_metadata=profile, cpu_fused_gate=True)
+        data = dict(report(), dtype="fp32")
+        data["execution_metadata"].update(profile, mlp_gate_execution="cpu-fused-silu-mul-v1")
+        self.assertTrue(qualifier.verify_report(data, args, suite(), "prefix"))
+        for key in [*profile, "mlp_gate_execution"]:
+            changed = dict(data, execution_metadata=dict(data["execution_metadata"], **{key:"substituted"}))
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, "kernel profile"):
+                qualifier.verify_report(changed, args, suite(), "prefix")
+
+    def test_blas_profile_file_cannot_omit_identity_or_substitute_library_threads(self):
+        profile = {"cpu_blas_execution":"openblas-lp64-fp32-v1", "cpu_blas_library_sha256":"a"*64,
+            "cpu_blas_config":"OpenBLAS pinned", "cpu_blas_core":"Haswell", "cpu_blas_threads":"1"}
+        qualifier.validate_blas_profile(profile, "a"*64, 1)
+        for changed in [[], {}, dict(profile, unexpected="extra"), dict(profile, cpu_blas_core=""),
+            dict(profile, cpu_blas_library_sha256="b"*64), dict(profile, cpu_blas_threads="2"),
+            dict(profile, cpu_blas_execution="another kernel")]:
+            with self.subTest(changed=changed), self.assertRaises(ValueError):
+                qualifier.validate_blas_profile(changed, "a"*64, 1)
+
     def test_compiled_cpu_kernel_identity_must_match_and_cannot_be_ignored(self):
         data = report()
         profile = "x86_64:avx,avx2,f16c,fma"
@@ -123,6 +170,12 @@ class RuntimeQualificationTests(unittest.TestCase):
         for change in [
             {"device": "cuda", "cpu_delta_rule": True},
             {"device": "cuda", "cpu_causal_conv": True},
+            {"device": "cuda", "cpu_fused_gate": True},
+            {"device": "cuda", "cooperative_prefill": True},
+            {"cooperative_prefill": True, "prefill_chunk_tokens": 0},
+            {"cpu_blas_library": Path("missing")},
+            {"cpu_blas_profile": Path("missing")},
+            {"dtype": "fp16", "cpu_blas_library": Path("missing"), "cpu_blas_profile": Path("missing")},
             {"device": "cuda", "prefill_chunk_tokens": 2},
             {"prefill_chunk_tokens": 4097},
             {"prefill_chunk_tokens": 2, "modes": "independent"},

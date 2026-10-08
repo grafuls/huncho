@@ -1,0 +1,84 @@
+{
+  "qualified": false,
+  "source": "f795182",
+  "script_sha256": "aac60a00a2e631cd16b9da1b7d7fa7895e18b9f36aefd5aba46664d99024dc9b",
+  "disposition": "Numerical CLI interoperability smoke on frozen tiny Kev vectors only. No observed outcomes, released-model acceptance or speed claim.",
+  "results": [
+    {
+      "mode": "independent",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds_including_load": 1.1908470399794169,
+      "report_sha256": "63a2ace9ce309f17d7452d8e8060765b6be9c40e41dc3aa7afd3795ebbde99a2",
+      "max_prob_delta": 2.9802322e-08,
+      "argmax_agreement": 1.0,
+      "ece_drift": 0.0,
+      "optimization_parity": null,
+      "outcome_calibration": null,
+      "work": {
+        "forward_calls": 6,
+        "prefill_calls": 0,
+        "chunked_prefills": 0,
+        "processed_tokens": 329,
+        "reused_prefix_tokens": 0,
+        "cache_forks": 0,
+        "batch_calls": 0,
+        "cross_request_batches": 0,
+        "persistent_prefix_hits": 0,
+        "result_cache_hits": 0,
+        "prompt_cache_hits": 0,
+        "prepared_questions": 0,
+        "prefill_yields": 0,
+        "prefill_interleaves": 0
+      }
+    },
+    {
+      "mode": "prefix",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds_including_load": 1.2721563000231981,
+      "report_sha256": "c189e1ec4bd8524f3c8acd68c8df8c4da56c81b13f0ca7de405c309b82b9d64e",
+      "max_prob_delta": 2.9802322e-08,
+      "argmax_agreement": 1.0,
+      "ece_drift": 0.0,
+      "optimization_parity": {
+        "max_prob_delta": 2.9802322e-08,
+        "argmax_agreement": 1.0
+      },
+      "outcome_calibration": null,
+      "work": {
+        "forward_calls": 6,
+        "prefill_calls": 21,
+        "chunked_prefills": 2,
+        "processed_tokens": 203,
+        "reused_prefix_tokens": 189,
+        "cache_forks": 6,
+        "batch_calls": 0,
+        "cross_request_batches": 0,
+        "persistent_prefix_hits": 0,
+        "result_cache_hits": 0,
+        "prompt_cache_hits": 0,
+        "prepared_questions": 6,
+        "prefill_yields": 19,
+        "prefill_interleaves": 8
+      }
+    }
+  ],
+  "fixture_reference_sha256": "62102b94c43ba05d679cfd2a73f40db418639cb34f0687ee32fb8a15befaadcb",
+  "limits": [
+    "The two-layer fixture is not Kev-4B.",
+    "Expected distributions are mapped directly from the unchanged original fixture; no native predictions were copied into the golden suite.",
+    "Cooperative prefix mode actually interleaves requests and applies the fixed 1e-4 paired gate.",
+    "No temperatures, weights, thresholds or source goldens were modified. No GPU checks."
+  ],
+  "evidence_sha256": {
+    "blas-profile.json": "f43147926380a8ca33789e935f353f80872c8b8050bbdde68bc99faca73e0470",
+    "golden.json": "0193713f2c2f74c5f031b5ff5691b881ff4aa7426399c2ebc3c30cea8581600d",
+    "identity.json": "f14aa8e87bcc04248449ec6763d8bea735439ea53bc405f9a712ac0949cb6900",
+    "independent.json": "63a2ace9ce309f17d7452d8e8060765b6be9c40e41dc3aa7afd3795ebbde99a2",
+    "independent.log": "d81f34316706ba64f05f454d85fa76a74e61b36c1a53643107632586e4a6da3b",
+    "prefix.json": "c189e1ec4bd8524f3c8acd68c8df8c4da56c81b13f0ca7de405c309b82b9d64e",
+    "prefix.log": "9fe84a3adfe2976342465ea8194964c529cacb635bcf899c761aaa237dc80cb1",
+    "runner-final.log": "f6de5b67f9430fd86aefe1d63c05430e78a401a0d4313527776b8dfd9702095f"
+  }
+}

@@ -42,6 +42,25 @@ also show drift. Packed CPU fitting/held-out evaluation is still running.
 
 ## Implemented increments
 
+### Qualification runner profile coverage
+
+The CPU qualification runner now requires `native_execution=candle-qwen35-v1`
+and recognizes explicit fused-gate, cooperative scheduling and OpenBLAS
+profiles. BLAS requires a supplied library and a JSON object containing exactly
+the five expected `cpu_blas_*` identity fields; the file hash and fixed thread
+budget must match, and both files are rechecked afterward. Unrequested ambient
+BLAS, shared-base and cooperative profiles are cleared. Optimized scheduling
+requires nonzero split-prefix yields and actual switches between distinct
+requests. Existing numerical, argmax, ECE, paired and complete-label thresholds
+remain unchanged; numerical-only runs never become outcome acceptance.
+
+The real CPU CLI smoke combines BLAS and 3-token resumable chunks on the
+unchanged two-layer Kev fixture. Independent and prefix modes both pass with
+external delta 2.9802322e-8; prefix paired delta is also 2.9802322e-8, with
+21 native prefix calls, 19 yields and 8 request switches. It is unlabeled and
+retained as unqualified. [Full reports and identities](verification/current-cpu-runner-20261008/summary.json)
+record the source, executable, model files, script and expected BLAS profile.
+
 ### Optional OpenBLAS projections
 
 O03 now includes `cpu-blas`, an optional dynamic LP64 OpenBLAS path for dense

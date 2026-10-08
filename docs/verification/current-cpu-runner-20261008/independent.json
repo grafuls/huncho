@@ -1,0 +1,55 @@
+{
+  "model": "tiny-kev",
+  "backend": "candle",
+  "dtype": "fp32",
+  "device": "CPU",
+  "execution_metadata": {
+    "cpu_blas_config": "OpenBLAS 0.3.29 DYNAMIC_ARCH NO_AFFINITY USE_LOCKING Haswell SINGLE_THREADED",
+    "cpu_blas_core": "Haswell",
+    "cpu_blas_execution": "openblas-lp64-fp32-v1",
+    "cpu_blas_library_sha256": "cdbd139a1b9779434533ecb4c0079bb2e30d724006d91bdd59b10366644ff0d2",
+    "cpu_blas_threads": "1",
+    "native_execution": "candle-qwen35-v1",
+    "prefill_chunk_tokens": "3"
+  },
+  "reference_readout": false,
+  "prefix_cache": false,
+  "persistent_prefix_bytes": 0,
+  "max_batch_tokens": null,
+  "prepare_all": false,
+  "cooperative_prefill": false,
+  "work": {
+    "forward_calls": 6,
+    "prefill_calls": 0,
+    "chunked_prefills": 0,
+    "processed_tokens": 329,
+    "reused_prefix_tokens": 0,
+    "cache_forks": 0,
+    "batch_calls": 0,
+    "cross_request_batches": 0,
+    "persistent_prefix_hits": 0,
+    "result_cache_hits": 0,
+    "prompt_cache_hits": 0,
+    "prepared_questions": 0,
+    "prefill_yields": 0,
+    "prefill_interleaves": 0
+  },
+  "cases": [
+    {
+      "id": "0",
+      "max_prob_delta": 2.9802322e-8,
+      "argmax_match": true,
+      "ece": 0.60699785
+    },
+    {
+      "id": "1",
+      "max_prob_delta": 2.9802322e-8,
+      "argmax_match": true,
+      "ece": 0.5537974
+    }
+  ],
+  "max_prob_delta": 2.9802322e-8,
+  "argmax_agreement": 1.0,
+  "ece": 0.0,
+  "passed": true
+}

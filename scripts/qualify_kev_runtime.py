@@ -56,9 +56,17 @@ def validate_suite(suite, numerical_only):
                 raise ValueError("observed targets must identify actual candidates")
 
 
+def validate_blas_profile(profile, library_hash, threads):
+    fields = {"cpu_blas_execution", "cpu_blas_library_sha256", "cpu_blas_config", "cpu_blas_core", "cpu_blas_threads"}
+    if not isinstance(profile, dict) or set(profile) != fields or any(not isinstance(value, str) or not value for value in profile.values()):
+        raise ValueError("BLAS metadata must contain exactly the five nonempty execution identity fields")
+    if profile["cpu_blas_execution"] != "openblas-lp64-fp32-v1" or profile["cpu_blas_library_sha256"] != library_hash or profile["cpu_blas_threads"] != str(threads):
+        raise ValueError("BLAS metadata does not match the explicit library/profile/thread budget")
+
+
 def verify_report(report, args, suite, mode):
     metadata = report.get("execution_metadata", {})
-    expected_metadata = {}
+    expected_metadata = {"native_execution": "candle-qwen35-v1"}
     if args.projection_chunk_rows:
         expected_metadata["projection_chunk_rows"] = str(args.projection_chunk_rows)
     if args.fp32_attention:
@@ -67,6 +75,10 @@ def verify_report(report, args, suite, mode):
         expected_metadata["delta_rule_execution"] = "cpu-buffered-v1"
     if args.cpu_causal_conv:
         expected_metadata["causal_conv_execution"] = "cpu-buffered-v1"
+    if args.cpu_fused_gate:
+        expected_metadata["mlp_gate_execution"] = "cpu-fused-silu-mul-v1"
+    if args.cpu_blas_metadata:
+        expected_metadata.update(args.cpu_blas_metadata)
     if args.prefill_chunk_tokens:
         expected_metadata["prefill_chunk_tokens"] = str(args.prefill_chunk_tokens)
     if args.cpu_kernel_build:
@@ -87,7 +99,10 @@ def verify_report(report, args, suite, mode):
     if report.get("prefix_cache") != (mode == "prefix") or report.get("max_batch_tokens") != (
             args.batch_tokens if mode == "batch" else None):
         raise ValueError("report did not evaluate the requested optimization")
-    if report.get("prepare_all", False) != (args.prepare_all or (mode == "batch" and args.batch_max_requests is not None)):
+    cooperative = args.cooperative_prefill and mode == "prefix"
+    if report.get("cooperative_prefill", False) != cooperative:
+        raise ValueError("report did not evaluate the requested cooperative scheduling path")
+    if report.get("prepare_all", False) != (args.prepare_all or cooperative or (mode == "batch" and args.batch_max_requests is not None)):
         raise ValueError("report did not evaluate the requested preparation path")
     if report.get("persistent_prefix_bytes", 0) != (args.persistent_prefix_bytes if mode == "prefix" else 0):
         raise ValueError("report did not evaluate the requested persistent prefix budget")
@@ -105,6 +120,8 @@ def verify_report(report, args, suite, mode):
         raise ValueError("suite did not exercise persistent prefix reuse")
     if mode == "prefix" and args.prefill_chunk_tokens and report.get("work", {}).get("chunked_prefills", 0) <= 0:
         raise ValueError("suite did not exercise an actual split prefix")
+    if cooperative and (report.get("work", {}).get("prefill_yields", 0) <= 0 or report.get("work", {}).get("prefill_interleaves", 0) <= 0):
+        raise ValueError("suite did not exercise actual interleaved resumable prefixes")
     if mode == "batch" and args.batch_max_requests is not None and report.get("work", {}).get("cross_request_batches", 0) <= 0:
         raise ValueError("suite did not exercise cross-request collation")
     if mode != "independent":
@@ -127,8 +144,14 @@ def verify_report(report, args, suite, mode):
 
 
 def run(args):
-    if (args.cpu_delta_rule or args.cpu_causal_conv) and args.device != "cpu":
+    if (args.cpu_delta_rule or args.cpu_causal_conv or args.cpu_fused_gate or args.cooperative_prefill or args.cpu_blas_library) and args.device != "cpu":
         raise ValueError("buffered recurrence and convolution are CPU-only")
+    if args.cooperative_prefill and not args.prefill_chunk_tokens:
+        raise ValueError("cooperative scheduling requires configured prefill chunks")
+    if bool(args.cpu_blas_library) != bool(args.cpu_blas_profile):
+        raise ValueError("BLAS requires an explicit library and matching expected metadata JSON")
+    if args.cpu_blas_library and (args.dtype != "fp32" or not 1 <= args.cpu_blas_threads <= 256):
+        raise ValueError("BLAS requires dense FP32 and a 1..256 thread budget")
     if args.dtype in PACKED_PROFILES and args.device != "cpu":
         raise ValueError("packed Kev artifacts are CPU-only")
     if not 0 <= args.prefill_chunk_tokens <= 4096 or (args.prefill_chunk_tokens and args.device != "cpu"):
@@ -144,6 +167,8 @@ def run(args):
         raise ValueError("persistent prefix budget requires the prefix mode")
     if args.prefill_chunk_tokens and "prefix" not in modes:
         raise ValueError("prefix chunk size requires the prefix mode")
+    if args.cooperative_prefill and "prefix" not in modes:
+        raise ValueError("cooperative scheduling requires the prefix mode")
     if args.batch_max_requests is not None and "batch" not in modes:
         raise ValueError("cross-request batch size requires the batch mode")
     suite = json.loads(args.golden.read_text())
@@ -162,6 +187,15 @@ def run(args):
         raise ValueError("projection rows must be 0..4096 and the batch token budget must be positive")
     if args.output.exists() and any(args.output.iterdir()):
         raise ValueError("output directory must be new or empty; previous evidence is never overwritten")
+    profile_hash = None
+    library_hash = None
+    args.cpu_blas_metadata = None
+    if args.cpu_blas_library:
+        library_hash = sha256(args.cpu_blas_library)
+        profile_hash = sha256(args.cpu_blas_profile)
+        profile = json.loads(args.cpu_blas_profile.read_text())
+        validate_blas_profile(profile, library_hash, args.cpu_blas_threads)
+        args.cpu_blas_metadata = profile
     args.output.mkdir(parents=True, exist_ok=True)
     binary = args.binary.resolve()
     golden_hash, manifest_hash = sha256(args.golden), sha256(manifest_path)
@@ -186,6 +220,10 @@ def run(args):
         "fp32_attention": args.fp32_attention, "kernel": platform.release(),
         "cpu_delta_rule": args.cpu_delta_rule,
         "cpu_causal_conv": args.cpu_causal_conv,
+        "cpu_fused_gate": args.cpu_fused_gate,
+        "cooperative_prefill": args.cooperative_prefill,
+        "cpu_blas_metadata": args.cpu_blas_metadata,
+        "cpu_blas_profile_sha256": profile_hash,
         "prefill_chunk_tokens": args.prefill_chunk_tokens,
         "cpu_kernel_build": args.cpu_kernel_build,
         "persistent_prefix_bytes": args.persistent_prefix_bytes,
@@ -210,6 +248,13 @@ def run(args):
         HUNCHO_ATTENTION_FP32=str(args.fp32_attention).lower(),
         HUNCHO_CPU_DELTA_RULE=str(args.cpu_delta_rule).lower())
     env["HUNCHO_CPU_CAUSAL_CONV"] = str(args.cpu_causal_conv).lower()
+    env["HUNCHO_CPU_FUSED_GATE"] = str(args.cpu_fused_gate).lower()
+    # Clear unrelated ambient profiles; this runner admits only explicit flags.
+    for key in ["HUNCHO_CPU_BLAS_LIBRARY", "HUNCHO_CPU_BLAS_THREADS", "HUNCHO_COOPERATIVE_PREFILL", "HUNCHO_BASE_CACHE_BYTES"]:
+        env.pop(key, None)
+    if args.cpu_blas_library:
+        env["HUNCHO_CPU_BLAS_LIBRARY"] = str(args.cpu_blas_library.resolve())
+        env["HUNCHO_CPU_BLAS_THREADS"] = str(args.cpu_blas_threads)
     env["HUNCHO_PREFILL_CHUNK_TOKENS"] = str(args.prefill_chunk_tokens)
     identity["rayon_num_threads"] = env.get("RAYON_NUM_THREADS")
     identity["thread_environment"] = {key: env[key] for key in
@@ -222,6 +267,8 @@ def run(args):
                 command.append("--prepare-all")
             if mode == "prefix":
                 command.append("--prefix-cache")
+                if args.cooperative_prefill:
+                    command.append("--cooperative-prefill")
                 if args.persistent_prefix_bytes:
                     command.extend(["--persistent-prefix-bytes", str(args.persistent_prefix_bytes)])
             if mode == "batch":
@@ -247,6 +294,8 @@ def run(args):
             raise ValueError("golden, manifest or binary changed during qualification")
         if any(sha256(path) != identity["package_files"][str(path.relative_to(args.package))] for path in tracked):
             raise ValueError("model package changed during qualification")
+        if args.cpu_blas_library and (sha256(args.cpu_blas_library) != library_hash or sha256(args.cpu_blas_profile) != profile_hash):
+            raise ValueError("BLAS library or expected profile changed during qualification")
         identity["qualified"] = not args.numerical_only and all(record["passed"] for record in identity["results"])
     except BaseException as error:
         identity["error"] = f"{type(error).__name__}: {error}"
@@ -268,6 +317,11 @@ def main():
     parser.add_argument("--fp32-attention", action="store_true")
     parser.add_argument("--cpu-delta-rule", action="store_true")
     parser.add_argument("--cpu-causal-conv", action="store_true")
+    parser.add_argument("--cpu-fused-gate", action="store_true")
+    parser.add_argument("--cooperative-prefill", action="store_true")
+    parser.add_argument("--cpu-blas-library", type=Path)
+    parser.add_argument("--cpu-blas-profile", type=Path, help="JSON containing exactly the five expected cpu_blas_* metadata fields")
+    parser.add_argument("--cpu-blas-threads", type=int, default=1)
     parser.add_argument("--prefill-chunk-tokens", type=int, default=0)
     parser.add_argument("--cpu-kernel-build", help="Exact compiled CPU kernel identity reported by this binary; does not enable kernels")
     parser.add_argument("--persistent-prefix-bytes", type=int, default=0)

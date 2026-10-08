@@ -1,0 +1,156 @@
+{
+  "schema_version": "1.0",
+  "started_utc": "2026-10-08T14:32:03.307009+00:00",
+  "binary": "/home/grafuls/Sources/huncho/target/debug/huncho",
+  "binary_sha256": "3c38665d87ed69fea041f7ae7d2fb794028b8bbb3fe8a14b234f08570a044c23",
+  "script_sha256": "aac60a00a2e631cd16b9da1b7d7fa7895e18b9f36aefd5aba46664d99024dc9b",
+  "golden_sha256": "0193713f2c2f74c5f031b5ff5691b881ff4aa7426399c2ebc3c30cea8581600d",
+  "package": "/tmp/huncho-current-runner-20261008/package",
+  "package_files": {
+    "huncho-model.json": "81def8278e60f619e5479d3e076cb70988e761444c1609801ec416aaf778615d",
+    "head.pt": "c747fb06b6fd6e7eb71a58dce0b4d44c52d65740f6a81dc8af122c105fa76a3f",
+    "tokenizer.json": "88cc477c95359c575b2088a2938deaf2e48b31d34032a71c68a1d8b9fc57e7da",
+    "adapter_config.json": "8a792e494876120a836c97c9a5b167d2bd7cb693e802dd923555b61fa708e456",
+    "adapter_model.safetensors": "c43e58fa5c6fbd7b336e49e1148a8f3bc547e838cd60aabe55e8a435c04f5cc9"
+  },
+  "adapter": null,
+  "backbone_source": {
+    "kind": "local",
+    "path": "."
+  },
+  "calibration": {
+    "default": {
+      "temperature": 2.40605,
+      "confidence": "peak",
+      "status": "fit"
+    },
+    "entries": {}
+  },
+  "resolved_calibration": {
+    "temperature": 2.40605,
+    "confidence": "peak",
+    "status": "fit"
+  },
+  "device_selection": "cpu",
+  "dtype": "fp32",
+  "projection_chunk_rows": 0,
+  "fp32_attention": false,
+  "kernel": "6.19.10-300.fc44.x86_64",
+  "cpu_delta_rule": false,
+  "cpu_causal_conv": false,
+  "cpu_fused_gate": false,
+  "cooperative_prefill": true,
+  "cpu_blas_metadata": {
+    "cpu_blas_config": "OpenBLAS 0.3.29 DYNAMIC_ARCH NO_AFFINITY USE_LOCKING Haswell SINGLE_THREADED",
+    "cpu_blas_core": "Haswell",
+    "cpu_blas_execution": "openblas-lp64-fp32-v1",
+    "cpu_blas_library_sha256": "cdbd139a1b9779434533ecb4c0079bb2e30d724006d91bdd59b10366644ff0d2",
+    "cpu_blas_threads": "1"
+  },
+  "cpu_blas_profile_sha256": "f43147926380a8ca33789e935f353f80872c8b8050bbdde68bc99faca73e0470",
+  "prefill_chunk_tokens": 3,
+  "cpu_kernel_build": null,
+  "persistent_prefix_bytes": 0,
+  "batch_max_requests": null,
+  "cpu_affinity": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21
+  ],
+  "prepare_all": false,
+  "numerical_only": true,
+  "results": [
+    {
+      "mode": "independent",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds_including_load": 1.1908470399794169,
+      "report_sha256": "63a2ace9ce309f17d7452d8e8060765b6be9c40e41dc3aa7afd3795ebbde99a2",
+      "max_prob_delta": 2.9802322e-08,
+      "argmax_agreement": 1.0,
+      "ece_drift": 0.0,
+      "optimization_parity": null,
+      "outcome_calibration": null,
+      "work": {
+        "forward_calls": 6,
+        "prefill_calls": 0,
+        "chunked_prefills": 0,
+        "processed_tokens": 329,
+        "reused_prefix_tokens": 0,
+        "cache_forks": 0,
+        "batch_calls": 0,
+        "cross_request_batches": 0,
+        "persistent_prefix_hits": 0,
+        "result_cache_hits": 0,
+        "prompt_cache_hits": 0,
+        "prepared_questions": 0,
+        "prefill_yields": 0,
+        "prefill_interleaves": 0
+      }
+    },
+    {
+      "mode": "prefix",
+      "passed": true,
+      "exit_code": 0,
+      "elapsed_seconds_including_load": 1.2721563000231981,
+      "report_sha256": "c189e1ec4bd8524f3c8acd68c8df8c4da56c81b13f0ca7de405c309b82b9d64e",
+      "max_prob_delta": 2.9802322e-08,
+      "argmax_agreement": 1.0,
+      "ece_drift": 0.0,
+      "optimization_parity": {
+        "max_prob_delta": 2.9802322e-08,
+        "argmax_agreement": 1.0
+      },
+      "outcome_calibration": null,
+      "work": {
+        "forward_calls": 6,
+        "prefill_calls": 21,
+        "chunked_prefills": 2,
+        "processed_tokens": 203,
+        "reused_prefix_tokens": 189,
+        "cache_forks": 6,
+        "batch_calls": 0,
+        "cross_request_batches": 0,
+        "persistent_prefix_hits": 0,
+        "result_cache_hits": 0,
+        "prompt_cache_hits": 0,
+        "prepared_questions": 6,
+        "prefill_yields": 19,
+        "prefill_interleaves": 8
+      }
+    }
+  ],
+  "qualified": false,
+  "limits": [
+    "Acceptance applies to the supplied independent vectors and observed outcomes only.",
+    "The runner records pins/hashes but cannot prove training overlap or fit/evaluation separation.",
+    "No speed or universal calibration claim; base revisions are recorded, base shards are not rehashed.",
+    "Single-question suites cannot qualify prefix or batch paths; use separate representative fan-out cases."
+  ],
+  "boot_id": "286c1829-45d4-4530-8032-0ce6d64316cc",
+  "rayon_num_threads": "1",
+  "thread_environment": {
+    "RAYON_NUM_THREADS": "1",
+    "CANDLE_NUM_THREADS": "1"
+  },
+  "finished_utc": "2026-10-08T14:32:06.317244+00:00"
+}
