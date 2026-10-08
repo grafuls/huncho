@@ -24,7 +24,7 @@ def options(**overrides):
     args = SimpleNamespace(device="cpu", dtype="fp16", projection_chunk_rows=64,
         fp32_attention=True, batch_tokens=4096, numerical_only=False, prepare_all=False,
         cpu_delta_rule=False, cpu_causal_conv=False, prefill_chunk_tokens=0, cpu_kernel_build=None, persistent_prefix_bytes=0, batch_max_requests=None, max_batch_padding_percent=0)
-    vars(args).update(cpu_fused_gate=False, cooperative_prefill=False, cpu_blas_library=None, cpu_blas_profile=None, cpu_blas_threads=1, cpu_blas_metadata=None)
+    vars(args).update(cpu_fused_gate=False, cooperative_prefill=False, cpu_blas_library=None, cpu_blas_profile=None, cpu_blas_threads=1, cpu_blas_metadata=None, attention_query_rows=0)
     vars(args).update(overrides)
     return args
 
@@ -39,6 +39,16 @@ def report():
 
 
 class RuntimeQualificationTests(unittest.TestCase):
+    def test_query_blocks_bind_exact_size_and_native_arithmetic_identity(self):
+        data = report()
+        args = options(attention_query_rows=64)
+        with self.assertRaisesRegex(ValueError, "kernel profile"):
+            qualifier.verify_report(data, args, suite(), "prefix")
+        data["execution_metadata"].update(attention_query_rows="64", attention_execution="cpu-query-blocks-v1")
+        self.assertTrue(qualifier.verify_report(data, args, suite(), "prefix"))
+        for requested in [0, 32]:
+            with self.subTest(requested=requested), self.assertRaisesRegex(ValueError, "kernel profile"):
+                qualifier.verify_report(data, options(attention_query_rows=requested), suite(), "prefix")
     def test_native_execution_identity_cannot_be_missing_or_substituted(self):
         for value in [None, "candle-modernbert-v1"]:
             data = report()
@@ -187,6 +197,8 @@ class RuntimeQualificationTests(unittest.TestCase):
 
     def test_invalid_cpu_profile_and_cache_modes_fail_before_any_file_or_device_access(self):
         for change in [
+            {"attention_query_rows": -1}, {"attention_query_rows": 4097},
+            {"attention_query_rows": 64, "device": "cuda"},
             {"device": "cuda", "cpu_delta_rule": True},
             {"device": "cuda", "cpu_causal_conv": True},
             {"device": "cuda", "cpu_fused_gate": True},

@@ -36,6 +36,7 @@ use huncho_core::tensor::Tensor as CoreTensor;
 #[cfg(feature = "quantization")]
 #[path = "qwen_quantized.rs"]
 pub mod quantized;
+mod attention;
 
 /// The block type of a decoder layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -490,6 +491,7 @@ struct Attention {
     rotary_dim: usize,
     eps: f32,
     fp32_compute: bool,
+    query_rows: usize,
 }
 
 impl Attention {
@@ -537,6 +539,7 @@ impl Attention {
             rotary_dim: cfg.rotary_dim(),
             eps: cfg.rms_norm_eps,
             fp32_compute: false,
+            query_rows: 0,
         })
     }
 
@@ -545,7 +548,7 @@ impl Attention {
         x: &Tensor,
         cos: &Tensor,
         sin: &Tensor,
-        mask: &Tensor,
+        mask: Option<&Tensor>,
         cache: Option<&mut LayerCache>,
     ) -> Result<Tensor> {
         let b = x.dims()[0];
@@ -606,11 +609,17 @@ impl Attention {
         } else {
             (q, k, v)
         };
-        let scale = 1.0 / (self.head_dim as f64).sqrt();
-        let scores = q.matmul(&k.transpose(2, 3)?)?.affine(scale, 0.0)?; // [B, num_heads, seq, seq]
-        let scores = scores.broadcast_add(&mask.to_dtype(scores.dtype())?)?;
-        let probs = candle_nn::ops::softmax(&scores, 3)?;
-        let attn = probs.matmul(&v)?.to_dtype(activation_dtype)?; // [B, num_heads, seq, head_dim]
+        let attn = if self.query_rows > 0 {
+            attention::query_blocks(&q, &k, &v, self.query_rows)?
+        } else {
+            let mask = mask.ok_or_else(|| candle::Error::Msg("missing full causal mask".into()))?;
+            let scale = 1.0 / (self.head_dim as f64).sqrt();
+            let scores = q.matmul(&k.transpose(2, 3)?)?.affine(scale, 0.0)?;
+            let scores = scores.broadcast_add(&mask.to_dtype(scores.dtype())?)?;
+            let probs = candle_nn::ops::softmax(&scores, 3)?;
+            probs.matmul(&v)?
+        }
+        .to_dtype(activation_dtype)?;
         let attn = attn.transpose(1, 2)?; // [B, seq, num_heads, head_dim]
                                           // `attn_output_gate`: the gate is the same shape as each head (the
                                           // q_proj output is split in two: query + gate), so multiply elementwise.
@@ -987,7 +996,7 @@ impl DecoderLayer {
         x: &Tensor,
         cos: &Tensor,
         sin: &Tensor,
-        mask: &Tensor,
+        mask: Option<&Tensor>,
         cache: Option<&mut LayerCache>,
     ) -> Result<Tensor> {
         let residual = x.clone();
@@ -1100,7 +1109,7 @@ impl PrefixSnapshots {
 struct AttentionInputs {
     cos: Tensor,
     sin: Tensor,
-    mask: Tensor,
+    mask: Option<Tensor>,
 }
 
 #[derive(Default)]
@@ -1135,8 +1144,9 @@ impl AttentionInputCache {
 
 impl AttentionInputs {
     fn bytes(&self) -> usize {
-        [&self.cos, &self.sin, &self.mask]
-            .iter()
+        [&self.cos, &self.sin]
+            .into_iter()
+            .chain(self.mask.iter())
             .map(|tensor| tensor.elem_count() * tensor.dtype().size_in_bytes())
             .sum()
     }
@@ -1152,6 +1162,7 @@ pub struct Model {
     attention_inputs: Mutex<AttentionInputCache>,
     projection_chunk_rows: usize,
     fp32_attention: bool,
+    attention_query_rows: usize,
     cpu_delta_rule: bool,
     cpu_causal_conv: bool,
     cpu_fused_gate: bool,
@@ -1204,6 +1215,7 @@ impl Model {
             attention_inputs: Mutex::new(AttentionInputCache::default()),
             projection_chunk_rows: 0,
             fp32_attention: false,
+            attention_query_rows: 0,
             cpu_delta_rule: false,
             cpu_causal_conv: false,
             cpu_fused_gate: false,
@@ -1290,6 +1302,27 @@ impl Model {
         }
     }
 
+    pub(crate) fn set_attention_query_rows(&mut self, rows: usize) -> CoreResult<()> {
+        if rows > 4096 || (rows > 0 && !self.device.is_cpu()) {
+            return Err(Error::Unsupported(
+                "attention query rows require CPU and 0..4096 rows".into(),
+            ));
+        }
+        if rows > 0 && self.layers.iter().all(|layer| layer.self_attn.is_none()) {
+            return Err(Error::Unsupported(
+                "query blocking requires a full attention layer".into(),
+            ));
+        }
+        self.attention_query_rows = rows;
+        for layer in &mut self.layers {
+            if let Some(attention) = &mut layer.self_attn {
+                attention.query_rows = rows;
+            }
+        }
+        self.attention_inputs = Mutex::new(AttentionInputCache::default());
+        Ok(())
+    }
+
     pub(crate) fn set_cpu_delta_rule(&mut self, enabled: bool) {
         self.cpu_delta_rule = enabled;
         for layer in &mut self.layers {
@@ -1337,7 +1370,13 @@ impl Model {
         let mut hidden = self.embed_tokens.forward(ids)?; // [B, seq, hidden]
         for (index, layer) in self.layers.iter().enumerate() {
             let layer_cache = cache.as_deref_mut().map(|cache| &mut cache.layers[index]);
-            hidden = layer.forward(&hidden, &inputs.cos, &inputs.sin, &inputs.mask, layer_cache)?;
+            hidden = layer.forward(
+                &hidden,
+                &inputs.cos,
+                &inputs.sin,
+                inputs.mask.as_ref(),
+                layer_cache,
+            )?;
         }
         let hidden = rms_norm_effective(&hidden, &self.norm, self.eps)?;
         if let Some(cache) = cache {
@@ -1357,7 +1396,11 @@ impl Model {
         // immutable model/device/dtype. No prompt, hidden or branch state is
         // retained. Build outside the lock; duplicate misses are harmless.
         let (cos, sin) = self.rotary.cos_sin(seq, offset, &self.device)?;
-        let mask = causal_mask_at(seq, offset)?.to_device(&self.device)?;
+        let mask = if self.attention_query_rows == 0 {
+            Some(causal_mask_at(seq, offset)?.to_device(&self.device)?)
+        } else {
+            None
+        };
         let inputs = AttentionInputs { cos, sin, mask };
         if let Ok(mut cache) = self.attention_inputs.lock() {
             cache.insert(key, inputs.clone());
@@ -1558,6 +1601,19 @@ enum Readout {
 }
 
 impl Qwen3_5Backend {
+    /// Bound CPU attention score/mask rows; every causal key remains present.
+    /// Reduction shapes change, so fresh conformance is required before serving.
+    pub fn with_attention_query_rows(mut self, rows: usize) -> CoreResult<Self> {
+        if rows != self.model.attention_query_rows {
+            if !self.caches.is_empty() || !self.prefixes.values.is_empty() {
+                return Err(Error::Unsupported(
+                    "release retained Qwen caches before changing attention query rows".into(),
+                ));
+            }
+            self.model_mut()?.set_attention_query_rows(rows)?;
+        }
+        Ok(self)
+    }
     /// Explicit immutable LP64 OpenBLAS profile, configured before any replica
     /// or retained/partial prefix. Default/uncompiled builds load no library.
     pub fn with_cpu_blas_from_env(self) -> CoreResult<Self> {
@@ -2173,6 +2229,13 @@ impl Backend for Qwen3_5Backend {
         }
         if self.model.fp32_attention {
             extra.insert("attention_compute_dtype".into(), "fp32".into());
+        }
+        if self.model.attention_query_rows > 0 {
+            extra.insert(
+                "attention_query_rows".into(),
+                self.model.attention_query_rows.to_string(),
+            );
+            extra.insert("attention_execution".into(), "cpu-query-blocks-v1".into());
         }
         if self.model.cpu_delta_rule {
             extra.insert("delta_rule_execution".into(), "cpu-buffered-v1".into());
@@ -2978,15 +3041,18 @@ mod tests {
         let model = build_model(&cfg, &Device::Cpu);
         let initial = model.attention_inputs(3, 0).unwrap();
         let repeated = model.attention_inputs(3, 0).unwrap();
-        assert_eq!(initial.mask.id(), repeated.mask.id());
+        assert_eq!(
+            initial.mask.as_ref().unwrap().id(),
+            repeated.mask.as_ref().unwrap().id()
+        );
         assert_eq!(initial.cos.id(), repeated.cos.id());
         let offset = model.attention_inputs(3, 2).unwrap();
-        assert_eq!(offset.mask.dims(), &[3, 5]);
+        assert_eq!(offset.mask.as_ref().unwrap().dims(), &[3, 5]);
         assert_ne!(
             initial.cos.to_vec2::<f32>().unwrap()[0],
             offset.cos.to_vec2::<f32>().unwrap()[0]
         );
-        let mask = offset.mask.to_vec2::<f32>().unwrap();
+        let mask = offset.mask.as_ref().unwrap().to_vec2::<f32>().unwrap();
         assert_eq!(mask[0][2], 0.);
         assert_eq!(mask[0][3], f32::NEG_INFINITY);
         for seq in 1..=40 {
@@ -3006,6 +3072,28 @@ mod tests {
             .unwrap()
             .values
             .contains_key(&(1100, 0)));
+    }
+
+    #[test]
+    fn query_profile_removes_quadratic_setup_and_invalidates_old_masks() {
+        let mut model = build_model(&tiny_cfg(), &Device::Cpu);
+        assert!(model.attention_inputs(3, 0).unwrap().mask.is_some());
+        model.set_attention_query_rows(7).unwrap();
+        assert!(model.attention_inputs.lock().unwrap().values.is_empty());
+        for (seq, offset) in [(3, 0), (1100, 0), (1100, 37)] {
+            let inputs = model.attention_inputs(seq, offset).unwrap();
+            assert!(inputs.mask.is_none());
+            assert_eq!(
+                inputs.bytes(),
+                (inputs.cos.elem_count() + inputs.sin.elem_count()) * 4
+            );
+        }
+        model.set_attention_query_rows(0).unwrap();
+        assert!(model.attention_inputs.lock().unwrap().values.is_empty());
+        assert_eq!(
+            model.attention_inputs(3, 2).unwrap().mask.unwrap().dims(),
+            [3, 5]
+        );
     }
 
     #[test]
@@ -3353,7 +3441,7 @@ mod tests {
                         &full,
                         &full_inputs.cos,
                         &full_inputs.sin,
-                        &full_inputs.mask,
+                        full_inputs.mask.as_ref(),
                         None,
                     )
                     .unwrap();
@@ -3362,7 +3450,7 @@ mod tests {
                         &prefix,
                         &prefix_inputs.cos,
                         &prefix_inputs.sin,
-                        &prefix_inputs.mask,
+                        prefix_inputs.mask.as_ref(),
                         Some(&mut cache),
                     )
                     .unwrap();
@@ -3371,7 +3459,7 @@ mod tests {
                         &suffix,
                         &suffix_inputs.cos,
                         &suffix_inputs.sin,
-                        &suffix_inputs.mask,
+                        suffix_inputs.mask.as_ref(),
                         Some(&mut cache),
                     )
                     .unwrap();

@@ -273,6 +273,16 @@ fn load_backend(
     dtype: &str,
     dir: &Path,
 ) -> Result<Box<dyn Backend>> {
+    let query_rows = attention_query_rows_from_env()?;
+    if query_rows > 0
+        && (!cfg!(feature = "candle")
+            || !((backend_id == BackendId::Candle
+                && matches!(manifest.family, Family::F2 | Family::F3))
+                || (backend_id == BackendId::Clef && manifest.family == Family::F5))
+            || std::env::var("HUNCHO_DEVICE").as_deref() != Ok("cpu"))
+    {
+        return Err(Error::Unsupported("attention query blocks require native Qwen F2/F3 or Clef and explicit HUNCHO_DEVICE=cpu".into()));
+    }
     if bool_env("HUNCHO_LAYA_SELECTED_HEAD")?
         && (!cfg!(feature = "candle")
             || backend_id != BackendId::Candle
@@ -356,13 +366,19 @@ fn load_llamacpp(_manifest: &ModelManifest, _dtype: &str, _dir: &Path) -> Result
 
 #[cfg(feature = "clef")]
 fn load_clef(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<dyn Backend>> {
-    Ok(Box::new(huncho_backend::ClefBackend::load(
-        dir, manifest, dtype, huncho_backend::clef::device_from_env()?,
-    )?.with_vectorized_head(bool_env("HUNCHO_CLEF_VECTOR_HEAD")?)
+    Ok(Box::new(
+        huncho_backend::ClefBackend::load(
+            dir,
+            manifest,
+            dtype,
+            huncho_backend::clef::device_from_env()?,
+        )?
+        .with_vectorized_head(bool_env("HUNCHO_CLEF_VECTOR_HEAD")?)
         .with_grouped_pooling(bool_env("HUNCHO_CLEF_GROUPED_POOL")?)?
         .with_cpu_delta_rule(bool_env("HUNCHO_CPU_DELTA_RULE")?)?
         .with_cpu_causal_conv(bool_env("HUNCHO_CPU_CAUSAL_CONV")?)?
         .with_cpu_fused_gate(bool_env("HUNCHO_CPU_FUSED_GATE")?)?
+        .with_attention_query_rows(attention_query_rows_from_env()?)?
         .with_cpu_blas_from_env()?,
     ))
 }
@@ -413,6 +429,7 @@ fn load_candle(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<
             .with_cpu_delta_rule(bool_env("HUNCHO_CPU_DELTA_RULE")?)?
             .with_cpu_causal_conv(bool_env("HUNCHO_CPU_CAUSAL_CONV")?)?
             .with_cpu_fused_gate(bool_env("HUNCHO_CPU_FUSED_GATE")?)?
+            .with_attention_query_rows(attention_query_rows_from_env()?)?
             .with_cpu_blas_from_env()?
             .with_prefill_chunk_tokens(prefill_chunk_tokens_from_env()?)?;
             return Ok(Box::new(backend));
@@ -432,6 +449,7 @@ fn load_candle(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<
         .with_cpu_delta_rule(bool_env("HUNCHO_CPU_DELTA_RULE")?)?
         .with_cpu_causal_conv(bool_env("HUNCHO_CPU_CAUSAL_CONV")?)?
         .with_cpu_fused_gate(bool_env("HUNCHO_CPU_FUSED_GATE")?)?
+        .with_attention_query_rows(attention_query_rows_from_env()?)?
         .with_cpu_blas_from_env()?
         .with_prefill_chunk_tokens(prefill_chunk_tokens_from_env()?)?;
         return Ok(Box::new(backend));
@@ -465,6 +483,7 @@ fn load_candle(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<
             .with_cpu_delta_rule(bool_env("HUNCHO_CPU_DELTA_RULE")?)?
             .with_cpu_causal_conv(bool_env("HUNCHO_CPU_CAUSAL_CONV")?)?
             .with_cpu_fused_gate(bool_env("HUNCHO_CPU_FUSED_GATE")?)?
+            .with_attention_query_rows(attention_query_rows_from_env()?)?
             .with_cpu_blas_from_env()?
             .with_prefill_chunk_tokens(prefill_chunk_tokens_from_env()?)?;
         return Ok(Box::new(backend) as Box<dyn Backend>);
@@ -515,6 +534,18 @@ fn prefill_chunk_tokens_from_env() -> Result<usize> {
 #[cfg(feature = "candle")]
 fn fp32_attention_from_env() -> Result<bool> {
     bool_env("HUNCHO_ATTENTION_FP32")
+}
+
+fn attention_query_rows_from_env() -> Result<usize> {
+    match std::env::var("HUNCHO_ATTENTION_QUERY_ROWS") {
+        Ok(value) => value
+            .parse::<usize>()
+            .ok()
+            .filter(|&rows| rows <= 4096)
+            .ok_or_else(|| Error::Request("HUNCHO_ATTENTION_QUERY_ROWS must be 0..4096".into())),
+        Err(std::env::VarError::NotPresent) => Ok(0),
+        Err(_) => Err(Error::Request("invalid HUNCHO_ATTENTION_QUERY_ROWS".into())),
+    }
 }
 
 fn bool_env(name: &str) -> Result<bool> {

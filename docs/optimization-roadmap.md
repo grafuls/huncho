@@ -20,7 +20,7 @@ also show drift. Packed CPU fitting/held-out evaluation is still running.
 | O06 execution/preparation workers | Available | Released workload capacity/latency measurements |
 | O07 tokenizer/prompt caching | Available, bounded, default off | Model-specific hit rates and memory measurements |
 | O08 ONNX output/readout path | CPU gather and output reuse available | Device I/O binding and device-resident head |
-| O09 fused compute | CPU SiLU/multiply available | FlashAttention and further fused native/device kernels |
+| O09 fused/bounded compute | CPU SiLU/multiply and causal query blocks available | FlashAttention and further fused native/device kernels |
 | O10 precision/calibration gates | Every real serving runtime requires fresh labeled conformance | Released CPU acceptance remains rejected/pending; no GPU checks |
 | O11 native Kev prefix forks | Available | Released CPU paired/labeled acceptance |
 | O12 dynamic batching | Equal-length collation and bounded CPU Qwen right-padding available | F1/F5 masked padding, device qualification and cached-branch batching |
@@ -41,6 +41,42 @@ also show drift. Packed CPU fitting/held-out evaluation is still running.
 | O27 browser WASM/WebGPU | Open | Separate actual browser runtime, packaging and gates |
 
 ## Implemented increments
+
+### Bounded CPU attention query workspace
+
+`HUNCHO_DEVICE=cpu HUNCHO_ATTENTION_QUERY_ROWS=1..4096` opts native Qwen F2/F3
+and Clef F5 into query blocks; zero retains the original dense call shapes.
+Every block keeps all K/V rows and reduces softmax over the complete causal key
+axis. Masks use absolute prefix/query offsets, and outputs concatenate in
+original token order before the unchanged attention gate/output projection.
+Norms, rotary, GQA expansion, recurrence, trained heads and temperatures retain
+their formulas. This is query blocking, not FlashAttention or key truncation.
+
+Score/probability intermediates have at most `B * heads * query_rows * keys`
+elements, and a block mask has at most `query_rows * keys` elements. The setup
+cache holds rotary data without a full quadratic mask in this profile. K/V,
+hidden activations and concatenated block outputs still consume memory, and
+total arithmetic remains quadratic. More launches/copies can slow short inputs;
+there is no measured released-model speed or peak-RSS claim.
+
+The profile rejects unsupported families/devices, invalid bounds, models without
+full-attention layers and changes after live prefixes/shared replicas. Switching
+profiles invalidates setup masks. Metadata, qualification environment and the
+Python runner bind exact block size and native arithmetic identity. Complete
+fresh observed-label serving gates remain required; prefix/batch options also
+retain their tighter paired/nonvacuous gates.
+
+Actual CPU FP32/FP16 checks cover nonzero attention values and masks, frozen Kev
+probabilities, one/partial/oversized blocks, full-context prompts, prefix offsets,
+replicas, mixed-length padded batches, selected F3 logits and complete Clef joint
+heads. Tests inspect removal/invalidation of quadratic setup masks. Fixture
+parity does not qualify a released checkpoint or introduce a GPU/Apple check.
+The default, `clef,qualification` and `quantization,clef,qualification` CPU
+workspaces pass, along with the 21 Python runner tests. Actual packed Q8/Q4
+kernels also pass paired query-block checks without substituting source FP32
+outputs or refitting fixture temperatures. Combined feature coverage caught and
+fixed missing pending-prefix initialization in the packed loader and its unit
+reference constructor.
 
 ### Resumable native llama.cpp prefixes
 

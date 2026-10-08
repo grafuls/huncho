@@ -865,3 +865,22 @@ exercise relocated sharing and keep pending calibration rejected. Full released
 adapter-mix RSS/startup measurements, lazy model-registry loading/eviction,
 on-the-fly multi-LoRA batches and device residency remain open. Actual GPU
 checks and Apple work are deferred.
+
+## CPU attention working memory
+
+`HUNCHO_DEVICE=cpu HUNCHO_ATTENTION_QUERY_ROWS=64` opts native Qwen F2/F3
+or Clef F5 into 64-row attention query blocks. Zero is the default dense path;
+accepted block sizes are 1–4096. Each block retains all causal keys/values and
+uses absolute prefix positions. This bounds each score/probability intermediate
+by `batch * heads * min(block_rows, query_length) * key_length` elements and its
+mask by `min(block_rows, query_length) * key_length`. The setup cache omits the
+full quadratic mask. K/V, hidden activations, block outputs and other model
+allocations remain; these bounds are not a peak-RSS estimate or a speed claim.
+
+Configure before prefixes or replicas. Other backends/families and explicit
+non-CPU selection are rejected. Exact block size and arithmetic profile are
+included in qualification records, and fresh complete held-out observed-label
+conformance is required before serving. `scripts/qualify_kev_runtime.py
+--attention-query-rows 64 --device cpu ...` records the same explicit profile
+and rejects substituted sizes/metadata. Existing prefix/batch gates still apply
+when those modes are enabled. No temperature or golden threshold is changed.

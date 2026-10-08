@@ -406,6 +406,7 @@ fn requires_outcome_qualification(engine: &huncho_core::engine::Engine) -> bool 
         "native_execution",
         "projection_chunk_rows",
         "attention_compute_dtype",
+        "attention_execution",
         "device_path",
         "joint_head_execution",
         "joint_pool_execution",

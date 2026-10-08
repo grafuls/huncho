@@ -8,9 +8,13 @@ use std::{
 };
 
 fn run(args: &[&str], chunk: &str) -> Output {
+    run_profile(args, chunk, "0")
+}
+fn run_profile(args: &[&str], chunk: &str, query_rows: &str) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_huncho"))
         .env("HUNCHO_DEVICE", "cpu")
         .env("HUNCHO_PREFILL_CHUNK_TOKENS", chunk)
+        .env("HUNCHO_ATTENTION_QUERY_ROWS", query_rows)
         .env("RAYON_NUM_THREADS", "1")
         .env("CANDLE_NUM_THREADS", "1")
         .env_remove("HUNCHO_CPU_DELTA_RULE")
@@ -353,4 +357,95 @@ fn padded_native_cli_reports_actual_work_and_refuses_unlabeled_or_vacuous_startu
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[cfg(feature = "qualification")]
+#[test]
+fn cpu_query_block_profile_binds_qualification_and_preserves_unchanged_goldens() {
+    let (tmp, manifest, golden) = package();
+    let manifest = manifest.to_str().unwrap();
+    let receipt = tmp.path().join("query-receipt.json");
+    let output = run_profile(
+        &[
+            "conform",
+            "--manifest",
+            manifest,
+            "--backend",
+            "candle",
+            "--dtype",
+            "fp32",
+            "--golden",
+            golden.to_str().unwrap(),
+            "--prefix-cache",
+            "--cooperative-prefill",
+            "--write-qualification",
+            receipt.to_str().unwrap(),
+            "--json",
+        ],
+        "3",
+        "7",
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["passed"], true);
+    assert_eq!(report["execution_metadata"]["attention_query_rows"], "7");
+    assert_eq!(
+        report["execution_metadata"]["attention_execution"],
+        "cpu-query-blocks-v1"
+    );
+    assert!(
+        report["optimization_parity"]["max_prob_delta"]
+            .as_f64()
+            .unwrap()
+            <= 1e-4
+    );
+    assert!(report["work"]["prefill_interleaves"].as_u64().unwrap() > 0);
+    let record: Value = serde_json::from_slice(&std::fs::read(receipt).unwrap()).unwrap();
+    assert_eq!(record["outcome_gates_passed"], false);
+    assert!(
+        std::fs::read_to_string(tmp.path().join("query-receipt.json"))
+            .unwrap()
+            .contains("HUNCHO_ATTENTION_QUERY_ROWS")
+    );
+    let binding = format!("tiny-kev={}", golden.display());
+    let output = run_profile(
+        &[
+            "serve",
+            "--manifest",
+            manifest,
+            "--backend",
+            "candle",
+            "--dtype",
+            "fp32",
+            "--qualification-golden",
+            &binding,
+            "--bind",
+            "127.0.0.1:0",
+        ],
+        "0",
+        "7",
+    );
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("observed target labels"));
+    for invalid in ["4097", "-1", "true", "broken"] {
+        let output = run_profile(
+            &[
+                "bench",
+                "--manifest",
+                manifest,
+                "--backend",
+                "candle",
+                "--iterations",
+                "1",
+            ],
+            "0",
+            invalid,
+        );
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("HUNCHO_ATTENTION_QUERY_ROWS"));
+    }
 }

@@ -41,6 +41,30 @@ pub struct ClefBackend {
     grouped_pooling: bool,
 }
 impl ClefBackend {
+    /// Bound backbone CPU attention workspace while preserving the joint head.
+    pub fn with_attention_query_rows(mut self, rows: usize) -> Result<Self> {
+        let current = self
+            .capabilities
+            .extra
+            .get("attention_query_rows")
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(0);
+        if rows != current {
+            self.model_mut()?.set_attention_query_rows(rows)?;
+        }
+        if rows > 0 {
+            self.capabilities
+                .extra
+                .insert("attention_query_rows".into(), rows.to_string());
+            self.capabilities
+                .extra
+                .insert("attention_execution".into(), "cpu-query-blocks-v1".into());
+        } else {
+            self.capabilities.extra.remove("attention_query_rows");
+            self.capabilities.extra.remove("attention_execution");
+        }
+        Ok(self)
+    }
     /// Configure the optional CPU FP32 backbone BLAS path before replicas.
     /// The trained joint head and pooling keep their existing arithmetic.
     pub fn with_cpu_blas_from_env(self) -> Result<Self> {

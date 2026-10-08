@@ -42,6 +42,21 @@ fn durable_quantized_artifacts_run_packed_kernels_and_preserve_native_cache_and_
         .unwrap()
         .with_cpu_fused_gate(true)
         .unwrap();
+        let mut blocked = Qwen3_5Backend::load_quantized_kev(
+            &path,
+            &fixture.join("head.pt"),
+            512,
+            scheme.dtype(),
+        )
+        .unwrap()
+        .with_cpu_delta_rule(true)
+        .unwrap()
+        .with_cpu_causal_conv(true)
+        .unwrap()
+        .with_cpu_fused_gate(true)
+        .unwrap()
+        .with_attention_query_rows(3)
+        .unwrap();
         let metadata = backend.capabilities();
         assert_eq!(metadata.dtype, scheme.dtype());
         assert_eq!(metadata.extra["weight_quantization"], scheme.profile());
@@ -66,6 +81,14 @@ fn durable_quantized_artifacts_run_packed_kernels_and_preserve_native_cache_and_
                     serde_json::from_value(row["positions"].clone()).unwrap();
                 let input = ForwardInput::new(tokens.clone(), positions.clone());
                 let baseline = backend.forward(input.clone()).unwrap();
+                let blocked_output = blocked.forward(input.clone()).unwrap();
+                assert_paired(blocked_output.values().data(), baseline.values().data());
+                for output in blocked
+                    .forward_batch(vec![input.clone(), input.clone()])
+                    .unwrap()
+                {
+                    assert_paired(output.values().data(), baseline.values().data());
+                }
                 let upstream: Vec<f32> = serde_json::from_value(row["raw_logits"].clone()).unwrap();
                 changed_logits |= upstream != baseline.values().data();
                 let probabilities = calibrate(baseline.values().data(), 2.40605).unwrap();

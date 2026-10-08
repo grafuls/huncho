@@ -278,6 +278,7 @@ mod tests {
                 device: Device::Cpu,
                 caches: BTreeMap::new(),
                 prefixes: PrefixSnapshots::default(),
+                pending_prefills: BTreeMap::new(),
                 prefill_chunk_tokens: 0,
                 base_weight_cache: false,
             };
@@ -427,6 +428,7 @@ impl Qwen3_5Backend {
             device: Device::Cpu,
             caches: BTreeMap::new(),
             prefixes: PrefixSnapshots::default(),
+            pending_prefills: BTreeMap::new(),
             prefill_chunk_tokens: 0,
             base_weight_cache: false,
         })

@@ -221,6 +221,16 @@ Mixed-length serving requires fresh complete labeled external/paired conformance
 and actual mixed-batch/padding coverage. Token, padded-token and mixed-batch
 counters describe submitted work; they do not demonstrate a speedup.
 
+`HUNCHO_DEVICE=cpu HUNCHO_ATTENTION_QUERY_ROWS=1..4096` bounds native Qwen F2/F3
+and Clef F5 attention query workspace. Default zero keeps original dense shapes.
+Blocks retain every causal key/value, use absolute suffix offsets and preserve
+token/readout order. Score matrices and temporary masks contain only one query
+block, and the setup cache omits the full quadratic mask. K/V and complete
+hidden/output activations remain; arithmetic is still quadratic. Configuration
+must precede live prefixes/replicas, and changed reduction shapes require fresh
+complete labeled conformance. This CPU profile provides no FlashAttention,
+GPU support or demonstrated throughput gain.
+
 CPU llama.cpp F2/F3 also supports native equal-length batches when explicitly
 loaded with `HUNCHO_LLAMA_BATCH_ROWS=2..8`. Default one keeps the original
 independent context. The planner honors the allocated sequence count and 256
