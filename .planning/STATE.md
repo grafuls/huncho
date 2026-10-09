@@ -77,6 +77,7 @@ None yet.
 | 260926-core02 | Load manifest-declared HF tokenizer for byte-identical prompts | 2026-09-26 | 3d8e64a | — |
 | 260926-ops | Dockerfile, systemd unit, env-file packaging | 2026-09-26 | f22a70a | — |
 | 260926-candle | CandleBackend (safetensors→hidden states, Laya layout) + CLI wiring + `convert --source` assembly + tests | 2026-09-26 | Working tree | — |
+| 261009-aut | Enforce bearer auth on every route (`/health`, `/v1/models`, `/metrics`), before routing and body parsing (GitHub #1) | 2026-10-09 | Working tree | [261009-aut-enforce-bearer-auth-on-all-routes](./quick/261009-aut-enforce-bearer-auth-on-all-routes/) |
 
 ## Deferred Items
 

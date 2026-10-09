@@ -17,7 +17,8 @@ pub struct ServeArgs {
     #[arg(long, default_value = "127.0.0.1:8080", env = "HUNCHO_BIND")]
     pub bind: String,
 
-    /// Require this bearer token on requests (API-03). Also read from the
+    /// Require this bearer token on every request, including `/health`,
+    /// `/v1/models` and `/metrics` (API-03). Also read from the
     /// `HUNCHO_AUTH_TOKEN` env var, so secrets can be supplied via an
     /// `EnvironmentFile=` (systemd) or a `.env` without appearing in the
     /// command line.

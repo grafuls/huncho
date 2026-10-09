@@ -44,7 +44,8 @@ Print version.
 Listener address (host:port), default \fI127.0.0.1:8080\fR.
 .TP
 .B HUNCHO_AUTH_TOKEN
-Optional bearer token required on requests.
+Optional bearer token required on every request, including
+\fI/health\fR, \fI/v1/models\fR and \fI/metrics\fR.
 .TP
 .B HUNCHO_BACKEND
 Backend override for manifests/models: \fIauto\fR (default, selected per model),

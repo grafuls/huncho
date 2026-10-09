@@ -306,11 +306,7 @@ async fn send(state: Arc<AppState>, body: Value) -> (StatusCode, Value) {
         .header("X-Huncho-Extensions", "true")
         .body(Body::from(body.to_string()))
         .unwrap();
-    let response = huncho_api::router()
-        .with_state(state)
-        .oneshot(request)
-        .await
-        .unwrap();
+    let response = huncho_api::router(state).oneshot(request).await.unwrap();
     let status = response.status();
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
@@ -346,8 +342,7 @@ async fn short_requests_run_before_long_prefills_finish_and_keep_admission_bound
         send(state.clone(), body("overflow")).await.0,
         StatusCode::SERVICE_UNAVAILABLE
     );
-    let health = huncho_api::router()
-        .with_state(state.clone())
+    let health = huncho_api::router(state.clone())
         .oneshot(Request::get("/health").body(Body::empty()).unwrap())
         .await
         .unwrap();
