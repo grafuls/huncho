@@ -395,6 +395,7 @@ fn native_cpu_cooperative_groups_start_with_fresh_proofs_and_serve_original_type
         "HUNCHO_CPU_FUSED_GATE",
         "HUNCHO_REPLICAS",
         "HUNCHO_BATCH_MAX_REQUESTS",
+        "HUNCHO_AUTH_TOKEN",
     ] {
         command.env_remove(name);
     }

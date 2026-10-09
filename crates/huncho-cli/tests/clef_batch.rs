@@ -25,6 +25,7 @@ fn command(args: &[&str]) -> Command {
         .env_remove("HUNCHO_CPU_FUSED_GATE")
         .env_remove("HUNCHO_REPLICAS")
         .env_remove("HUNCHO_BACKEND")
+        .env_remove("HUNCHO_AUTH_TOKEN")
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

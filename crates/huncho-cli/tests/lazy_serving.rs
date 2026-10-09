@@ -71,6 +71,7 @@ fn command(manifest: &Path, golden: &Path, bind: &str) -> Command {
         .env_remove("HUNCHO_COOPERATIVE_PREFILL")
         .env_remove("HUNCHO_CPU_BLAS_LIBRARY")
         .env_remove("HUNCHO_CPU_BLAS_THREADS")
+        .env_remove("HUNCHO_AUTH_TOKEN")
         .args([
             "serve",
             "--lazy",
