@@ -23,6 +23,8 @@ TypeSafe Python SDK works against Huncho with only a base-URL change.
 - **Conformance gating**: an offline harness (`huncho conform`) compares any backend
   against golden vectors and gates releases on probability fidelity, argmax
   agreement, and ECE drift.
+- **Efficient decision serving**: native tensor batches, shared Kev prefixes,
+  bounded caches, and shared-weight CPU replicas. See [performance](#performance).
 - **Offline-first**: a dependency-free deterministic `MockBackend` lets the whole
   pipeline (prompt → head → calibration → conformance) run with no weights.
 - **Static, portable**: pure-Rust core with optional ONNX Runtime.
@@ -30,12 +32,44 @@ TypeSafe Python SDK works against Huncho with only a base-URL change.
   (`--model owner/repo`) so manifests, weights, head, and golden vectors are
   pulled straight from the Hub — the same run-time resolution model vLLM uses.
 
+## Performance
+
+Huncho computes decision scores in a forward pass, with no generated tokens or
+decode loop. Its performance features reduce repeated preparation, model work,
+and memory copies while keeping typed calibration in the shared core.
+
+| Feature | Benefit | Supported paths / controls |
+|---|---|---|
+| **Native tensor batching** | Combine question rows in one model call; compatible paths support bounded right padding. Clef batches complete joint schemas. | CPU ModernBERT/Laya, Qwen/Kev, compatible ONNX graphs, and Clef. `--max-batch-tokens`, `--max-batch-padding-percent`, and optional [cross-request collation](docs/operations.md#cross-request-batches). |
+| **Shared Kev prefixes** | Prefill shared state once, then fork question branches. Optional retained snapshots avoid repeated state prefill across requests. | Native CPU Kev: `--prefix-cache`, `--persistent-prefix-bytes`; [cached question batches](docs/operations.md#cpu-kev-batches-from-a-shared-prefix). |
+| **Cooperative prefill scheduling** | Let queued requests run between bounded prefix chunks and question groups. | Native CPU Kev: `--cooperative-prefill` with prefix reuse and configured chunking; [configuration and limits](docs/operations.md). |
+| **Bounded exact reuse** | Reuse tokenization, prepared prompts, and complete responses; coalesce identical in-flight HTTP requests. | F1–F4 tokenizer/prompt caches; engine result caches and HTTP coalescing. Disabled by default; [cache budgets and controls](docs/operations.md#serve-flags). |
+| **Concurrent CPU contexts** | Serve through independently locked contexts sharing immutable weights; overlap bounded prompt preparation with inference. | Supported CPU runtimes: `--replicas`, `--max-prepared-per-model`; [replica support and limits](docs/operations.md#bounded-shared-weight-cpu-replicas). |
+| **Shared bases across adapters** | Retain one immutable CPU base instead of duplicating dense weights for each supported adapter. Lazy residency bounds loaded model groups. | Optional `shared-base` build and CPU FP32 F2/F3 runtime LoRA; [adapter execution](docs/operations.md#cpu-fp32-runtime-lora) and [lazy residency](docs/operations.md#optional-cpu-lazy-residency). |
+| **Lean heads and calibration** | Project only requested F3 candidates, compute selected Laya final-layer marker queries, vectorize Clef heads, and normalize owned logits in their existing buffer. | Family-specific [head profiles](docs/backends.md); shared-core [calibration buffer reuse](docs/verification/calibration-buffers-20261009/README.md) preserves tested probability bits. |
+| **CPU compute and attention tuning** | Optional OpenBLAS matmuls, fused MLP gates, bounded attention query blocks, and grouped K/V without head expansion. Direct CPU FP32 Kev page attention shares prefix K/V across suffix rows. | Native Qwen/Clef profiles and optional `cpu-blas`; [kernel profiles](docs/backends.md) and [direct page attention](docs/operations.md#direct-cpu-kev-page-attention). |
+| **Browser inference workers** | Move loading, tokenization, qualification, and CPU inference off the page thread; use native equal-length or masked F1 graph batches. | Separate [CPU WASM browser package](browser/README.md), with bounded dedicated workers and fresh per-session gates. |
+
+Optional [llama.cpp](docs/llamacpp.md) and [vLLM](docs/vllm.md) CPU backends also
+execute decision readouts without a decode loop. The pinned vLLM Kev path
+supports equal-length native batches and local two-rank CPU tensor sharding.
+Experimental CPU Q8_0/Q4_0 packages are available behind `quantization`, with
+[variant refits and held-out acceptance](docs/quantization.md) required.
+
+Most tuning controls are opt-in and depend on the family, backend, and execution
+profile. Every real serving context requires fresh complete labeled conformance;
+selected batching/prefix paths also require paired independent-forward checks.
+Caches cannot bypass those gates. The default build keeps external runtimes
+optional. Impact depends on the workload: the [implementation roadmap and
+evidence](docs/optimization-roadmap.md) record current coverage, measurements,
+and qualification limits separately from released-model acceptance.
+
 ## Crates
 
 | Crate | Purpose |
 |---|---|
 | `huncho-core` | Wire contract, model packaging, prompt building, heads, calibration, conformance, engine. |
-| `huncho-backend` | Backend implementations: `MockBackend` (offline reference), `NullBackend`, optional `OnnxBackend`. |
+| `huncho-backend` | Offline mock/null backends; optional ONNX, Candle/ModernBERT, Qwen/Kev, Clef, llama.cpp, and vLLM runtimes. |
 | `huncho-api` | HTTP API: `/v1/systemone`, `/health`, `/v1/models`, `/metrics`, auth. |
 | `huncho-hub` | Hugging Face Hub resolution of model packages by repo id (feature `hf`). |
 | `huncho-cli` | `huncho serve`, `convert`, `calibrate`, `conform`, `bench`. |
@@ -215,6 +249,8 @@ cover systemd. `serve` reads `HUNCHO_BIND`/`HUNCHO_BACKEND`/`HUNCHO_DTYPE`/
 - [Backends](docs/backends.md)
 - [Calibration & confidence](docs/calibration.md)
 - [Operations](docs/operations.md)
+- [Optimization roadmap & evidence](docs/optimization-roadmap.md)
+- [CPU browser runtime](browser/README.md)
 
 ## License
 
