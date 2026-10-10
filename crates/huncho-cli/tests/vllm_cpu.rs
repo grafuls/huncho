@@ -81,6 +81,7 @@ fn command(args: &[&str]) -> Command {
         .env_remove("HUNCHO_CPU_BLAS_LIBRARY")
         .env_remove("HUNCHO_CPU_BLAS_THREADS")
         .env_remove("HUNCHO_LAYA_SELECTED_HEAD")
+        .env_remove("HUNCHO_AUTH_TOKEN")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     c

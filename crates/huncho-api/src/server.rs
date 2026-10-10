@@ -28,10 +28,9 @@ pub async fn serve(state: Arc<AppState>) -> std::io::Result<()> {
                 std::io::Error::new(std::io::ErrorKind::InvalidInput, error.to_string())
             })?;
     }
-    let app = router()
+    let app = router(state.clone())
         .layer(CorsLayer::permissive())
-        .layer(TraceLayer::new_for_http())
-        .with_state(state.clone());
+        .layer(TraceLayer::new_for_http());
 
     let bind = state.config.bind.clone();
     let listener = tokio::net::TcpListener::bind(&bind).await?;

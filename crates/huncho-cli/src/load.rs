@@ -952,9 +952,10 @@ pub fn engine_from_ref(
     revision: Option<String>,
     token: Option<String>,
     cache_dir: Option<String>,
-) -> Result<Engine> {
+) -> Result<(Engine, std::path::PathBuf)> {
     let manifest_path = resolve_model(model, backend, dtype, revision, token, cache_dir, false)?;
-    engine_from_resolved_manifest(&manifest_path, backend, dtype)
+    let engine = engine_from_resolved_manifest(&manifest_path, backend, dtype)?;
+    Ok((engine, manifest_path))
 }
 
 #[cfg(all(test, feature = "candle"))]

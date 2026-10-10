@@ -3,8 +3,10 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use axum::extract::State;
-use axum::http::{HeaderMap, StatusCode};
+use axum::body::HttpBody;
+use axum::extract::{Request, State};
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -16,16 +18,56 @@ use huncho_core::error::{Error, ErrorBody};
 
 use crate::auth::{check_auth, wants_extensions};
 use crate::coalesce::{self, JobResult, Join};
+use crate::config::ServerConfig;
 use crate::metrics::{GaugeGuard, Metrics};
 use crate::state::{AppState, ModelHandle};
 
-/// Build the API router. The state type is `Arc<AppState>`.
-pub fn router() -> Router<Arc<AppState>> {
-    Router::new()
+/// Build the API router for `state`, with bearer auth enforced on every route.
+///
+/// The API is served as the returned router's fallback so auth runs before
+/// routing. Adding routes or a fallback to it would bypass auth or replace the
+/// API: register routes here, and `nest` or `merge` the result elsewhere.
+pub fn router(state: Arc<AppState>) -> Router {
+    let config = state.config.clone();
+    let routes = Router::new()
         .route("/v1/systemone", post(systemone))
         .route("/health", get(health))
         .route("/v1/models", get(list_models))
         .route("/metrics", get(metrics))
+        .with_state(state);
+    // Auth wraps the routed service as a whole rather than each route, so it
+    // runs before routing and body extraction: rejections are identical for
+    // every path and method (no `Allow` header reveals which routes exist).
+    Router::new()
+        .fallback_service(routes)
+        .layer(middleware::from_fn_with_state(config, require_auth))
+}
+
+/// Reject requests that fail the configured bearer-token check (API-03).
+async fn require_auth(
+    State(config): State<Arc<ServerConfig>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if let Err(status) = check_auth(request.headers(), &config) {
+        let mut response = error_response(
+            status,
+            "unauthorized",
+            "invalid or missing Authorization header",
+        );
+        let headers = response.headers_mut();
+        headers.insert(
+            http::header::WWW_AUTHENTICATE,
+            HeaderValue::from_static("Bearer"),
+        );
+        // The body is never read, so keep-alive clients must not reuse the
+        // connection hyper closes after this response.
+        if !request.body().is_end_stream() {
+            headers.insert(http::header::CONNECTION, HeaderValue::from_static("close"));
+        }
+        return response;
+    }
+    next.run(request).await
 }
 
 // ---------------------------------------------------------------------------
@@ -47,14 +89,6 @@ async fn systemone(
     headers: HeaderMap,
     Json(body): Json<InferenceRequest>,
 ) -> Response {
-    if let Err(status) = check_auth(&headers, &state.config) {
-        return error_response(
-            status,
-            "unauthorized",
-            "invalid or missing Authorization header",
-        );
-    }
-
     if body.images.is_some() || body.videos.is_some() {
         return error_response(
             StatusCode::BAD_REQUEST,

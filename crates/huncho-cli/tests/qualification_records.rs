@@ -27,7 +27,8 @@ fn command() -> Command {
         .env_remove("HUNCHO_MAX_BATCH_TOKENS")
         .env_remove("HUNCHO_BATCH_MAX_REQUESTS")
         .env_remove("HUNCHO_MAX_PREPARED_PER_MODEL")
-        .env_remove("HUNCHO_CANDIDATE_READOUT");
+        .env_remove("HUNCHO_CANDIDATE_READOUT")
+        .env_remove("HUNCHO_AUTH_TOKEN");
     command
 }
 

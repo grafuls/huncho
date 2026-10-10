@@ -447,7 +447,7 @@ async fn send(
 }
 
 fn router_with_state(state: Arc<AppState>) -> axum::Router {
-    huncho_api::router().with_state(state)
+    huncho_api::router(state)
 }
 
 async fn send_raw(
@@ -818,6 +818,150 @@ async fn missing_auth_token_returns_401() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert!(body["answers"].is_object());
+}
+
+fn bare_request(method: Method, uri: &str, auth: Option<&str>, body: &str) -> Request<Body> {
+    let mut builder = Request::builder().method(method).uri(uri);
+    if let Some(value) = auth {
+        builder = builder.header("authorization", value);
+    }
+    if !body.is_empty() {
+        builder = builder.header("content-type", "application/json");
+    }
+    builder.body(Body::from(body.to_owned())).unwrap()
+}
+
+#[tokio::test]
+async fn every_route_requires_the_configured_token() {
+    let s = state(Some("secret"));
+    let choice = choice_request().to_string();
+    // Inference last: no denied request may run the model.
+    let routes = [
+        (Method::GET, "/health", ""),
+        (Method::GET, "/v1/models", ""),
+        (Method::GET, "/metrics", ""),
+        (Method::POST, "/v1/systemone", choice.as_str()),
+    ];
+    for (method, uri, body) in routes {
+        for auth in [
+            None,
+            Some("Bearer wrong"),
+            Some("Basic c2VjcmV0"),
+            Some("secret"),
+        ] {
+            let response = router_with_state(s.clone())
+                .oneshot(bare_request(method.clone(), uri, auth, body))
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::UNAUTHORIZED,
+                "{method} {uri} {auth:?}"
+            );
+            assert_eq!(response.headers()["www-authenticate"], "Bearer");
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let error: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(error["error"]["code"], "unauthorized");
+        }
+        assert_eq!(s.metrics.tokens_prefilled.get(), 0);
+        let response = router_with_state(s.clone())
+            .oneshot(bare_request(
+                method.clone(),
+                uri,
+                Some("Bearer secret"),
+                body,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{method} {uri}");
+    }
+}
+
+#[tokio::test]
+async fn authentication_precedes_routing_and_body_parsing() {
+    let s = state(Some("secret"));
+    let mut unknown_model = choice_request();
+    unknown_model["model"] = json!("does-not-exist");
+    let unknown_model = unknown_model.to_string();
+    let cases = [
+        (
+            Method::POST,
+            "/v1/systemone",
+            "{not json",
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            Method::POST,
+            "/v1/systemone",
+            unknown_model.as_str(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            Method::GET,
+            "/v1/systemone",
+            "",
+            StatusCode::METHOD_NOT_ALLOWED,
+        ),
+        (
+            Method::DELETE,
+            "/health",
+            "",
+            StatusCode::METHOD_NOT_ALLOWED,
+        ),
+        (Method::HEAD, "/health", "", StatusCode::OK),
+        (Method::GET, "/health/", "", StatusCode::NOT_FOUND),
+        (Method::GET, "/v1/unknown", "", StatusCode::NOT_FOUND),
+    ];
+    // A rejection must not reveal whether the path or method exists; only an
+    // unread request body adds `Connection: close`.
+    let unknown = router_with_state(s.clone())
+        .oneshot(bare_request(Method::GET, "/v1/unknown", None, ""))
+        .await
+        .unwrap();
+    assert!(unknown.headers().get("allow").is_none());
+    assert!(unknown.headers().get("connection").is_none());
+    for (method, uri, body, authorized) in cases {
+        let denied = router_with_state(s.clone())
+            .oneshot(bare_request(method.clone(), uri, None, body))
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), StatusCode::UNAUTHORIZED, "{method} {uri}");
+        let mut headers = denied.headers().clone();
+        let close = headers.remove("connection");
+        assert_eq!(close.is_some(), !body.is_empty(), "{method} {uri}");
+        assert!(close.is_none_or(|value| value == "close"));
+        assert_eq!(&headers, unknown.headers(), "{method} {uri}");
+        let allowed = router_with_state(s.clone())
+            .oneshot(bare_request(
+                method.clone(),
+                uri,
+                Some("Bearer secret"),
+                body,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(allowed.status(), authorized, "{method} {uri}");
+        if authorized == StatusCode::METHOD_NOT_ALLOWED {
+            assert!(allowed.headers().contains_key("allow"), "{method} {uri}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn routes_stay_open_when_no_token_is_configured() {
+    let s = state(None);
+    for uri in ["/health", "/v1/models", "/metrics"] {
+        for auth in [None, Some("Bearer anything")] {
+            let response = router_with_state(s.clone())
+                .oneshot(bare_request(Method::GET, uri, auth, ""))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{uri} {auth:?}");
+            assert!(response.headers().get("www-authenticate").is_none());
+        }
+    }
 }
 
 #[tokio::test]

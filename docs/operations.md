@@ -353,6 +353,9 @@ curl -s http://127.0.0.1:8080/health
 curl -s http://127.0.0.1:8080/v1/models
 ```
 
+When the server has an auth token, these also need the bearer header
+(see [Auth](#auth)).
+
 ## Auth
 
 Run with a bearer token:
@@ -367,13 +370,28 @@ Then request:
 curl -s http://127.0.0.1:8080/v1/models -H 'Authorization: Bearer secret'
 ```
 
-Requests without a valid token return `401`. The comparison is constant-time.
+Every route, including `/health`, `/v1/models` and `/metrics`, returns `401`
+without a valid token; only `OPTIONS` requests (CORS preflights) are answered
+without one, identically for every path. The comparison is constant-time. Send the token from liveness
+probes and Prometheus too, for example:
+
+```yaml
+scrape_configs:
+  - job_name: huncho
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/huncho.token
+    static_configs:
+      - targets: ["127.0.0.1:8080"]
+```
 
 ## Metrics
 
 ```bash
 curl -s http://127.0.0.1:8080/metrics
 ```
+
+With an auth token configured, `/metrics` requires it like every other route.
 
 Prometheus metrics use the `huncho_` prefix and include request latency,
 queue wait, evaluation time, waiting/admitted requests, submitted forward/prefill

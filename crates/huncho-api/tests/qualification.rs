@@ -136,8 +136,7 @@ fn fixture_with_pause(pause: Option<Arc<Pause>>) -> (Engine, Arc<AtomicUsize>, G
     (engine, calls, suite)
 }
 async fn request(state: Arc<AppState>, suite: &GoldenSuite) -> StatusCode {
-    huncho_api::router()
-        .with_state(state)
+    huncho_api::router(state)
         .oneshot(
             Request::builder()
                 .method("POST")

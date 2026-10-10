@@ -134,8 +134,16 @@ entropy, or a custom definition).
 
 Configure a bearer token with the `--auth-token` serve flag
 (see [operations.md](operations.md)). If set, every request must carry
-`Authorization: Bearer <token>`; otherwise it returns `401`. Token comparison
-is constant-time.
+`Authorization: Bearer <token>`; otherwise it returns `401`. This covers every
+route, including `/health`, `/v1/models` and `/metrics`, so health probes and
+Prometheus scrapers must send the token too. The token is checked before
+routing or reading the request body, so a rejected request learns nothing
+about paths, models or request validation. A `401` carries
+`WWW-Authenticate: Bearer` and the error code `unauthorized`. `OPTIONS`
+requests, including CORS preflights, are answered by the CORS layer without a
+token, with the same empty `200` for every path.
+Token comparison is constant-time. Without a configured token, every route is
+open.
 
 ## Metrics (API-04, P1)
 
