@@ -953,7 +953,7 @@ pub fn engine_from_ref(
     token: Option<String>,
     cache_dir: Option<String>,
 ) -> Result<(Engine, std::path::PathBuf)> {
-    let manifest_path = resolve_model(model, backend, dtype, revision, token, cache_dir, false)?;
+    let manifest_path = resolve_model(model, backend, dtype, revision, token, cache_dir, true)?;
     let engine = engine_from_resolved_manifest(&manifest_path, backend, dtype)?;
     Ok((engine, manifest_path))
 }

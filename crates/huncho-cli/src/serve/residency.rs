@@ -61,7 +61,7 @@ pub(super) fn load_lazy(args: &ServeArgs) -> anyhow::Result<ModelRegistry> {
             args.revision.clone(),
             args.token.clone(),
             args.cache_dir.clone(),
-            false,
+            true,
         )?);
     }
     let mut golden_bindings: std::collections::BTreeMap<String, String> = BTreeMap::new();

@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use huncho_core::manifest::{
     self, Adapter, ArtifactRef, Backbone, BackboneSource, BackendId, CalibrationConfig,
     CalibrationEntry, CalibrationStatus, ConfidenceDef, F3Config, Family, HeadConfig,
-    ModelCapabilities, ModelManifest, PromptContract,
+    ModelCapabilities, ModelManifest, PromptContract, Reference,
 };
 
 use crate::error::{HubError, Result};
@@ -448,13 +448,21 @@ fn synthesize_checkpoint(
     });
 
     let rev = revision.unwrap_or("main");
-    let manifest = build_synth_manifest(
+    let mut manifest = build_synth_manifest(
         &config,
         repo,
         rev,
         rl_config.as_ref(),
         tokenizer_path.as_deref(),
     )?;
+
+    if download_first(repo, revision, opts, &["golden.json"]).is_ok() {
+        manifest.reference = Some(Reference {
+            family_impl: "huncho".to_string(),
+            revision: rev.to_string(),
+            golden: "golden.json".to_string(),
+        });
+    }
 
     // The candle loader reads `config.json` next to the manifest, so mirror the
     // encoder config to the snapshot root regardless of the repo's layout
@@ -737,7 +745,15 @@ fn synthesize_kev(
             entries: Default::default(),
             eval_set_hash: None,
         },
-        reference: None,
+        reference: if download_first(repo, Some(commit), opts, &["golden.json"]).is_ok() {
+            Some(Reference {
+                family_impl: "huncho".to_string(),
+                revision: commit.to_string(),
+                golden: "golden.json".to_string(),
+            })
+        } else {
+            None
+        },
         capabilities: ModelCapabilities::default(),
     };
     manifest
@@ -897,6 +913,15 @@ fn synthesize_f3(
         &base_pin,
         tokenizer_path.as_deref(),
     )?;
+
+    let mut manifest = manifest;
+    if download_first(repo, revision, opts, &["golden.json"]).is_ok() {
+        manifest.reference = Some(Reference {
+            family_impl: "huncho".to_string(),
+            revision: if commit.is_empty() { rev.to_string() } else { commit.clone() },
+            golden: "golden.json".to_string(),
+        });
+    }
 
     // Mirror the base `config.json` next to the adapter as a fallback. The
     // Qwen3.5 candle backend locates the base weights/config via the manifest's

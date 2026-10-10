@@ -273,7 +273,7 @@ fn load_models(args: &ServeArgs) -> anyhow::Result<ModelRegistry> {
                 args.revision.clone(),
                 args.token.clone(),
                 args.cache_dir.clone(),
-                false,
+                true,
             )?)
         };
         #[cfg(feature = "qualification")]
@@ -554,7 +554,7 @@ fn qualify_optimizations(
         {
             continue;
         }
-        let path=paths.get(name.as_str()).ok_or_else(||anyhow::anyhow!("serving a native, refitted or optimized variant of `{name}` requires --qualification-golden {name}=/path/to/pinned-golden.json"))?;
+        let path=paths.get(name.as_str()).ok_or_else(||anyhow::anyhow!("serving a native, refitted or optimized variant of `{name}` requires --qualification-golden {name}=/path/to/pinned-golden.json (not found in the model package)"))?;
         let suite = load_suite(path)?;
         anyhow::ensure!(!(refit || outcome_profile || replicated) || suite.cases.iter().any(|case| !case.targets.is_empty()),
             "native, refitted or changed-profile serving for `{name}` requires held-out golden vectors with observed target labels");
