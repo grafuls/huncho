@@ -64,13 +64,13 @@ pub(super) fn load_lazy(args: &ServeArgs) -> anyhow::Result<ModelRegistry> {
             false,
         )?);
     }
-    let mut golden_bindings = BTreeMap::new();
+    let mut golden_bindings: std::collections::BTreeMap<String, String> = BTreeMap::new();
     for binding in &args.qualification_golden {
         let (name, path) = binding
             .split_once('=')
             .ok_or_else(|| anyhow::anyhow!("qualification golden must be MODEL=PATH"))?;
         anyhow::ensure!(
-            !name.is_empty() && !path.is_empty() && golden_bindings.insert(name, path).is_none(),
+            !name.is_empty() && !path.is_empty() && golden_bindings.insert(name.to_string(), path.to_string()).is_none(),
             "invalid or duplicate qualification binding"
         );
     }
@@ -87,6 +87,16 @@ pub(super) fn load_lazy(args: &ServeArgs) -> anyhow::Result<ModelRegistry> {
         let path = path.canonicalize()?;
         let manifest = ModelManifest::load(&path)?;
         let name = manifest.name.clone();
+        
+        if !golden_bindings.contains_key(&name) {
+            if let Some(reference) = &manifest.reference {
+                let golden_path = path.parent().unwrap_or(std::path::Path::new("")).join(&reference.golden);
+                if golden_path.exists() {
+                    golden_bindings.insert(name.clone(), golden_path.to_string_lossy().into_owned());
+                }
+            }
+        }
+        
         anyhow::ensure!(names.insert(name.clone()), "duplicate lazy model `{name}`");
         anyhow::ensure!(
             manifest

@@ -204,6 +204,7 @@ fn validate_scheduling(args: &ServeArgs) -> anyhow::Result<()> {
 fn load_models(args: &ServeArgs) -> anyhow::Result<ModelRegistry> {
     validate_scheduling(args)?;
     let mut registry = ModelRegistry::new();
+    let mut auto_goldens = std::collections::BTreeMap::new();
     #[cfg(feature = "qualification")]
     let mut records = RecordBindings::load(&args.qualification_record)?;
 
@@ -234,6 +235,12 @@ fn load_models(args: &ServeArgs) -> anyhow::Result<ModelRegistry> {
         #[cfg(not(feature = "qualification"))]
         let engine = engine_from_resolved_manifest(path, backend, args.dtype.as_deref())?;
         let name = engine.manifest().name.clone();
+        if let Some(reference) = &engine.manifest().reference {
+            let golden_path = path.parent().unwrap_or(std::path::Path::new("")).join(&reference.golden);
+            if golden_path.exists() {
+                auto_goldens.insert(name.clone(), golden_path);
+            }
+        }
         let device = engine.device().to_owned();
         registry.insert(
             name.clone(),
@@ -270,8 +277,8 @@ fn load_models(args: &ServeArgs) -> anyhow::Result<ModelRegistry> {
             )?)
         };
         #[cfg(feature = "qualification")]
-        let engine = if let Some(path) = recorded_path {
-            records.load_engine(&path, backend, args.dtype.as_deref())?
+        let (engine, m_path) = if let Some(path) = recorded_path {
+            (records.load_engine(&path, backend, args.dtype.as_deref())?, path)
         } else {
             engine_from_ref(
                 model,
@@ -283,7 +290,7 @@ fn load_models(args: &ServeArgs) -> anyhow::Result<ModelRegistry> {
             )?
         };
         #[cfg(not(feature = "qualification"))]
-        let engine = engine_from_ref(
+        let (engine, m_path) = engine_from_ref(
             model,
             backend,
             args.dtype.as_deref(),
@@ -292,6 +299,12 @@ fn load_models(args: &ServeArgs) -> anyhow::Result<ModelRegistry> {
             args.cache_dir.clone(),
         )?;
         let name = engine.manifest().name.clone();
+        if let Some(reference) = &engine.manifest().reference {
+            let golden_path = m_path.parent().unwrap_or(std::path::Path::new("")).join(&reference.golden);
+            if golden_path.exists() {
+                auto_goldens.insert(name.clone(), golden_path);
+            }
+        }
         let device = engine.device().to_owned();
         registry.insert(
             name.clone(),
@@ -304,7 +317,7 @@ fn load_models(args: &ServeArgs) -> anyhow::Result<ModelRegistry> {
         tracing::warn!("no models registered; /v1/systemone will return 422 for every model");
     }
     registry.set_replicas(usize::from(args.replicas))?;
-    qualify_optimizations(&registry, args)?;
+    qualify_optimizations(&registry, args, &auto_goldens)?;
     #[cfg(feature = "qualification")]
     records.verify(&registry, args)?;
     Ok(registry)
@@ -437,7 +450,11 @@ fn requires_outcome_qualification(engine: &huncho_core::engine::Engine) -> bool 
     engine.requires_outcome_qualification()
 }
 
-fn qualify_optimizations(registry: &ModelRegistry, args: &ServeArgs) -> anyhow::Result<()> {
+fn qualify_optimizations(
+    registry: &ModelRegistry,
+    args: &ServeArgs,
+    auto_goldens: &std::collections::BTreeMap<String, std::path::PathBuf>,
+) -> anyhow::Result<()> {
     use huncho_core::conformance::{
         load_suite, run_suite_with_cross_request_batches, run_suite_with_options,
         ConformanceThresholds,
@@ -456,9 +473,14 @@ fn qualify_optimizations(registry: &ModelRegistry, args: &ServeArgs) -> anyhow::
             "qualification model `{name}` is not registered"
         );
         anyhow::ensure!(
-            paths.insert(name, path).is_none(),
+            paths.insert(name.to_string(), path.to_string()).is_none(),
             "duplicate qualification binding for `{name}`"
         );
+    }
+    for (name, path) in auto_goldens {
+        if !paths.contains_key(name.as_str()) {
+            paths.insert(name.clone(), path.to_string_lossy().into_owned());
+        }
     }
     for (name, engine) in registry.models() {
         anyhow::ensure!(
@@ -801,7 +823,7 @@ mod qualification_tests {
         args.replicas = 2;
         let mut models = registry(0.);
         models.set_replicas(2).unwrap();
-        assert!(qualify_optimizations(&models, &args)
+        assert!(qualify_optimizations(&models, &args, &Default::default())
             .unwrap_err()
             .to_string()
             .contains("requires --qualification-golden"));
@@ -810,14 +832,14 @@ mod qualification_tests {
         args.qualification_golden = vec![format!("qual={}", path.display())];
         let mut golden = suite();
         huncho_core::conformance::save_suite(&golden, &path).unwrap();
-        assert!(qualify_optimizations(&models, &args)
+        assert!(qualify_optimizations(&models, &args, &Default::default())
             .unwrap_err()
             .to_string()
             .contains("observed target labels"));
         golden.cases[0].targets =
             BTreeMap::from([("a".into(), "b".into()), ("b".into(), "b".into())]);
         huncho_core::conformance::save_suite(&golden, &path).unwrap();
-        qualify_optimizations(&models, &args).unwrap();
+        qualify_optimizations(&models, &args, &Default::default()).unwrap();
         let mut drifting = registry(0.02);
         drifting.set_replicas(2).unwrap();
         assert!(
@@ -829,13 +851,13 @@ mod qualification_tests {
             .unwrap()
             .passed
         );
-        assert!(qualify_optimizations(&drifting, &args)
+        assert!(qualify_optimizations(&drifting, &args, &Default::default())
             .unwrap_err()
             .to_string()
             .contains("replica 1"));
         golden.cases[0].targets.remove("b");
         huncho_core::conformance::save_suite(&golden, &path).unwrap();
-        assert!(qualify_optimizations(&models, &args).is_err());
+        assert!(qualify_optimizations(&models, &args, &Default::default()).is_err());
     }
 
     #[test]
@@ -875,12 +897,12 @@ mod qualification_tests {
         let mut golden = suite();
         std::fs::write(&path, serde_json::to_vec(&golden).unwrap()).unwrap();
         args.qualification_golden = vec![format!("qual={}", path.display())];
-        assert!(qualify_optimizations(&models, &args).is_err());
+        assert!(qualify_optimizations(&models, &args, &Default::default()).is_err());
         golden.cases.push(golden.cases[0].clone());
         golden.cases[1].id = "distinct request".into();
         std::fs::write(&path, serde_json::to_vec(&golden).unwrap()).unwrap();
-        assert!(qualify_optimizations(&models, &args).is_ok());
-        assert!(qualify_optimizations(&registry(0.002), &args).is_err());
+        assert!(qualify_optimizations(&models, &args, &Default::default()).is_ok());
+        assert!(qualify_optimizations(&registry(0.002), &args, &Default::default()).is_err());
     }
 
     #[test]
@@ -889,7 +911,7 @@ mod qualification_tests {
         let mut args = args();
         args.max_batch_tokens = None;
         args.max_prepared_per_model = 1;
-        assert!(qualify_optimizations(&registry, &args)
+        assert!(qualify_optimizations(&registry, &args, &Default::default())
             .unwrap_err()
             .to_string()
             .contains("requires --qualification-golden"));
@@ -897,7 +919,7 @@ mod qualification_tests {
         let path = tmp.path().join("golden.json");
         huncho_core::conformance::save_suite(&suite(), &path).unwrap();
         args.qualification_golden = vec![format!("qual={}", path.display())];
-        qualify_optimizations(&registry, &args).unwrap();
+        qualify_optimizations(&registry, &args, &Default::default()).unwrap();
         let report = huncho_core::conformance::run_suite_with_options(
             &registry.get("qual").unwrap(),
             &suite(),
@@ -917,7 +939,7 @@ mod qualification_tests {
     fn optimized_serving_requires_actual_successful_qualification() {
         let registry = registry(0.);
         let mut args = args();
-        assert!(qualify_optimizations(&registry, &args)
+        assert!(qualify_optimizations(&registry, &args, &Default::default())
             .unwrap_err()
             .to_string()
             .contains("requires --qualification-golden"));
@@ -925,18 +947,18 @@ mod qualification_tests {
         let path = tmp.path().join("golden.json");
         huncho_core::conformance::save_suite(&suite(), &path).unwrap();
         args.qualification_golden = vec![format!("qual={}", path.display())];
-        qualify_optimizations(&registry, &args).unwrap();
+        qualify_optimizations(&registry, &args, &Default::default()).unwrap();
         let mut missing_batch = suite();
         missing_batch.cases[0].request.questions.shift_remove("b");
         missing_batch.cases[0].expected.remove("b");
         huncho_core::conformance::save_suite(&missing_batch, &path).unwrap();
-        assert!(qualify_optimizations(&registry, &args).is_err());
+        assert!(qualify_optimizations(&registry, &args, &Default::default()).is_err());
         huncho_core::conformance::save_suite(&suite(), &path).unwrap();
         args.qualification_golden
             .push(format!("qual={}", path.display()));
-        assert!(qualify_optimizations(&registry, &args).is_err());
+        assert!(qualify_optimizations(&registry, &args, &Default::default()).is_err());
         args.qualification_golden = vec![format!("unknown={}", path.display())];
-        assert!(qualify_optimizations(&registry, &args).is_err());
+        assert!(qualify_optimizations(&registry, &args, &Default::default()).is_err());
     }
 
     #[test]
@@ -947,16 +969,16 @@ mod qualification_tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("golden.json");
         args.qualification_golden = vec![format!("qual={}", path.display())];
-        assert!(qualify_optimizations(&registry, &args).is_err());
+        assert!(qualify_optimizations(&registry, &args, &Default::default()).is_err());
         let mut golden = suite();
         huncho_core::conformance::save_suite(&golden, &path).unwrap();
-        qualify_optimizations(&registry, &args).unwrap();
+        qualify_optimizations(&registry, &args, &Default::default()).unwrap();
         golden.cases[0].expected.insert(
             "a".into(),
             BTreeMap::from([("a".into(), 0.8), ("b".into(), 0.2)]),
         );
         huncho_core::conformance::save_suite(&golden, &path).unwrap();
-        assert!(qualify_optimizations(&registry, &args)
+        assert!(qualify_optimizations(&registry, &args, &Default::default())
             .unwrap_err()
             .to_string()
             .contains("qualification failed"));
@@ -968,13 +990,14 @@ mod qualification_tests {
         args.max_batch_tokens = None;
         assert!(qualify_optimizations(
             &registry_with_calibration(0., CalibrationStatus::Pending),
-            &args
+            &args,
+            &Default::default()
         )
         .unwrap_err()
         .to_string()
         .contains("is pending"));
         let registry = registry_with_calibration(0., CalibrationStatus::Refit);
-        assert!(qualify_optimizations(&registry, &args)
+        assert!(qualify_optimizations(&registry, &args, &Default::default())
             .unwrap_err()
             .to_string()
             .contains("requires --qualification-golden"));
@@ -983,17 +1006,17 @@ mod qualification_tests {
         args.qualification_golden = vec![format!("qual={}", path.display())];
         let mut golden = suite();
         huncho_core::conformance::save_suite(&golden, &path).unwrap();
-        assert!(qualify_optimizations(&registry, &args)
+        assert!(qualify_optimizations(&registry, &args, &Default::default())
             .unwrap_err()
             .to_string()
             .contains("observed target labels"));
         golden.cases[0].targets =
             BTreeMap::from([("a".into(), "b".into()), ("b".into(), "b".into())]);
         huncho_core::conformance::save_suite(&golden, &path).unwrap();
-        qualify_optimizations(&registry, &args).unwrap();
+        qualify_optimizations(&registry, &args, &Default::default()).unwrap();
         golden.cases[0].targets.remove("b");
         huncho_core::conformance::save_suite(&golden, &path).unwrap();
-        assert!(qualify_optimizations(&registry, &args).is_err());
+        assert!(qualify_optimizations(&registry, &args, &Default::default()).is_err());
     }
 
     #[test]
@@ -1026,7 +1049,7 @@ mod qualification_tests {
             );
             let mut args = args();
             args.max_batch_tokens = None;
-            assert!(qualify_optimizations(&registry, &args)
+            assert!(qualify_optimizations(&registry, &args, &Default::default())
                 .unwrap_err()
                 .to_string()
                 .contains("requires --qualification-golden"));
@@ -1035,14 +1058,14 @@ mod qualification_tests {
             args.qualification_golden = vec![format!("qual={}", path.display())];
             let mut golden = suite();
             huncho_core::conformance::save_suite(&golden, &path).unwrap();
-            assert!(qualify_optimizations(&registry, &args)
+            assert!(qualify_optimizations(&registry, &args, &Default::default())
                 .unwrap_err()
                 .to_string()
                 .contains("observed target labels"));
             golden.cases[0].targets =
                 BTreeMap::from([("a".into(), "b".into()), ("b".into(), "b".into())]);
             huncho_core::conformance::save_suite(&golden, &path).unwrap();
-            qualify_optimizations(&registry, &args).unwrap();
+            qualify_optimizations(&registry, &args, &Default::default()).unwrap();
             let report = huncho_core::conformance::run_suite(
                 &registry.get("qual").unwrap(),
                 &golden,
@@ -1067,7 +1090,7 @@ mod qualification_tests {
             );
             let mut args = args();
             args.max_batch_tokens = None;
-            assert!(qualify_optimizations(&registry, &args)
+            assert!(qualify_optimizations(&registry, &args, &Default::default())
                 .unwrap_err()
                 .to_string()
                 .contains("requires --qualification-golden"));
@@ -1075,7 +1098,7 @@ mod qualification_tests {
             let path = tmp.path().join("golden.json");
             huncho_core::conformance::save_suite(&suite(), &path).unwrap();
             args.qualification_golden = vec![format!("qual={}", path.display())];
-            qualify_optimizations(&registry, &args).unwrap();
+            qualify_optimizations(&registry, &args, &Default::default()).unwrap();
         }
     }
 
@@ -1103,7 +1126,7 @@ mod qualification_tests {
         huncho_core::conformance::save_suite(&suite(), &path).unwrap();
         let mut args = args();
         args.qualification_golden = vec![format!("qual={}", path.display())];
-        assert!(qualify_optimizations(&registry, &args)
+        assert!(qualify_optimizations(&registry, &args, &Default::default())
             .unwrap_err()
             .to_string()
             .contains("qualification failed"));
