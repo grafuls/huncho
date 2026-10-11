@@ -179,6 +179,20 @@ The [calibration guide](docs/calibration.md) explains fitting, evaluation files,
 and acceptance limits. Numerical-only `conform` and `bench` runs are available
 for analysis, but don't establish that a model is ready to serve.
 
+For local evaluation you can bypass the conformance gate with
+`--allow-unqualified`:
+
+```bash
+huncho serve --model jaredpalmer/kev-4b --allow-unqualified
+```
+
+It skips the startup golden run and serves models that would otherwise be
+refused, including native runtimes. Answers and probabilities are not checked
+against reference behavior, so use it only to try a model or benchmark your
+integration; don't use it in production or to judge calibration. Fitted
+calibration is still required: a pending or refit-required variant is refused
+even with this flag.
+
 ### Local safetensors package
 
 For a prepared Laya package:

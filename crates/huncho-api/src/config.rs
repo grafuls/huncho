@@ -42,6 +42,11 @@ pub struct ServerConfig {
     /// Enable qualified F3 candidate-only projection. Otherwise serving uses
     /// the legacy duplicated-position/full-vocabulary reference readout.
     pub candidate_readout: bool,
+    /// Serve models that have not passed the strict qualification checks for
+    /// their execution profile. This is the `--allow-unqualified` escape
+    /// hatch; it must reach the actual serving `EvalOptions`, not just the
+    /// startup qualification run.
+    pub allow_unqualified: bool,
 }
 
 impl Default for ServerConfig {
@@ -62,6 +67,7 @@ impl Default for ServerConfig {
             batch_max_requests: None,
             batch_wait_ms: 2,
             candidate_readout: false,
+            allow_unqualified: false,
         }
     }
 }

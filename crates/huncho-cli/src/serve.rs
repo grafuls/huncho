@@ -648,6 +648,7 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
         batch_max_requests: args.batch_max_requests,
         batch_wait_ms: args.batch_wait_ms,
         candidate_readout: args.candidate_readout,
+        allow_unqualified: args.allow_unqualified,
     };
 
     let state = AppState::new(config, registry, Metrics::new());

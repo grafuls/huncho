@@ -200,7 +200,7 @@ pub(super) fn load_lazy(args: &ServeArgs) -> anyhow::Result<ModelRegistry> {
         )?;
     }
     anyhow::ensure!(
-        golden_bindings.keys().all(|name| names.contains(*name))
+        golden_bindings.keys().all(|name| names.contains(name))
             && records.records.keys().all(|name| names.contains(name)),
         "qualification binding names an unregistered lazy model"
     );

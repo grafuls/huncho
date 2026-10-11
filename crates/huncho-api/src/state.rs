@@ -87,6 +87,7 @@ impl ModelHandle {
             max_batch_tokens: config.max_batch_tokens.filter(|_| self.supports_batch()),
             max_batch_padding_percent: config.max_batch_padding_percent,
             reference_readout: !config.candidate_readout,
+            allow_unqualified: config.allow_unqualified,
             prepare_all: self.preparation.is_some(),
             cooperative_prefill: config.cooperative_prefill,
             ..Default::default()

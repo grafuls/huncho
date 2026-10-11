@@ -120,6 +120,7 @@ fn state(auth_token: Option<&str>) -> Arc<AppState> {
         batch_max_requests: None,
         batch_wait_ms: 2,
         candidate_readout: false,
+        allow_unqualified: false,
     };
     Arc::new(AppState::new(config, registry, Metrics::new()))
 }

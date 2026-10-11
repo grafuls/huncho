@@ -295,6 +295,47 @@ async fn public_server_rejects_unqualified_eager_models_before_opening_listener(
     assert_eq!(calls.load(Ordering::Relaxed), 0);
 }
 #[tokio::test]
+async fn allow_unqualified_config_serves_native_context_without_qualification() {
+    let (engine, calls, suite) = fixture();
+    let before = calls.load(Ordering::Relaxed);
+    assert_eq!(
+        request(
+            state(
+                engine,
+                ServerConfig {
+                    allow_unqualified: true,
+                    ..Default::default()
+                },
+            ),
+            &suite,
+        )
+        .await,
+        StatusCode::OK
+    );
+    assert_eq!(calls.load(Ordering::Relaxed) - before, 1);
+}
+#[tokio::test]
+async fn allow_unqualified_config_opens_listener_for_unqualified_eager_models() {
+    let (engine, calls, _) = fixture();
+    let state = state(
+        engine,
+        ServerConfig {
+            bind: "127.0.0.1:0".into(),
+            allow_unqualified: true,
+            ..Default::default()
+        },
+    );
+    // With the escape hatch the startup validation passes, `serve` binds the
+    // listener and runs until cancelled: the timeout elapsing (rather than an
+    // immediate InvalidInput error) is the pass signal.
+    assert!(
+        tokio::time::timeout(Duration::from_secs(1), huncho_api::serve(state))
+            .await
+            .is_err()
+    );
+    assert_eq!(calls.load(Ordering::Relaxed), 0);
+}
+#[tokio::test]
 async fn revocation_during_forward_prevents_publishing_the_response() {
     let pause = Arc::new(Pause::default());
     let _release = ReleaseOnDrop(pause.clone());
