@@ -24,8 +24,8 @@ struct CuratedModel {
     runtime: &'static str,
     /// Qualification the package supports out of the box:
     /// - `built-in`: no weights; needs no qualification run.
-    /// - `golden`: package ships an upstream reference golden (numerical tier;
-    ///   add observed labels to reach full qualification).
+    /// - `golden`: package ships a `golden.json` reference suite (numerical
+    ///   tier; add observed labels to reach full qualification).
     /// - `trial`: no package golden; serves in the default trial mode only
     ///   until you supply your own golden.
     package: &'static str,
@@ -44,49 +44,51 @@ const CURATED: &[CuratedModel] = &[
         reference: "jaredpalmer/kev-0.8b",
         family: "F2",
         runtime: "candle",
-        package: "golden",
-        notes: "Curated quick start: CPU FP32 passes the pinned six-case gate. \
-                Serve immediately; add labels for full qualification.",
+        package: "trial",
+        notes: "Curated quick start: smallest real model, ~2 GB download, runs \
+                on CPU FP32. No package golden; serves unqualified in trial \
+                mode until you pin one.",
     },
     CuratedModel {
         reference: "jaredpalmer/kev-4b",
         family: "F2",
         runtime: "candle",
-        package: "golden",
-        notes: "Upstream golden. CPU FP32 baseline gates pass; larger \
-                optimized profiles need their own qualification.",
+        package: "trial",
+        notes: "CPU FP32 needs ~16 GB RAM. No package golden; the retained \
+                CPU FP32 held-out profile currently fails the probability gate.",
     },
     CuratedModel {
         reference: "jaredpalmer/kev-9b",
         family: "F2",
         runtime: "candle",
-        package: "golden",
-        notes: "Upstream golden. CPU FP32 baseline gates pass; larger \
-                optimized profiles need their own qualification.",
+        package: "trial",
+        notes: "CPU FP32 needs ~36 GB RAM. No package golden; serves in trial \
+                mode until you pin one.",
     },
     CuratedModel {
         reference: "Cloudflare/clef",
         family: "F5",
         runtime: "clef",
-        package: "golden",
-        notes: "Ships a golden but starts with pending calibration: fit it \
-                (see docs/clef.md) before serving.",
+        package: "trial",
+        notes: "27B: needs ~54 GB+ of memory (GPU-class). Starts with pending \
+                calibration: fit it (see docs/clef.md) before serving.",
     },
     CuratedModel {
         reference: "Cloudflare/clef-flash",
         family: "F5",
         runtime: "clef",
-        package: "golden",
-        notes: "Ships a golden but starts with pending calibration: fit it \
-                (see docs/clef.md) before serving.",
+        package: "trial",
+        notes: "9B Clef variant. Starts with pending calibration: fit it (see \
+                docs/clef.md) before serving.",
     },
     CuratedModel {
         reference: "convaiinnovations/laya",
         family: "F1",
         runtime: "candle",
         package: "trial",
-        notes: "Format-compatible; no pinned golden in the package. Serves in \
-                trial mode until you supply a golden.",
+        notes: "421M; small and fast on CPU. No package golden; known \
+                divergence on structured JSON states (see \
+                docs/huggingface-models.md).",
     },
     CuratedModel {
         reference: "bespokelabs/Bespoke-Nimble-9B",
@@ -118,8 +120,8 @@ pub fn run(args: ModelsArgs) -> anyhow::Result<()> {
     println!();
     println!("Package column:");
     println!("  built-in  no weights; qualified by construction");
-    println!("  golden    upstream reference golden included (numerical tier;");
-    println!("            add observed labels with `huncho qualify` for full qualification)");
+    println!("  golden    the repo ships a golden.json reference suite (numerical");
+    println!("            tier; add observed labels with `huncho qualify` for full qualification)");
     println!("  trial     no package golden; serves in the default trial mode");
     println!();
     println!("Quick start:");
@@ -140,9 +142,11 @@ mod tests {
     #[test]
     fn curated_table_lists_quick_start_and_documented_repos() {
         assert!(CURATED.iter().any(|model| model.reference == "mock"));
-        assert!(CURATED
-            .iter()
-            .any(|model| model.reference == "jaredpalmer/kev-0.8b" && model.package == "golden"));
+        assert!(
+            CURATED
+                .iter()
+                .any(|model| model.reference == "jaredpalmer/kev-0.8b" && model.package == "trial")
+        );
         assert!(
             CURATED
                 .iter()

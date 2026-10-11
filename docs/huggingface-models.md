@@ -52,19 +52,28 @@ target/release/huncho serve \
   --revision bf75a6a8848ea6960ff2ed108d9ed44c2941174f
 ```
 
-Huncho automatically discovers and checks the reference golden file from the downloaded package; its unlabeled vectors qualify the `numerical` tier, which the default trial mode serves with an honest status. To reach full qualification (required by `--require-qualified`), collect observed outcomes:
+If the repository ships a `golden.json`, Huncho discovers and checks it
+automatically (its unlabeled vectors qualify the `numerical` tier, which the
+default trial mode serves with an honest status). The curated Kev and Clef
+repositories currently ship none, so they serve in the default trial mode
+with an `unqualified` status. To qualify one, build a golden suite (see
+`crates/huncho-backend/examples/gen_golden.rs`), collect observed outcomes,
+and pin it:
 
 ```bash
 huncho qualify --model jaredpalmer/kev-0.8b \
   --revision bf75a6a8848ea6960ff2ed108d9ed44c2941174f \
-  --template labeled-golden.json
+  --golden /path/to/kev-0.8b-golden.json --template labeled-golden.json
 # fill in each case's targets, then:
 huncho serve --model jaredpalmer/kev-0.8b --require-qualified \
   --revision bf75a6a8848ea6960ff2ed108d9ed44c2941174f \
   --qualification-golden 'kev-0.8b=/absolute/path/to/labeled-golden.json'
 ```
 
-If your model package lacks a golden or you need a custom evaluation set, override it with `--qualification-golden 'kev-0.8b=/absolute/path/to/pinned-labeled-golden.json'`. Clef additionally starts with pending calibration. See [its guide](clef.md) for fitting and device settings.
+To override a package's own golden with a custom evaluation set, pass
+`--qualification-golden 'kev-0.8b=/absolute/path/to/pinned-labeled-golden.json'`.
+Clef additionally starts with pending calibration. See [its guide](clef.md)
+for fitting and device settings.
 
 ## Complete compatible candidate inventory
 

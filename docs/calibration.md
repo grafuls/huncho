@@ -96,8 +96,8 @@ question. Unlabeled numerical agreement is diagnostic evidence.
 for native Candle,
 Clef, ONNX and llama.cpp execution, even without optimization flags or a
 refitted entry. The default trial mode serves models without one, with an
-honest `unqualified` status (a failing golden still refuses; packages with
-upstream goldens earn the `numerical` tier automatically). Every replica is
+honest `unqualified` status (a failing golden still refuses; a package whose
+repository ships a `golden.json` earns the `numerical` tier automatically). Every replica is
 checked concurrently before the listener
 opens. `huncho qualify --model <ref>` runs the same gates for one model and
 reports the tier (full or numerical) it earned. The runtime reports

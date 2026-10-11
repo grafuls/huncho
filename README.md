@@ -165,8 +165,9 @@ huncho models
 
 The quickest real-model start is the pinned Kev-0.8B package; see
 [Kev from Hugging Face](#kev-from-hugging-face) below. The first load
-downloads the adapter, tokenizer, pointer head, and pinned base checkpoint,
-then qualifies the package golden automatically.
+downloads the adapter, tokenizer, pointer head, and pinned base checkpoint
+(~2 GB). It serves in trial mode: the upstream repository ships no golden
+file, so its status is `unqualified` until you pin a labeled golden.
 
 ### Serving modes: trial (default) and strict
 
@@ -205,8 +206,8 @@ what's missing.
 Qualification comes in two tiers:
 
 - **numerical** — the golden's reference vectors pass the probability-delta
-  and argmax gates. Packages with upstream goldens (Kev, Clef) reach this tier
-  automatically.
+  and argmax gates. A package whose repository ships a `golden.json` reaches
+  this tier automatically at startup.
 - **full (`qualified`)** — the golden also carries observed outcomes for every
   question, so the ECE/Brier calibration gates run. Strict mode demands this
   tier.
@@ -268,9 +269,9 @@ FP32 on CPU and FP16 on CUDA; `--dtype` overrides it. Use `--revision <commit>`
 to select a specific Hub revision (the curated pin is
 `bf75a6a8848ea6960ff2ed108d9ed44c2941174f`).
 
-Larger Kev packages (`kev-4b`, `kev-9b`) serve the same way. Their upstream
-goldens qualify the numerical tier; strict mode needs observed labels (see
-`huncho qualify`). **Current limit:** the retained Kev-4B CPU FP32 held-out
+Larger Kev packages (`kev-4b`, `kev-9b`) serve the same way. Their
+repositories ship no golden, so strict mode needs your own labeled suite
+(see `huncho qualify`). **Current limit:** the retained Kev-4B CPU FP32 held-out
 profile fails the probability difference check and is not accepted for
 serving. See [Kev support and validation](docs/backends.md#kev-f2-on-candle)
 before choosing an execution profile.
@@ -282,8 +283,8 @@ huncho serve --model Cloudflare/clef
 ```
 
 Clef uses a native Rust/Candle runtime and scores all questions together. It
-needs no Python runtime or model conversion. It ships a golden but starts with
-pending calibration: fit it before serving (see the [Clef guide](docs/clef.md)
+needs no Python runtime or model conversion. It starts with pending
+calibration: fit it before serving (see the [Clef guide](docs/clef.md)
 for memory requirements, fitting steps and current validation limits); a
 pending variant is refused in every mode.
 
