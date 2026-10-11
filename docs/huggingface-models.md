@@ -4,7 +4,7 @@ Checked on 2026-10-09 against Huncho commit `269d8eb8ced54f4ad407f4c117eb8712f7a
 
 The search covered **8,633 public repository metadata records**. Of **597 repositories with recognizable decision-model files**, **383 match the current native loader formats**, **205 have identified incompatibilities**, and **9 could not be verified** without access to their release files. The matches include 10 upstream checkpoints and 373 community repositories. Mirrors and fine-tunes are separate repositories; these counts do not imply that all weights are distinct.
 
-**These are format-compatible candidates, not tested serving approvals.** Compatibility is inferred from pinned release files, configs, tensor headers and head metadata. No full-model inference or new qualification suites were run for this inventory. Huncho requires fresh complete labeled startup qualification for every real serving runtime. Its retained Kev-4B CPU FP32 held-out profile fails the probability-difference gate; do not interpret the Kev entries as an accepted serving profile. See [calibration](calibration.md), [native backend limits](backends.md), and [the retained Kev result](verification/kev-cpu-heldout-20261008/summary.json).
+**These are format-compatible candidates, not tested serving approvals.** Compatibility is inferred from pinned release files, configs, tensor headers and head metadata. No full-model inference or new qualification suites were run for this inventory. Packages shipping a reference golden earn the `numerical` qualification tier automatically in the default trial mode; strict serving (`--require-qualified`) additionally demands observed outcomes. Its retained Kev-4B CPU FP32 held-out profile fails the probability-difference gate; do not interpret the Kev entries as an accepted serving profile. See [calibration](calibration.md), [native backend limits](backends.md), and [the retained Kev result](verification/kev-cpu-heldout-20261008/summary.json).
 
 Subsequent [actual CPU tests on R6525](verification/user-qa-r6525-20261009/README.md) found that Laya Multilingual fails native tokenizer loading, and Laya/typed Laya differ from upstream on structured JSON states. Those runtime results override the initial metadata-based candidate designation. The inventory counts below describe the original static scan.
 
@@ -52,7 +52,19 @@ target/release/huncho serve \
   --revision bf75a6a8848ea6960ff2ed108d9ed44c2941174f
 ```
 
-Huncho automatically discovers and checks the reference golden file from the downloaded package. If your model package lacks one or you need to supply a custom evaluation set, you can override it with `--qualification-golden 'kev-0.8b=/absolute/path/to/pinned-labeled-golden.json'`. Clef additionally starts with pending calibration. See [its guide](clef.md) for fitting and device settings.
+Huncho automatically discovers and checks the reference golden file from the downloaded package; its unlabeled vectors qualify the `numerical` tier, which the default trial mode serves with an honest status. To reach full qualification (required by `--require-qualified`), collect observed outcomes:
+
+```bash
+huncho qualify --model jaredpalmer/kev-0.8b \
+  --revision bf75a6a8848ea6960ff2ed108d9ed44c2941174f \
+  --template labeled-golden.json
+# fill in each case's targets, then:
+huncho serve --model jaredpalmer/kev-0.8b --require-qualified \
+  --revision bf75a6a8848ea6960ff2ed108d9ed44c2941174f \
+  --qualification-golden 'kev-0.8b=/absolute/path/to/labeled-golden.json'
+```
+
+If your model package lacks a golden or you need a custom evaluation set, override it with `--qualification-golden 'kev-0.8b=/absolute/path/to/pinned-labeled-golden.json'`. Clef additionally starts with pending calibration. See [its guide](clef.md) for fitting and device settings.
 
 ## Complete compatible candidate inventory
 

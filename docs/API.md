@@ -9,8 +9,8 @@ unmodified TypeSafe Python SDK works against `huncho` with only a base-URL chang
 | Method | Path | Description |
 |---|---|---|
 | `POST` | `/v1/systemone` | Evaluate a state against typed questions. |
-| `GET`  | `/health` | Liveness and version. |
-| `GET`  | `/v1/models` | List registered models and their capabilities. |
+| `GET`  | `/health` | Liveness, version, and per-model qualification counts. |
+| `GET`  | `/v1/models` | List registered models, their capabilities, and qualification tier. |
 | `GET`  | `/metrics` | Prometheus metrics. |
 
 All responses are JSON.
@@ -122,13 +122,42 @@ When enabled, the response gains an `extensions` object:
   "calibration_status": "fit",
   "confidence_definition": "peak",
   "prompt_contract_hash": "mock-hash",
+  "qualification": "numerical",
   "raw_logits": { "department": [0.6279, 0.6416] }
 }
 ```
 
 `raw_logits` are the per-candidate, pre-softmax (pre-temperature) logits.
 `confidence_definition` reports which confidence formula was applied (peak,
-entropy, or a custom definition).
+entropy, or a custom definition). `qualification` reports the serving
+tier installed for this model's exact execution profile — `qualified`
+(fresh complete labeled qualification), `numerical` (probability/argmax gates
+passed, observed outcomes not yet collected), or `unqualified` (no fresh
+qualification; the server is running in trial mode). See `huncho qualify`
+and [serving modes](../README.md#serving-modes-trial-default-and-strict).
+
+## `/health` and `/v1/models`
+
+`/health` reports liveness plus a qualification readout of the loaded models:
+
+```json
+{
+  "status": "ok",
+  "version": "0.1.0",
+  "uptime_secs": 3,
+  "models": 1,
+  "strict_qualification": false,
+  "qualification": { "qualified": 0, "numerical": 1, "unqualified": 0, "unfitted": 0 }
+}
+```
+
+`strict_qualification` is `true` when the server runs with
+`--require-qualified`. The status stays `"ok"` in trial mode; unqualified
+models are a signal, not an outage.
+
+`/v1/models` adds a per-model `qualification` field with the same tier
+strings. Models with lazy residency that have not been loaded yet report
+`"unknown"`.
 
 ## Auth (API-03)
 

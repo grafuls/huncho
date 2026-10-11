@@ -36,8 +36,11 @@ cache per question, and prefill each branch.
 ## Available backends
 
 Every real serving runtime requires a pinned complete observed-label startup
-suite via `--qualification-golden MODEL=PATH`, including unoptimized packages
-marked `fit`. Actual implementations report `native_execution`; temperature
+suite via `--qualification-golden MODEL=PATH` in strict mode
+(`huncho serve --require-qualified`), including unoptimized packages
+marked `fit`. The default trial mode serves models without one, with an
+honest `unqualified` status; a golden that fails still refuses in every mode.
+Actual implementations report `native_execution`; temperature
 fallback and unsigned receipts cannot bypass fresh checks. Explicit offline
 mock demos retain their path. Native backend/dtype capability identity must
 match the engine's calibration key. The core production entry points and
@@ -310,7 +313,13 @@ huncho convert --backend candle \
   --source ./laya-checkout \
   --out ./my-laya
 
-huncho serve --manifest ./my-laya/huncho-model.json \
+huncho serve --manifest ./my-laya/huncho-model.json
+```
+
+Strict serving pins a labeled golden explicitly:
+
+```bash
+huncho serve --manifest ./my-laya/huncho-model.json --require-qualified \
   --qualification-golden 'MODEL_NAME=/path/to/pinned-labeled-golden.json'
 ```
 
@@ -393,7 +402,15 @@ selected independently, so one server can load packages using different
 runtimes without per-model flags:
 
 ```bash
+huncho serve --model convaiinnovations/laya --model Cloudflare/clef
+```
+
+Trial mode serves both (Clef reports `unfitted` until its calibration is
+fit, which is refused in every mode). For strict serving pin labeled goldens:
+
+```bash
 huncho serve --model convaiinnovations/laya --model Cloudflare/clef \
+  --require-qualified \
   --qualification-golden 'LAYA_MODEL_NAME=/path/to/laya-labeled-golden.json' \
   --qualification-golden 'CLEF_MODEL_NAME=/path/to/clef-labeled-golden.json'
 ```

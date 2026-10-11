@@ -92,16 +92,22 @@ pass those unchanged gates; a failed variant remains rejected. Fit and final
 evaluation inputs must be separate, and evaluation labels must cover every
 question. Unlabeled numerical agreement is diagnostic evidence.
 
-`serve --qualification-golden MODEL=PATH` is required for native Candle,
+`serve --require-qualified --qualification-golden MODEL=PATH` pins the suite
+for native Candle,
 Clef, ONNX and llama.cpp execution, even without optimization flags or a
-refitted entry. Every replica is checked concurrently before the listener
-opens. The runtime reports `native_execution` in its capabilities/receipts;
+refitted entry. The default trial mode serves models without one, with an
+honest `unqualified` status (a failing golden still refuses; packages with
+upstream goldens earn the `numerical` tier automatically). Every replica is
+checked concurrently before the listener
+opens. `huncho qualify --model <ref>` runs the same gates for one model and
+reports the tier (full or numerical) it earned. The runtime reports
+`native_execution` in its capabilities/receipts;
 the explicit offline mock retains its demo path. Source `fit` metadata, a
 `default` fallback temperature or a retained unsigned receipt cannot replace
 fresh outcome checks. Quantized variants additionally require an exact
 backend:dtype `refit` entry. Diagnostic library inference, `bench` and
 numerical-only `conform` remain available for analysis and do not authorize
-serving.
+strict serving.
 
 ## Library serving qualification
 
@@ -124,9 +130,12 @@ its shared generation so delayed diagnostic plans cannot repopulate active
 entries. Pure unchanged offline mock demos keep their existing path.
 
 The HTTP server checks eager contexts before opening its listener and checks
-all actual replicas before admission and after inference/coalescing. Lazy
-factories cannot bypass the request boundary. Unqualified profiles return 503
+all actual replicas before admission and after inference/coalescing. In the
+default trial mode, unqualified profiles serve with an honest status (log
+warning, `/health` and `/v1/models` readout, `extensions.qualification`);
+under `--require-qualified` they return 503
 with `model_unqualified`, including when an exact response is retained.
+Lazy residency always requires a fresh labeled golden, in either mode.
 Programmatic HTTP applications use each actual handle's `serving_options` and
 `serving_cross_request_max_requests` after creating `AppState`, then qualify
 every `replica_engines()` context before calling `serve` or exposing `router`.

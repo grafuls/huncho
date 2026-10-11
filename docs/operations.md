@@ -111,10 +111,26 @@ Serve one or more model manifests:
 
 ```bash
 huncho serve --manifest ./models/laya/huncho-model.json \
-  --manifest ./models/kev/huncho-model.json \
+  --manifest ./models/kev/huncho-model.json
+```
+
+By default this serves in **trial mode**: models without a fresh labeled
+qualification still serve, and their honest status (`qualified`, `numerical`,
+`unqualified`) is logged at startup and exposed in `/health`, `/v1/models` and
+response extensions. To require fresh complete labeled qualification for every
+model, add `--require-qualified` (or `HUNCHO_REQUIRE_QUALIFIED=1`) and pin
+labeled goldens:
+
+```bash
+huncho serve --manifest ./models/laya/huncho-model.json \
+  --manifest ./models/kev/huncho-model.json --require-qualified \
   --qualification-golden 'LAYA_MODEL_NAME=/path/to/laya-labeled-golden.json' \
   --qualification-golden 'KEV_MODEL_NAME=/path/to/kev-labeled-golden.json'
 ```
+
+`huncho qualify --model <ref>` runs the same gates for one model ahead of
+time and reports the tier it earned; `huncho models` lists the curated
+quick-start models.
 
 Huncho chooses a compatible backend for each model from its metadata and the
 runtimes included in the build. `--backend` is an optional override for all
@@ -132,9 +148,13 @@ Serve a model package by Hugging Face repo id. The manifest
 cache, and all artifacts are pinned to the exact resolved commit:
 
 ```bash
-huncho serve --model convaiinnovations/laya --bind 127.0.0.1:8080 \
-  --qualification-golden 'MODEL_NAME=/path/to/pinned-labeled-golden.json'
+huncho serve --model convaiinnovations/laya --bind 127.0.0.1:8080
 ```
+
+Trial mode serves it with an `unqualified` status (the package ships no
+golden); pin a labeled golden with `--qualification-golden
+'MODEL_NAME=/path/to/pinned-labeled-golden.json'` (required under
+`--require-qualified`).
 
 While the repo is being resolved, a per-file progress bar is drawn to stderr
 for every artifact fetched (manifest, weights, head, tokenizer, and golden
@@ -154,8 +174,7 @@ You can also reference a local package path or a manifest file through
 `--model`; it is resolved without any network access:
 
 ```bash
-huncho serve --model ./models/laya \
-  --qualification-golden 'MODEL_NAME=/path/to/pinned-labeled-golden.json'
+huncho serve --model ./models/laya
 ```
 
 > Requires building with `--features hf`. A local package is resolved whether or
@@ -184,7 +203,8 @@ huncho serve --model ./models/laya \
 | `--prefix-cache` | Opt-in request-local Kev prefix fan-out; requires qualification for the loaded device/precision. |
 | `--max-batch-tokens` | Opt-in exact-length question batches. CPU Kev can combine these with prefix reuse, charging complete contexts against the workspace budget. |
 | `--candidate-readout` | Opt-in F3 candidate-only projection, after qualification. |
-| `--qualification-golden MODEL=PATH` | Independent pinned labeled suite for every real runtime; checked before the listener opens. Repeatable. |
+| `--require-qualified` | Strict mode: refuse to serve any model without fresh complete labeled qualification; default is trial mode (honest status per model). Also `HUNCHO_REQUIRE_QUALIFIED`. |
+| `--qualification-golden MODEL=PATH` | Pinned labeled suite for a model, checked before the listener opens; repeatable. In strict mode this (or the package's own golden) is required; in trial mode a missing golden serves `unqualified`, while a failing golden still refuses. |
 | `--cache-dir` | Model cache directory; also seeds HF resolution (OPS-04). |
 
 Prefix reuse, native batching, upfront preparation and F3 candidate-only projection are off by default

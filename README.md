@@ -154,51 +154,101 @@ below. Check the setup guide for your model:
 The optional llama.cpp and vLLM backends require the installation steps in
 their guides.
 
-### Before serving: check the model's probabilities
+### Choose a model
+
+`huncho models` lists the curated shortlist — which models ship reference
+goldens, which serve immediately, and which need calibration first:
+
+```bash
+huncho models
+```
+
+The quickest real-model start is the pinned Kev-0.8B package; see
+[Kev from Hugging Face](#kev-from-hugging-face) below. The first load
+downloads the adapter, tokenizer, pointer head, and pinned base checkpoint,
+then qualifies the package golden automatically.
+
+### Serving modes: trial (default) and strict
 
 With a calibrated model, events assigned an 80% probability should happen about
 80% of the time. Huncho applies the model's calibration settings and checks
 that the serving runtime preserves its reference behavior.
 
-Every real serving runtime must pass fresh startup conformance checks. Supply
-a pinned evaluation file containing reference probabilities and observed
-outcomes for every question:
+By default Huncho serves in **trial mode**. A model whose package ships a
+golden file is qualified automatically at startup; models without one still
+serve, with the gap stated plainly rather than hidden:
+
+- every model's status — `qualified`, `numerical`, `unqualified`, or
+  `unfitted` — appears in startup logs, `/health`, `/v1/models`, and (with
+  `x-huncho-extensions`) each response;
+- a model with no fresh qualification logs a loud `UNQUALIFIED` warning: its
+  probabilities are unverified;
+- a golden that *fails* still refuses to start, in every mode, and pending or
+  refit-required calibration is refused in every mode. Trial mode only skips
+  qualification that was never supplied — it never waves through a model that
+  was checked and rejected.
+
+For production, opt into **strict mode**:
+
+```bash
+huncho serve --require-qualified
+```
+
+Strict mode refuses to start unless every model holds a fresh complete labeled
+qualification for its exact execution profile (backend, dtype, device,
+options). A model that only passed the numerical gates (probability fidelity
+without observed outcomes) is also refused, with a message saying exactly
+what's missing.
+
+### Qualification tiers and `huncho qualify`
+
+Qualification comes in two tiers:
+
+- **numerical** — the golden's reference vectors pass the probability-delta
+  and argmax gates. Packages with upstream goldens (Kev, Clef) reach this tier
+  automatically.
+- **full (`qualified`)** — the golden also carries observed outcomes for every
+  question, so the ECE/Brier calibration gates run. Strict mode demands this
+  tier.
+
+`huncho qualify` runs the gates for one model and reports the tier it earned:
+
+```bash
+huncho qualify --model jaredpalmer/kev-4b
+```
+
+If the golden has no observed labels, add `--template labeled-golden.json` to
+get a fill-in file, record what actually happened for each case, and re-run —
+that upgrades the model to full qualification. Keep this evaluation set
+separate from the data used to fit calibration.
+
+In strict mode (or to override a package golden), pin the suite explicitly at
+serve time:
 
 ```text
 --qualification-golden 'MODEL_NAME=/path/to/pinned-labeled-golden.json'
 ```
 
-Replace `MODEL_NAME` with the name in the model manifest. Keep this evaluation
-set separate from the data used to fit calibration. Huncho checks probability
-differences, agreement on the chosen answer, and calibration error drift; it
-refuses to serve a model that fails. A manifest marked `fit` doesn't skip these
+Huncho checks probability differences, agreement on the chosen answer, and
+calibration error drift. A manifest marked `fit` doesn't skip these
 checks. Some batching and prefix optimizations also require comparisons
-against independent forward passes.
-
-The [calibration guide](docs/calibration.md) explains fitting, evaluation files,
-and acceptance limits. Numerical-only `conform` and `bench` runs are available
-for analysis, but don't establish that a model is ready to serve.
-
-For local evaluation you can bypass the conformance gate with
-`--allow-unqualified`:
-
-```bash
-huncho serve --model jaredpalmer/kev-4b --allow-unqualified
-```
-
-It skips the startup golden run and serves models that would otherwise be
-refused, including native runtimes. Answers and probabilities are not checked
-against reference behavior, so use it only to try a model or benchmark your
-integration; don't use it in production or to judge calibration. Fitted
-calibration is still required: a pending or refit-required variant is refused
-even with this flag.
+against independent forward passes. The [calibration
+guide](docs/calibration.md) explains fitting, evaluation files, and acceptance
+limits. Numerical-only `conform` and `bench` runs are available for analysis,
+but don't establish that a model is ready for strict serving.
 
 ### Local safetensors package
 
 For a prepared Laya package:
 
 ```bash
-huncho serve --manifest my-laya/huncho-model.json \
+huncho serve --manifest my-laya/huncho-model.json
+```
+
+It serves in trial mode. To serve it strictly, pin a labeled golden:
+
+```bash
+huncho serve --manifest my-laya/huncho-model.json --require-qualified \
   --qualification-golden 'MODEL_NAME=/path/to/pinned-labeled-golden.json'
 ```
 
@@ -206,33 +256,36 @@ If you have a Laya checkpoint checkout, follow the
 [local checkpoint conversion guide](docs/backends.md#assembling-a-package-from-a-local-checkpoint)
 to prepare the package with `huncho convert`.
 
-### Kev-4B from Hugging Face
+### Kev from Hugging Face
 
 ```bash
-huncho serve --model jaredpalmer/kev-4b \
-  --qualification-golden 'kev-4b=/path/to/pinned-labeled-golden.json'
+huncho serve --model jaredpalmer/kev-0.8b
 ```
 
 The first load downloads the adapter, tokenizer, pointer head, and pinned base
-checkpoint. Use `"model": "kev-4b"` in requests. The native path defaults to
+checkpoint. Use `"model": "kev-0.8b"` in requests. The native path defaults to
 FP32 on CPU and FP16 on CUDA; `--dtype` overrides it. Use `--revision <commit>`
-to select a specific Hub revision.
+to select a specific Hub revision (the curated pin is
+`bf75a6a8848ea6960ff2ed108d9ed44c2941174f`).
 
-**Current limit:** the retained CPU FP32 held-out profile fails the probability
-difference check and is not accepted for serving. See
-[Kev support and validation](docs/backends.md#kev-f2-on-candle) before choosing
-an execution profile.
+Larger Kev packages (`kev-4b`, `kev-9b`) serve the same way. Their upstream
+goldens qualify the numerical tier; strict mode needs observed labels (see
+`huncho qualify`). **Current limit:** the retained Kev-4B CPU FP32 held-out
+profile fails the probability difference check and is not accepted for
+serving. See [Kev support and validation](docs/backends.md#kev-f2-on-candle)
+before choosing an execution profile.
 
 ### Cloudflare Clef
 
 ```bash
-huncho serve --model Cloudflare/clef \
-  --qualification-golden 'MODEL_NAME=/path/to/pinned-labeled-golden.json'
+huncho serve --model Cloudflare/clef
 ```
 
 Clef uses a native Rust/Candle runtime and scores all questions together. It
-needs no Python runtime or model conversion. Read the
-[Clef guide](docs/clef.md) for memory requirements and current validation limits.
+needs no Python runtime or model conversion. It ships a golden but starts with
+pending calibration: fit it before serving (see the [Clef guide](docs/clef.md)
+for memory requirements, fitting steps and current validation limits); a
+pending variant is refused in every mode.
 
 Huncho selects the backend from each model's package. Use `--backend` to
 override that choice; if the required runtime is missing, the CLI tells you

@@ -127,7 +127,11 @@ Each entry has:
 
 Pointer to golden conformance vectors. `family_impl` names the reference
 implementation, `revision` pins it, and `golden` is the relative path to the
-golden suite that `huncho conform` consumes.
+golden suite that `huncho conform`, `huncho qualify` and serve-time startup
+checks consume. A suite without observed `targets` qualifies only the
+numerical tier (probability-delta and argmax gates); strict serving
+(`--require-qualified`) additionally demands labeled targets. Use
+`huncho qualify --template` to write a fill-in file for collecting them.
 
 ### `capabilities`
 
