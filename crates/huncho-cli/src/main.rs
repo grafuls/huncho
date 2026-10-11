@@ -9,8 +9,10 @@ mod convert;
 #[cfg(feature = "llamacpp")]
 mod export_llamacpp;
 mod load;
+mod models;
 #[cfg(feature = "qualification")]
 mod qualification;
+mod qualify;
 #[cfg(feature = "quantization")]
 mod quantize;
 mod serve;
@@ -35,6 +37,10 @@ enum Command {
     Convert(convert::ConvertArgs),
     Calibrate(calibrate::CalibrateArgs),
     Conform(conform::ConformArgs),
+    Models(models::ModelsArgs),
+    /// Qualify one model for serving: run its golden gates and report the
+    /// installed tier (full or numerical).
+    Qualify(qualify::QualifyArgs),
     Bench(bench::BenchArgs),
     #[cfg(feature = "quantization")]
     /// Build a new CPU Kev packed-weight package with pending calibration.
@@ -69,6 +75,8 @@ async fn main() -> anyhow::Result<()> {
         Command::Convert(a) => convert::run(a),
         Command::Calibrate(a) => calibrate::run(a),
         Command::Conform(a) => conform::run(a),
+        Command::Models(a) => models::run(a),
+        Command::Qualify(a) => qualify::run(a),
         Command::Bench(a) => bench::run(a),
         #[cfg(feature = "quantization")]
         Command::Quantize(a) => quantize::run(a),
