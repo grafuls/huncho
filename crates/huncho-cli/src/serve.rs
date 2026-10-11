@@ -165,10 +165,15 @@ pub struct ServeArgs {
     #[arg(long, requires = "lazy")]
     pub preload: Vec<String>,
 
-    /// Allow the engine to serve requests even if it has not passed the strict
-    /// qualification checks for this execution profile.
-    #[arg(long, default_value_t = false)]
-    pub allow_unqualified: bool,
+    /// Strict serving mode. By default huncho serves in trial mode: models
+    /// without fresh labeled qualification still serve, with their honest
+    /// qualification status (`unqualified`/`numerical`) surfaced in /health,
+    /// /v1/models, startup logs and response extensions. With this flag,
+    /// serving refuses to start for any model lacking a fresh complete
+    /// labeled qualification for its exact execution profile. Pending or
+    /// unfitted calibration refuses in every mode.
+    #[arg(long, default_value_t = false, env = "HUNCHO_REQUIRE_QUALIFIED")]
+    pub require_qualified: bool,
 }
 
 fn validate_scheduling(args: &ServeArgs) -> anyhow::Result<()> {
@@ -241,7 +246,10 @@ fn load_models(args: &ServeArgs) -> anyhow::Result<ModelRegistry> {
         let engine = engine_from_resolved_manifest(path, backend, args.dtype.as_deref())?;
         let name = engine.manifest().name.clone();
         if let Some(reference) = &engine.manifest().reference {
-            let golden_path = path.parent().unwrap_or(std::path::Path::new("")).join(&reference.golden);
+            let golden_path = path
+                .parent()
+                .unwrap_or(std::path::Path::new(""))
+                .join(&reference.golden);
             if golden_path.exists() {
                 auto_goldens.insert(name.clone(), golden_path);
             }
@@ -283,7 +291,10 @@ fn load_models(args: &ServeArgs) -> anyhow::Result<ModelRegistry> {
         };
         #[cfg(feature = "qualification")]
         let (engine, m_path) = if let Some(path) = recorded_path {
-            (records.load_engine(&path, backend, args.dtype.as_deref())?, path)
+            (
+                records.load_engine(&path, backend, args.dtype.as_deref())?,
+                path,
+            )
         } else {
             engine_from_ref(
                 model,
@@ -305,7 +316,10 @@ fn load_models(args: &ServeArgs) -> anyhow::Result<ModelRegistry> {
         )?;
         let name = engine.manifest().name.clone();
         if let Some(reference) = &engine.manifest().reference {
-            let golden_path = m_path.parent().unwrap_or(std::path::Path::new("")).join(&reference.golden);
+            let golden_path = m_path
+                .parent()
+                .unwrap_or(std::path::Path::new(""))
+                .join(&reference.golden);
             if golden_path.exists() {
                 auto_goldens.insert(name.clone(), golden_path);
             }
@@ -343,7 +357,7 @@ fn evaluation_options(
         max_batch_tokens: args.max_batch_tokens.filter(|_| engine.supports_batch()),
         max_batch_padding_percent: args.max_batch_padding_percent,
         reference_readout: !args.candidate_readout,
-        allow_unqualified: args.allow_unqualified,
+        allow_unqualified: !args.require_qualified,
         prepare_all: (args.cooperative_prefill
             || args.max_prepared_per_model > 0
             || (args.batch_max_requests.is_some() && engine.supports_batch()))
@@ -503,7 +517,10 @@ fn qualify_optimizations(
                 "vLLM serving for `{name}` requires an explicit fitted/refitted vllm:bf16 calibration entry"
             );
         }
-        if engine.execution_metadata().contains_key("onnx_integrated_head") {
+        if engine
+            .execution_metadata()
+            .contains_key("onnx_integrated_head")
+        {
             anyhow::ensure!(engine.manifest().calibration.entries.get("onnx:fp32")
                 .is_some_and(|entry| entry.status != CalibrationStatus::Pending),
                 "integrated ONNX serving for `{name}` requires an explicit fitted/refitted onnx:fp32 calibration entry");
@@ -524,8 +541,10 @@ fn qualify_optimizations(
         let replicas = engine.replica_engines();
         let replicated = replicas.len() > 1;
         let opts = evaluation_options(engine, args);
-        anyhow::ensure!(!(args.prefix_cache && args.max_batch_tokens.is_some()) || engine.supports_fork_batch(),
-            "cached-branch serving requires native CPU Kev support for every model");
+        anyhow::ensure!(
+            !(args.prefix_cache && args.max_batch_tokens.is_some()) || engine.supports_fork_batch(),
+            "cached-branch serving requires native CPU Kev support for every model"
+        );
         anyhow::ensure!(
             engine.family() != Family::F5
                 || opts.max_batch_tokens.is_none()
@@ -538,8 +557,10 @@ fn qualify_optimizations(
             "cooperative prefill requires CPU Kev with HUNCHO_PREFILL_CHUNK_TOKENS configured for every model");
         anyhow::ensure!(!engine.execution_metadata().contains_key("prefill_chunk_tokens") || opts.prefix_cache,
             "chunked prefill serving for `{name}` requires --prefix-cache and an actual split-prefix qualification");
-        anyhow::ensure!(!engine.execution_metadata().contains_key("kv_storage") || opts.prefix_cache,
-            "paged KV serving for `{name}` requires --prefix-cache and actual fork qualification");
+        anyhow::ensure!(
+            !engine.execution_metadata().contains_key("kv_storage") || opts.prefix_cache,
+            "paged KV serving for `{name}` requires --prefix-cache and actual fork qualification"
+        );
         let readout_storage_profile = [
             "onnx_readout",
             "onnx_output_buffer_bytes",
@@ -560,31 +581,56 @@ fn qualify_optimizations(
         {
             continue;
         }
-        if args.allow_unqualified && !paths.contains_key(name.as_str()) {
-            tracing::warn!("skipping qualification for `{}` (--allow-unqualified)", name);
-            continue;
-        }
-        let path=paths.get(name.as_str()).ok_or_else(||anyhow::anyhow!("serving a native, refitted or optimized variant of `{name}` requires --qualification-golden {name}=/path/to/pinned-golden.json (not found in the model package)"))?;
-        let suite = load_suite(path)?;
-        anyhow::ensure!(!(refit || outcome_profile || replicated) || suite.cases.iter().any(|case| !case.targets.is_empty()),
-            "native, refitted or changed-profile serving for `{name}` requires held-out golden vectors with observed target labels");
-        let evaluate = |engine: &huncho_core::engine::Engine| -> huncho_core::Result<_> {
-            if suite.cases.iter().any(|case| !case.targets.is_empty()) {
-                return engine.qualify_for_serving(
-                    &suite,
-                    &opts,
-                    args.batch_max_requests
-                        .filter(|_| engine.supports_batch())
-                        .map(usize::from),
+        if !paths.contains_key(name.as_str()) {
+            if !args.require_qualified {
+                tracing::warn!(
+                    model = name.as_str(),
+                    "no pinned golden supplied: `{}` serves UNQUALIFIED in trial mode; \
+                     pass --require-qualified for production strictness, or qualify it with \
+                     `huncho qualify --model {}`",
+                    name,
+                    name
                 );
+                continue;
             }
-            if let Some(rows) = args.batch_max_requests.filter(|_| engine.supports_batch()) {
+            anyhow::bail!(
+                "serving a native, refitted or optimized variant of `{name}` requires --qualification-golden {name}=/path/to/pinned-golden.json (not found in the model package)"
+            );
+        }
+        let path = paths
+            .get(name.as_str())
+            .expect("golden path presence checked above");
+        let suite = load_suite(path)?;
+        let needs_outcomes = refit || outcome_profile || replicated;
+        let labeled = suite.cases.iter().any(|case| !case.targets.is_empty());
+        anyhow::ensure!(
+            !needs_outcomes || labeled || !args.require_qualified,
+            "native, refitted or changed-profile serving for `{name}` requires held-out golden vectors with observed target labels"
+        );
+        let evaluate = |engine: &huncho_core::engine::Engine| -> huncho_core::Result<_> {
+            let cross = args
+                .batch_max_requests
+                .filter(|_| engine.supports_batch())
+                .map(usize::from);
+            if labeled {
+                return engine.qualify_for_serving(&suite, &opts, cross);
+            }
+            if needs_outcomes {
+                // Unlabeled golden in trial mode: probability/argmax gates
+                // still run and install a `numerical` profile (no ECE/Brier
+                // outcome gates). Strict mode bailed above.
+                return engine.qualify_for_serving_numerical(&suite, &opts, cross);
+            }
+            // Readout-only profiles (F3 candidate projection, ONNX readout
+            // storage, prepare/collation paths) run diagnostics; the engine
+            // serving gate does not apply to them.
+            if let Some(rows) = cross {
                 run_suite_with_cross_request_batches(
                     engine,
                     &suite,
                     &ConformanceThresholds::default(),
                     &opts,
-                    usize::from(rows),
+                    rows,
                 )
             } else {
                 run_suite_with_options(engine, &suite, &ConformanceThresholds::default(), &opts)
@@ -648,7 +694,7 @@ pub async fn run(args: ServeArgs) -> anyhow::Result<()> {
         batch_max_requests: args.batch_max_requests,
         batch_wait_ms: args.batch_wait_ms,
         candidate_readout: args.candidate_readout,
-        allow_unqualified: args.allow_unqualified,
+        require_qualified: args.require_qualified,
     };
 
     let state = AppState::new(config, registry, Metrics::new());
@@ -784,6 +830,22 @@ mod qualification_tests {
         registry
     }
     fn args() -> ServeArgs {
+        let crate::Command::Serve(args) = crate::Cli::try_parse_from([
+            "huncho",
+            "serve",
+            "--max-batch-tokens",
+            "1024",
+            "--require-qualified",
+        ])
+        .unwrap()
+        .command
+        else {
+            panic!("serve")
+        };
+        args
+    }
+    /// Default serving mode: no `--require-qualified` flag.
+    fn trial_args() -> ServeArgs {
         let crate::Command::Serve(args) =
             crate::Cli::try_parse_from(["huncho", "serve", "--max-batch-tokens", "1024"])
                 .unwrap()
@@ -1141,6 +1203,105 @@ mod qualification_tests {
             .unwrap_err()
             .to_string()
             .contains("qualification failed"));
+    }
+
+    /// Registry whose engine needs fresh labeled qualification (native
+    /// execution profile), mirroring a refitted/optimized variant.
+    fn native_registry(drift: f32) -> ModelRegistry {
+        registry_with_execution_metadata(
+            drift,
+            CalibrationStatus::Fit,
+            BTreeMap::from([(
+                "native_execution".into(),
+                "synthetic-trial-fixture-v1".into(),
+            )]),
+        )
+    }
+
+    #[test]
+    fn trial_mode_serves_unqualified_models_and_reports_their_status() {
+        // Default (no --require-qualified): a native model with no pinned
+        // golden skips qualification instead of refusing to serve, and its
+        // engines report the unqualified status honestly.
+        let strict = args();
+        let mut args = trial_args();
+        args.max_batch_tokens = None;
+        let models = native_registry(0.);
+        qualify_optimizations(&models, &args, &Default::default()).unwrap();
+        let engine = models.get("qual").unwrap();
+        let options = evaluation_options(&engine, &args);
+        assert_eq!(
+            engine.serving_qualification_status(&options, None),
+            huncho_core::engine::QualificationStatus::Unqualified
+        );
+        // Trial evaluation options carry the bypass; strict options refuse.
+        assert!(options.allow_unqualified);
+        let strict_options = evaluation_options(&engine, &strict);
+        assert!(!strict_options.allow_unqualified);
+    }
+
+    #[test]
+    fn trial_mode_qualifies_unlabeled_goldens_numerically() {
+        // Default mode with an unlabeled golden on a native model: the
+        // probability/argmax gates still run and install a numerical
+        // profile; outcome (ECE/Brier) gates stay unrun. Strict mode still
+        // refuses the same unlabeled suite.
+        let mut strict_args = args();
+        let mut args = trial_args();
+        args.max_batch_tokens = None;
+        let models = native_registry(0.);
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("golden.json");
+        huncho_core::conformance::save_suite(&suite(), &path).unwrap();
+        args.qualification_golden = vec![format!("qual={}", path.display())];
+        qualify_optimizations(&models, &args, &Default::default()).unwrap();
+        let engine = models.get("qual").unwrap();
+        let options = evaluation_options(&engine, &args);
+        assert_eq!(
+            engine.serving_qualification_status(&options, None),
+            huncho_core::engine::QualificationStatus::Numerical
+        );
+        // The strict token still refuses the numerical profile.
+        assert!(engine
+            .serving_qualification_token(
+                &EvalOptions {
+                    allow_unqualified: false,
+                    ..options.clone()
+                },
+                None
+            )
+            .is_err());
+        strict_args.max_batch_tokens = None;
+        strict_args.qualification_golden = vec![format!("qual={}", path.display())];
+        let strict_models = native_registry(0.);
+        assert!(
+            qualify_optimizations(&strict_models, &strict_args, &Default::default())
+                .unwrap_err()
+                .to_string()
+                .contains("observed target labels")
+        );
+    }
+
+    #[test]
+    fn trial_mode_still_refuses_failing_goldens() {
+        // A golden that fails cannot be waved through by trial mode.
+        let mut args = trial_args();
+        args.max_batch_tokens = None;
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("golden.json");
+        let mut golden = suite();
+        golden.cases[0].expected.insert(
+            "a".into(),
+            BTreeMap::from([("a".into(), 0.8), ("b".into(), 0.2)]),
+        );
+        huncho_core::conformance::save_suite(&golden, &path).unwrap();
+        args.qualification_golden = vec![format!("qual={}", path.display())];
+        assert!(
+            qualify_optimizations(&native_registry(0.), &args, &Default::default())
+                .unwrap_err()
+                .to_string()
+                .contains("qualification failed")
+        );
     }
 }
 

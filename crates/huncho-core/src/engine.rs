@@ -25,7 +25,7 @@ mod batching;
 mod external_scores;
 mod fork_batch;
 mod qualification;
-pub use qualification::ServingQualificationToken;
+pub use qualification::{QualificationStatus, ServingQualificationToken};
 mod resumable;
 use batching::padded_groups;
 #[cfg(feature = "external-scores")]
@@ -63,8 +63,10 @@ pub struct EvalOptions {
     /// CPU Kev only: release execution capacity after each prefix chunk and
     /// question. Requires prefix reuse and a configured backend chunk size.
     pub cooperative_prefill: bool,
-    /// Allow the engine to serve requests even if it has not passed the strict
-    /// qualification checks for this execution profile.
+    /// Trial-serving switch (library default `false` = strict). When `true`,
+    /// the engine serves execution profiles that passed no fresh labeled
+    /// qualification. The CLI's default serving mode sets this from
+    /// `!require_qualified`. Pending calibration still refuses in both modes.
     pub allow_unqualified: bool,
 }
 
@@ -678,7 +680,7 @@ impl Engine {
                 let mut response =
                     SystemOneResponse::new(request.model, answers, Usage::new(request.tokens));
                 if request.extensions {
-                    response.extensions = Some(self.extensions(raw));
+                    response.extensions = Some(self.extensions(raw, &options));
                 }
                 if let (Some(key), Some(cache)) = (request.result_key, &self.response_cache) {
                     if let Ok(mut cache) = cache.lock() {
@@ -992,7 +994,7 @@ impl Engine {
         let mut response =
             SystemOneResponse::new(req.model.clone(), answers, Usage::new(total_tokens));
         if opts.extensions {
-            response.extensions = Some(self.extensions(raw_logits));
+            response.extensions = Some(self.extensions(raw_logits, opts));
         }
         Ok(response)
     }
@@ -1133,7 +1135,7 @@ impl Engine {
         let mut response =
             SystemOneResponse::new(req.model.clone(), answers, Usage::new(total_tokens));
         if opts.extensions {
-            response.extensions = Some(self.extensions(raw_logits));
+            response.extensions = Some(self.extensions(raw_logits, opts));
         }
         Ok(response)
     }
@@ -1416,7 +1418,7 @@ impl Engine {
         let mut response =
             SystemOneResponse::new(req.model.clone(), answers, Usage::new(output.input_tokens));
         if opts.extensions {
-            response.extensions = Some(self.extensions(raw_logits));
+            response.extensions = Some(self.extensions(raw_logits, opts));
         }
         Ok(response)
     }
@@ -1507,13 +1509,22 @@ impl Engine {
         }
     }
 
-    fn extensions(&self, raw_logits: BTreeMap<String, Vec<f32>>) -> crate::contract::Extensions {
+    fn extensions(
+        &self,
+        raw_logits: BTreeMap<String, Vec<f32>>,
+        opts: &EvalOptions,
+    ) -> crate::contract::Extensions {
         crate::contract::Extensions {
             backend: Some(self.backend_id.to_string()),
             dtype: Some(self.dtype.clone()),
             calibration_status: Some(format!("{:?}", self.calibration.status).to_lowercase()),
             confidence_definition: Some(self.calibration.confidence.to_string()),
             prompt_contract_hash: Some(self.manifest.prompt_contract.contract_hash.clone()),
+            qualification: Some(
+                self.serving_qualification_status(opts, None)
+                    .as_str()
+                    .to_string(),
+            ),
             raw_logits: if raw_logits.is_empty() {
                 None
             } else {

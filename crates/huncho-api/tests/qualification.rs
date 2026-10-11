@@ -156,6 +156,13 @@ fn state(engine: Engine, config: ServerConfig) -> Arc<AppState> {
     registry.insert("native-fixture", engine);
     Arc::new(AppState::new(config, registry, Metrics::new()))
 }
+/// Strict serving config: every model must hold fresh labeled qualification.
+fn strict() -> ServerConfig {
+    ServerConfig {
+        require_qualified: true,
+        ..Default::default()
+    }
+}
 #[tokio::test]
 async fn unqualified_native_context_is_refused_before_forward_and_exact_result_reuse() {
     let (engine, calls, suite) = fixture();
@@ -170,10 +177,66 @@ async fn unqualified_native_context_is_refused_before_forward_and_exact_result_r
         .unwrap();
     let before = calls.load(Ordering::Relaxed);
     assert_eq!(
-        request(state(engine, ServerConfig::default()), &suite).await,
+        request(state(engine, strict()), &suite).await,
         StatusCode::SERVICE_UNAVAILABLE
     );
     assert_eq!(calls.load(Ordering::Relaxed), before);
+}
+#[tokio::test]
+async fn trial_mode_default_serves_unqualified_native_context_without_qualification() {
+    let (engine, calls, suite) = fixture();
+    let before = calls.load(Ordering::Relaxed);
+    assert_eq!(
+        request(state(engine, ServerConfig::default()), &suite,).await,
+        StatusCode::OK
+    );
+    assert_eq!(calls.load(Ordering::Relaxed) - before, 1);
+}
+#[tokio::test]
+async fn strict_mode_reports_numerical_qualification_but_refuses_to_serve_it() {
+    let (engine, calls, suite) = fixture();
+    // Numerical suite: same golden vectors, observed labels removed.
+    let mut numerical = suite.clone();
+    numerical.cases[0].targets.clear();
+    engine
+        .qualify_for_serving_numerical(
+            &numerical,
+            &EvalOptions {
+                reference_readout: true,
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap();
+    let before = calls.load(Ordering::Relaxed);
+    // Trial mode serves the numerical profile.
+    assert_eq!(
+        request(state(engine, ServerConfig::default()), &suite).await,
+        StatusCode::OK
+    );
+    assert_eq!(calls.load(Ordering::Relaxed) - before, 1);
+    // Strict mode refuses it: probability/argmax passed, but no outcome labels.
+    // A fresh engine carries the same revocation rule, so build a second one.
+    let (engine, calls, _) = fixture();
+    engine
+        .qualify_for_serving_numerical(
+            &numerical,
+            &EvalOptions {
+                reference_readout: true,
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap();
+    // One forward: the numerical qualification suite itself. The strict
+    // request is refused before any further forward.
+    let before = calls.load(Ordering::Relaxed);
+    assert_eq!(
+        request(state(engine, strict()), &suite).await,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    assert_eq!(calls.load(Ordering::Relaxed), before);
+    assert_eq!(before, 1);
 }
 #[tokio::test]
 async fn matching_live_qualification_serves_and_changed_options_refuse() {
@@ -195,7 +258,7 @@ async fn matching_live_qualification_serves_and_changed_options_refuse() {
                 engine,
                 ServerConfig {
                     candidate_readout,
-                    ..Default::default()
+                    ..strict()
                 },
             ),
             &suite,
@@ -221,11 +284,7 @@ async fn every_actual_replica_needs_its_own_fresh_complete_suite() {
     let mut registry = ModelRegistry::new();
     registry.insert("native-fixture", engine);
     registry.set_replicas(2).unwrap();
-    let state = Arc::new(AppState::new(
-        ServerConfig::default(),
-        registry,
-        Metrics::new(),
-    ));
+    let state = Arc::new(AppState::new(strict(), registry, Metrics::new()));
     let model = state.registry.read().await.get("native-fixture").unwrap();
     let options = model.serving_options(&state.config, false);
     model.replica_engines()[0]
@@ -262,11 +321,7 @@ async fn native_lazy_factory_cannot_bypass_live_qualification() {
             move || Ok(vec![engine.clone()]),
         )
         .unwrap();
-    let state = Arc::new(AppState::new(
-        ServerConfig::default(),
-        registry,
-        Metrics::new(),
-    ));
+    let state = Arc::new(AppState::new(strict(), registry, Metrics::new()));
     assert_eq!(
         request(state.clone(), &suite).await,
         StatusCode::SERVICE_UNAVAILABLE
@@ -279,13 +334,13 @@ async fn native_lazy_factory_cannot_bypass_live_qualification() {
     assert_eq!(request(state, &suite).await, StatusCode::OK);
 }
 #[tokio::test]
-async fn public_server_rejects_unqualified_eager_models_before_opening_listener() {
+async fn strict_server_rejects_unqualified_eager_models_before_opening_listener() {
     let (engine, calls, _) = fixture();
     let state = state(
         engine,
         ServerConfig {
             bind: "127.0.0.1:0".into(),
-            ..Default::default()
+            ..strict()
         },
     );
     let result = tokio::time::timeout(Duration::from_secs(1), huncho_api::serve(state))
@@ -295,39 +350,49 @@ async fn public_server_rejects_unqualified_eager_models_before_opening_listener(
     assert_eq!(calls.load(Ordering::Relaxed), 0);
 }
 #[tokio::test]
-async fn allow_unqualified_config_serves_native_context_without_qualification() {
+async fn strict_server_rejects_numerical_only_models_before_opening_listener() {
     let (engine, calls, suite) = fixture();
-    let before = calls.load(Ordering::Relaxed);
-    assert_eq!(
-        request(
-            state(
-                engine,
-                ServerConfig {
-                    allow_unqualified: true,
-                    ..Default::default()
-                },
-            ),
-            &suite,
+    let mut numerical = suite.clone();
+    numerical.cases[0].targets.clear();
+    engine
+        .qualify_for_serving_numerical(
+            &numerical,
+            &EvalOptions {
+                reference_readout: true,
+                ..Default::default()
+            },
+            None,
         )
-        .await,
-        StatusCode::OK
+        .unwrap();
+    // One forward: the numerical qualification suite itself. The strict
+    // startup refusal performs no further forward.
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    let state = state(
+        engine,
+        ServerConfig {
+            bind: "127.0.0.1:0".into(),
+            ..strict()
+        },
     );
-    assert_eq!(calls.load(Ordering::Relaxed) - before, 1);
+    let result = tokio::time::timeout(Duration::from_secs(1), huncho_api::serve(state))
+        .await
+        .unwrap();
+    assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
 }
 #[tokio::test]
-async fn allow_unqualified_config_opens_listener_for_unqualified_eager_models() {
+async fn trial_mode_opens_listener_for_unqualified_eager_models() {
     let (engine, calls, _) = fixture();
     let state = state(
         engine,
         ServerConfig {
             bind: "127.0.0.1:0".into(),
-            allow_unqualified: true,
             ..Default::default()
         },
     );
-    // With the escape hatch the startup validation passes, `serve` binds the
-    // listener and runs until cancelled: the timeout elapsing (rather than an
-    // immediate InvalidInput error) is the pass signal.
+    // Default trial mode passes startup, `serve` binds the listener and runs
+    // until cancelled: the timeout elapsing (rather than an immediate
+    // InvalidInput error) is the pass signal.
     assert!(
         tokio::time::timeout(Duration::from_secs(1), huncho_api::serve(state))
             .await
@@ -340,7 +405,7 @@ async fn revocation_during_forward_prevents_publishing_the_response() {
     let pause = Arc::new(Pause::default());
     let _release = ReleaseOnDrop(pause.clone());
     let (engine, _, suite) = fixture_with_pause(Some(pause.clone()));
-    let state = state(engine, ServerConfig::default());
+    let state = state(engine, strict());
     let model = state.registry.read().await.get("native-fixture").unwrap();
     let options = model.serving_options(&state.config, false);
     model.replica_engines()[0]

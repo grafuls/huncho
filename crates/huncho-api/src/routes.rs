@@ -13,7 +13,7 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
 use huncho_core::contract::SystemOneRequest;
-use huncho_core::engine::{EvalOptions, EvalStats, PreparedEvaluation};
+use huncho_core::engine::{EvalOptions, EvalStats, PreparedEvaluation, QualificationStatus};
 use huncho_core::error::{Error, ErrorBody};
 
 use crate::auth::{check_auth, wants_extensions};
@@ -534,15 +534,39 @@ struct HealthResponse {
     version: &'static str,
     uptime_secs: u64,
     models: usize,
+    /// Serving mode: `true` when every model must hold fresh labeled
+    /// qualification (strict), `false` in the default trial mode.
+    strict_qualification: bool,
+    /// Per-tier model counts for the currently loaded (eager) registry.
+    qualification: QualificationCounts,
+}
+
+#[derive(Serialize, Default)]
+struct QualificationCounts {
+    qualified: usize,
+    numerical: usize,
+    unqualified: usize,
+    unfitted: usize,
 }
 
 async fn health(State(state): State<Arc<AppState>>) -> Response {
     let registry = state.registry.read().await;
+    let mut counts = QualificationCounts::default();
+    for model in registry.models().values() {
+        match model.qualification_status(&state.config) {
+            QualificationStatus::Qualified => counts.qualified += 1,
+            QualificationStatus::Numerical => counts.numerical += 1,
+            QualificationStatus::Unqualified => counts.unqualified += 1,
+            QualificationStatus::Unfitted => counts.unfitted += 1,
+        }
+    }
     let body = HealthResponse {
         status: "ok",
         version: env!("CARGO_PKG_VERSION"),
         uptime_secs: state.started.elapsed().as_secs(),
         models: registry.len(),
+        strict_qualification: state.config.require_qualified,
+        qualification: counts,
     };
     (StatusCode::OK, Json(body)).into_response()
 }
@@ -565,20 +589,25 @@ struct ModelInfo {
     max_context: usize,
     replicas: usize,
     residency: String,
+    /// Serving qualification tier for this model's exact execution profile:
+    /// `qualified`, `numerical`, `unqualified` or `unknown` for lazy models
+    /// that have not been loaded yet.
+    qualification: String,
 }
 
 async fn list_models(State(state): State<Arc<AppState>>) -> Response {
     let registry = state.registry.read().await;
     let mut models = Vec::new();
-    for (name, engine) in registry.models() {
+    for (name, model) in registry.models() {
         models.push(ModelInfo {
             name: name.clone(),
-            family: engine.family().to_string(),
-            backend: engine.backend_id().to_string(),
-            dtype: engine.dtype().to_string(),
-            max_context: engine.manifest().backbone.max_context,
-            replicas: engine.replica_engines().len(),
+            family: model.family().to_string(),
+            backend: model.backend_id().to_string(),
+            dtype: model.dtype().to_string(),
+            max_context: model.manifest().backbone.max_context,
+            replicas: model.replica_engines().len(),
             residency: "eager".into(),
+            qualification: model.qualification_status(&state.config).as_str().into(),
         });
     }
     models.extend(
@@ -593,6 +622,7 @@ async fn list_models(State(state): State<Arc<AppState>>) -> Response {
                 max_context: model.max_context,
                 replicas: model.replicas,
                 residency: model.residency,
+                qualification: "unknown".into(),
             }),
     );
     models.sort_by(|a, b| a.name.cmp(&b.name));

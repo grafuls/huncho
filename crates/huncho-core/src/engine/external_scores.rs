@@ -705,7 +705,8 @@ impl Engine {
             Usage::new(stats.processed_tokens),
         );
         if plan.options.extensions {
-            response.extensions = Some(self.extensions(raw_logits));
+            let options = plan.options.clone();
+            response.extensions = Some(self.extensions(raw_logits, &options));
         }
         Ok((response, stats))
     }

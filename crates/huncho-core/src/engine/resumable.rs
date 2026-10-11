@@ -266,7 +266,9 @@ impl Engine {
             Usage::new(cursor.total_tokens),
         );
         if cursor.options.extensions {
-            response.extensions = Some(self.extensions(std::mem::take(&mut cursor.raw_logits)));
+            let options = cursor.options.clone();
+            response.extensions =
+                Some(self.extensions(std::mem::take(&mut cursor.raw_logits), &options));
         }
         if let (Some(key), Some(cache)) = (cursor.result_key.take(), &self.response_cache) {
             if let Ok(mut cache) = cache.lock() {

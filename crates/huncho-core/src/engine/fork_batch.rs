@@ -201,7 +201,7 @@ impl Engine {
         let mut response =
             SystemOneResponse::new(req.model.clone(), answers, Usage::new(total_tokens));
         if opts.extensions {
-            response.extensions = Some(self.extensions(raw_logits));
+            response.extensions = Some(self.extensions(raw_logits, opts));
         }
         Ok(response)
     }

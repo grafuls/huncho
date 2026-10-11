@@ -13,6 +13,39 @@ use std::sync::{Arc, Mutex};
 struct QualifiedProfile {
     key: Vec<u8>,
     proof: Arc<()>,
+    /// Probability/argmax gates passed, but the suite carried no observed
+    /// outcome labels, so the ECE/Brier outcome gates have not run.
+    numerical: bool,
+}
+
+/// Serving-readiness readout for `/health`, `/v1/models`, response
+/// extensions and startup logs. It reports the installed qualification
+/// tier only; whether an `Unqualified` model may serve is a separate
+/// strict/trial serving-mode decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum QualificationStatus {
+    /// Fresh complete labeled qualification passed for this exact profile.
+    Qualified,
+    /// Probability and argmax gates passed against reference vectors, but
+    /// the suite carried no observed outcome labels (no ECE/Brier gates).
+    Numerical,
+    /// No fresh qualification is installed for this execution profile.
+    Unqualified,
+    /// Calibration is pending or a required refit is missing. Refused in
+    /// every serving mode.
+    Unfitted,
+}
+
+impl QualificationStatus {
+    /// Wire string used by API responses and startup logs.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            QualificationStatus::Qualified => "qualified",
+            QualificationStatus::Numerical => "numerical",
+            QualificationStatus::Unqualified => "unqualified",
+            QualificationStatus::Unfitted => "unfitted",
+        }
+    }
 }
 
 /// Opaque in-process lease for one actual context and qualification attempt.
@@ -20,6 +53,15 @@ struct QualifiedProfile {
 pub struct ServingQualificationToken {
     context: Arc<()>,
     proof: Option<Arc<()>>,
+}
+
+/// Which gates a qualification attempt must run.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum QualificationLevel {
+    /// Probability delta + argmax + complete observed outcomes (ECE/Brier).
+    Full,
+    /// Probability delta + argmax against reference vectors only.
+    Numerical,
 }
 
 #[derive(Default)]
@@ -185,6 +227,40 @@ impl Engine {
         options: &EvalOptions,
         cross_request_max_requests: Option<usize>,
     ) -> Result<ConformanceReport> {
+        self.qualify_with_level(
+            QualificationLevel::Full,
+            suite,
+            options,
+            cross_request_max_requests,
+        )
+    }
+
+    /// Run fresh numerical conformance (probability delta and argmax against
+    /// reference vectors) without requiring observed outcome labels. A pass
+    /// installs a `numerical` profile: probability fidelity is verified, but
+    /// the ECE/Brier outcome gates have not run. Trial serving exposes this
+    /// tier; strict serving (`require_qualified`) still demands `Full`.
+    pub fn qualify_for_serving_numerical(
+        &self,
+        suite: &GoldenSuite,
+        options: &EvalOptions,
+        cross_request_max_requests: Option<usize>,
+    ) -> Result<ConformanceReport> {
+        self.qualify_with_level(
+            QualificationLevel::Numerical,
+            suite,
+            options,
+            cross_request_max_requests,
+        )
+    }
+
+    fn qualify_with_level(
+        &self,
+        level: QualificationLevel,
+        suite: &GoldenSuite,
+        options: &EvalOptions,
+        cross_request_max_requests: Option<usize>,
+    ) -> Result<ConformanceReport> {
         let state = &self.serving_qualification;
         let _attempt = state
             .attempt
@@ -205,20 +281,26 @@ impl Engine {
                 .clear()?;
         }
         self.validate_serving_calibration()?;
-        if suite.cases.is_empty()
-            || suite.cases.iter().any(|case| {
-                case.request.questions.is_empty()
-                    || case.targets.len() != case.request.questions.len()
-                    || case
-                        .request
-                        .questions
-                        .keys()
-                        .any(|id| !case.targets.contains_key(id))
-            })
+        if level == QualificationLevel::Full
+            && (suite.cases.is_empty()
+                || suite.cases.iter().any(|case| {
+                    case.request.questions.is_empty()
+                        || case.targets.len() != case.request.questions.len()
+                        || case
+                            .request
+                            .questions
+                            .keys()
+                            .any(|id| !case.targets.contains_key(id))
+                }))
         {
             return Err(Error::Conformance(
                 "serving qualification requires complete observed target labels for every question"
                     .into(),
+            ));
+        }
+        if level == QualificationLevel::Numerical && suite.cases.is_empty() {
+            return Err(Error::Conformance(
+                "numerical qualification requires at least one golden case".into(),
             ));
         }
         if (self.execution_metadata.contains_key("kv_storage")
@@ -243,10 +325,11 @@ impl Engine {
             ));
         }
         if report.passed
-            && report
-                .outcome_calibration
-                .as_ref()
-                .is_some_and(|outcomes| outcomes.questions > 0)
+            && (level == QualificationLevel::Numerical
+                || report
+                    .outcome_calibration
+                    .as_ref()
+                    .is_some_and(|outcomes| outcomes.questions > 0))
         {
             *state
                 .profile
@@ -255,6 +338,7 @@ impl Engine {
                 Some(QualifiedProfile {
                     key,
                     proof: Arc::new(()),
+                    numerical: level == QualificationLevel::Numerical,
                 });
         }
         Ok(report)
@@ -295,22 +379,74 @@ impl Engine {
             .profile
             .lock()
             .map_err(|_| Error::Conformance("qualification state poisoned".into()))?;
-        if !profile.as_ref().is_some_and(|profile| profile.key == key) {
-            if options.allow_unqualified {
-                return Ok(ServingQualificationToken {
-                    context,
-                    proof: None,
-                });
-            }
+        let installed = profile
+            .as_ref()
+            .filter(|profile| profile.key == key)
+            .map(|profile| {
+                if profile.numerical {
+                    QualificationStatus::Numerical
+                } else {
+                    QualificationStatus::Qualified
+                }
+            })
+            .unwrap_or(QualificationStatus::Unqualified);
+        if let QualificationStatus::Qualified = installed {
+            return Ok(ServingQualificationToken {
+                context,
+                proof: profile.as_ref().map(|profile| profile.proof.clone()),
+            });
+        }
+        if options.allow_unqualified {
+            return Ok(ServingQualificationToken {
+                context,
+                proof: None,
+            });
+        }
+        if let QualificationStatus::Numerical = installed {
             return Err(Error::Conformance(
-                "model execution context/options/runtime lack fresh labeled serving qualification"
+                "model execution context has numerical qualification only; strict serving requires complete observed target labels"
                     .into(),
             ));
         }
-        Ok(ServingQualificationToken {
-            context,
-            proof: profile.as_ref().map(|profile| profile.proof.clone()),
-        })
+        Err(Error::Conformance(
+            "model execution context/options/runtime lack fresh labeled serving qualification"
+                .into(),
+        ))
+    }
+
+    /// Non-failing readout of the currently installed qualification tier for
+    /// this exact context/options/runtime. `/health`, `/v1/models`, response
+    /// extensions and startup logs use it; serving admission uses the token.
+    pub fn serving_qualification_status(
+        &self,
+        options: &EvalOptions,
+        cross_request_max_requests: Option<usize>,
+    ) -> QualificationStatus {
+        if self.validate_serving_calibration().is_err() {
+            return QualificationStatus::Unfitted;
+        }
+        if !self.requires_outcome_qualification()
+            && self.calibration.status != CalibrationStatus::Refit
+        {
+            return QualificationStatus::Qualified;
+        }
+        let Ok(key) = profile_key(options, cross_request_max_requests) else {
+            return QualificationStatus::Unfitted;
+        };
+        let Ok(profile) = self.serving_qualification.profile.lock() else {
+            return QualificationStatus::Unqualified;
+        };
+        profile
+            .as_ref()
+            .filter(|profile| profile.key == key)
+            .map(|profile| {
+                if profile.numerical {
+                    QualificationStatus::Numerical
+                } else {
+                    QualificationStatus::Qualified
+                }
+            })
+            .unwrap_or(QualificationStatus::Unqualified)
     }
 
     /// Refuse even if a later attempt requalified the same execution options.

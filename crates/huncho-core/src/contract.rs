@@ -178,7 +178,9 @@ impl SystemOneRequest {
             return Err(Error::Request("`model` must be a non-empty string".into()));
         }
         if self.questions.is_empty() {
-            return Err(Error::Request("`questions` must contain at least one question".into()));
+            return Err(Error::Request(
+                "`questions` must contain at least one question".into(),
+            ));
         }
         for (id, q) in &self.questions {
             if id.trim().is_empty() {
@@ -321,6 +323,10 @@ pub struct Extensions {
     pub confidence_definition: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_contract_hash: Option<String>,
+    /// Serving qualification tier for this model's exact execution profile
+    /// (`qualified`, `numerical` or `unqualified`). See `huncho qualify`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub qualification: Option<String>,
     /// Raw per-option logits (pre-softmax) for each question id.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub raw_logits: Option<BTreeMap<String, Vec<f32>>>,
@@ -406,11 +412,7 @@ mod tests {
             },
         );
         answers.insert("is_refund".into(), Answer::Noul { noul: 0.95 });
-        let resp = SystemOneResponse::new(
-            "m".into(),
-            answers,
-            Usage::new(120),
-        );
+        let resp = SystemOneResponse::new("m".into(), answers, Usage::new(120));
         let s = serde_json::to_string(&resp).unwrap();
         assert!(s.contains("\"model\""));
         assert!(s.contains("\"department\""));

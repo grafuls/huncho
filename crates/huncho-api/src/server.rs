@@ -5,6 +5,8 @@ use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
+use huncho_core::engine::QualificationStatus;
+
 use crate::routes::router;
 use crate::state::AppState;
 
@@ -19,14 +21,68 @@ impl Drop for EvictionTask {
 
 /// Run the HTTP server until it is asked to stop.
 pub async fn serve(state: Arc<AppState>) -> std::io::Result<()> {
-    // Programmatic API users get the same native qualification boundary as
-    // the CLI. Lazy factories are checked again before their first request.
-    for model in state.registry.read().await.models().values() {
-        model
-            .validate_serving_qualification(&state.config)
-            .map_err(|error| {
-                std::io::Error::new(std::io::ErrorKind::InvalidInput, error.to_string())
-            })?;
+    // Startup admission. Programmatic API users get the same qualification
+    // boundary as the CLI, with the same strict/trial split: strict mode
+    // (`require_qualified`) refuses to open a listener for unqualified or
+    // numerical-only models; trial mode (default) logs their honest status
+    // and serves. Pending/unfitted calibration refuses in every mode.
+    // Lazy factories are checked again before their first request.
+    let strict = state.config.require_qualified;
+    if strict {
+        tracing::info!("serving mode: strict (every model must hold fresh labeled qualification)");
+    } else {
+        tracing::info!("serving mode: trial (unqualified models serve with an honest status; pass --require-qualified for production strictness)");
+    }
+    for (name, model) in state.registry.read().await.models() {
+        let status = model.qualification_status(&state.config);
+        match status {
+            QualificationStatus::Qualified => {
+                tracing::info!(model = name.as_str(), "qualification: qualified");
+            }
+            QualificationStatus::Numerical => {
+                if strict {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!(
+                            "strict serving requires observed target labels for `{name}`: \
+                             it holds numerical qualification only (probability/argmax gates passed, \
+                             ECE/Brier outcome gates have not run)"
+                        ),
+                    ));
+                }
+                tracing::warn!(
+                    model = name.as_str(),
+                    "qualification: numerical (probability/argmax gates passed; outcome labels not yet collected)"
+                );
+            }
+            QualificationStatus::Unfitted => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!(
+                        "model `{name}` has pending or unfitted calibration and cannot serve \
+                         in any mode; fit calibration or restore a fitted variant"
+                    ),
+                ));
+            }
+            QualificationStatus::Unqualified => {
+                if strict {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!(
+                            "strict serving of a native, refitted or optimized variant of `{name}` \
+                             requires fresh labeled qualification: pass \
+                             --qualification-golden {name}=/path/to/pinned-golden.json"
+                        ),
+                    ));
+                }
+                tracing::warn!(
+                    model = name.as_str(),
+                    "qualification: UNQUALIFIED — `{name}` is serving in trial mode without fresh \
+                     labeled qualification; probabilities are unverified. Qualify it with \
+                     `huncho qualify --model {name}` before trusting its numbers"
+                );
+            }
+        }
     }
     let app = router(state.clone())
         .layer(CorsLayer::permissive())

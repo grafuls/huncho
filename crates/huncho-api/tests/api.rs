@@ -120,7 +120,7 @@ fn state(auth_token: Option<&str>) -> Arc<AppState> {
         batch_max_requests: None,
         batch_wait_ms: 2,
         candidate_readout: false,
-        allow_unqualified: false,
+        require_qualified: false,
     };
     Arc::new(AppState::new(config, registry, Metrics::new()))
 }
@@ -601,11 +601,16 @@ async fn exact_result_cache_preserves_extensions_auth_and_physical_metrics() {
 }
 
 #[tokio::test]
-async fn health_reports_ok_and_model_count() {
+async fn health_reports_ok_model_count_and_qualification_readout() {
     let (status, body) = send(state(None), Method::GET, "/health", None, None, false).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["status"], "ok");
     assert_eq!(body["models"], 1);
+    // Default serving mode is trial; the mock engine needs no outcome
+    // qualification, so it reports fully qualified.
+    assert_eq!(body["strict_qualification"], false);
+    assert_eq!(body["qualification"]["qualified"], 1);
+    assert_eq!(body["qualification"]["unqualified"], 0);
 }
 
 #[tokio::test]
@@ -691,6 +696,7 @@ async fn list_models_reports_registered_model() {
     assert_eq!(models[0]["family"], "F1");
     assert_eq!(models[0]["backend"], "onnx");
     assert_eq!(models[0]["dtype"], "fp32");
+    assert_eq!(models[0]["qualification"], "qualified");
 }
 
 #[tokio::test]

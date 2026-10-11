@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, Weak};
 
-use huncho_core::engine::{Engine, EvalOptions, ServingQualificationToken};
+use huncho_core::engine::{Engine, EvalOptions, QualificationStatus, ServingQualificationToken};
 use tokio::sync::{RwLock, Semaphore};
 
 use crate::batch::BatchQueue;
@@ -87,11 +87,25 @@ impl ModelHandle {
             max_batch_tokens: config.max_batch_tokens.filter(|_| self.supports_batch()),
             max_batch_padding_percent: config.max_batch_padding_percent,
             reference_readout: !config.candidate_readout,
-            allow_unqualified: config.allow_unqualified,
+            allow_unqualified: !config.require_qualified,
             prepare_all: self.preparation.is_some(),
             cooperative_prefill: config.cooperative_prefill,
             ..Default::default()
         }
+    }
+
+    /// Read-only qualification readout for `/health`, `/v1/models` and
+    /// startup logs: the worst tier installed across replica engines for
+    /// this model's exact serving profile. This never mutates state and
+    /// never installs a profile; serving admission uses the token checks.
+    pub fn qualification_status(&self, config: &ServerConfig) -> QualificationStatus {
+        let options = self.serving_options(config, false);
+        let cross_requests = self.serving_cross_request_max_requests(config);
+        self.replica_engines()
+            .iter()
+            .map(|engine| engine.serving_qualification_status(&options, cross_requests))
+            .max()
+            .unwrap_or(QualificationStatus::Unqualified)
     }
 
     /// Actual cross-request collation profile, absent when no queue exists.
@@ -99,13 +113,6 @@ impl ModelHandle {
         self.batch
             .as_ref()
             .map(|_| usize::from(config.batch_max_requests.unwrap()))
-    }
-
-    pub(crate) fn validate_serving_qualification(
-        &self,
-        config: &ServerConfig,
-    ) -> huncho_core::Result<()> {
-        self.serving_qualification_tokens(config).map(|_| ())
     }
 
     pub(crate) fn serving_qualification_tokens(
