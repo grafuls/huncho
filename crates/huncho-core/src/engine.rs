@@ -63,6 +63,9 @@ pub struct EvalOptions {
     /// CPU Kev only: release execution capacity after each prefix chunk and
     /// question. Requires prefix reuse and a configured backend chunk size.
     pub cooperative_prefill: bool,
+    /// Allow the engine to serve requests even if it has not passed the strict
+    /// qualification checks for this execution profile.
+    pub allow_unqualified: bool,
 }
 
 /// Physical work submitted to the backend, separate from logical wire usage.

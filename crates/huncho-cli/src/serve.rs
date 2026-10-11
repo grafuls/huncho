@@ -164,6 +164,11 @@ pub struct ServeArgs {
     #[cfg(feature = "qualification")]
     #[arg(long, requires = "lazy")]
     pub preload: Vec<String>,
+
+    /// Allow the engine to serve requests even if it has not passed the strict
+    /// qualification checks for this execution profile.
+    #[arg(long, default_value_t = false)]
+    pub allow_unqualified: bool,
 }
 
 fn validate_scheduling(args: &ServeArgs) -> anyhow::Result<()> {
@@ -338,6 +343,7 @@ fn evaluation_options(
         max_batch_tokens: args.max_batch_tokens.filter(|_| engine.supports_batch()),
         max_batch_padding_percent: args.max_batch_padding_percent,
         reference_readout: !args.candidate_readout,
+        allow_unqualified: args.allow_unqualified,
         prepare_all: (args.cooperative_prefill
             || args.max_prepared_per_model > 0
             || (args.batch_max_requests.is_some() && engine.supports_batch()))
@@ -552,6 +558,10 @@ fn qualify_optimizations(
             && !opts.prepare_all
             && !replicated
         {
+            continue;
+        }
+        if args.allow_unqualified && !paths.contains_key(name.as_str()) {
+            tracing::warn!("skipping qualification for `{}` (--allow-unqualified)", name);
             continue;
         }
         let path=paths.get(name.as_str()).ok_or_else(||anyhow::anyhow!("serving a native, refitted or optimized variant of `{name}` requires --qualification-golden {name}=/path/to/pinned-golden.json (not found in the model package)"))?;

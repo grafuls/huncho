@@ -296,6 +296,12 @@ impl Engine {
             .lock()
             .map_err(|_| Error::Conformance("qualification state poisoned".into()))?;
         if !profile.as_ref().is_some_and(|profile| profile.key == key) {
+            if options.allow_unqualified {
+                return Ok(ServingQualificationToken {
+                    context,
+                    proof: None,
+                });
+            }
             return Err(Error::Conformance(
                 "model execution context/options/runtime lack fresh labeled serving qualification"
                     .into(),
