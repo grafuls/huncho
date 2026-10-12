@@ -146,6 +146,9 @@ pub struct PreparedEvaluation {
     stats: EvalStats,
 }
 
+// `Cached` carries a full response; boxing it to equalize variants would churn
+// the hot path for a cold branch.
+#[allow(clippy::large_enum_variant)]
 enum PreparedKind {
     Cached(SystemOneResponse),
     Prompts(Vec<BuiltPrompt>),
@@ -1597,12 +1600,13 @@ mod tests {
             BackendId::Onnx
         }
         fn capabilities(&self) -> Capabilities {
-            let mut c = Capabilities::default();
-            c.id = BackendId::Onnx;
-            c.dtype = "fp32".into();
-            c.max_context = 4096;
-            c.families = vec![Family::F1];
-            c
+            Capabilities {
+                id: BackendId::Onnx,
+                dtype: "fp32".into(),
+                max_context: 4096,
+                families: vec![Family::F1],
+                ..Default::default()
+            }
         }
         fn forward(&mut self, input: ForwardInput) -> Result<ForwardOutput> {
             // Produce a sparse deterministic hidden vector per position derived
@@ -1627,7 +1631,7 @@ mod tests {
     }
 
     fn manifest() -> ModelManifest {
-        let m = ModelManifest {
+        ModelManifest {
             schema_version: crate::manifest::MANIFEST_SCHEMA_VERSION.into(),
             name: "test".into(),
             family: Family::F1,
@@ -1676,8 +1680,7 @@ mod tests {
                 golden: "g.json".into(),
             }),
             capabilities: Default::default(),
-        };
-        m
+        }
     }
 
     fn engine() -> Engine {

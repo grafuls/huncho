@@ -276,9 +276,7 @@ impl JointHead {
                 .questions
                 .iter()
                 .enumerate()
-                .flat_map(|(i, question)| {
-                    std::iter::repeat(i as u32).take(question.option_ids.len())
-                })
+                .flat_map(|(i, question)| std::iter::repeat_n(i as u32, question.option_ids.len()))
                 .collect();
             Some(Tensor::new(ids.as_slice(), hidden.device())?)
         } else {

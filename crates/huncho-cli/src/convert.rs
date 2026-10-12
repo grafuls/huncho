@@ -395,7 +395,7 @@ mod tests {
         let gguf = m.backbone.artifacts.get(&BackendId::LlamaCpp).unwrap();
         assert_eq!(gguf[0].path, "model.gguf");
         assert_eq!(gguf[0].quantization.as_deref(), Some("q4"));
-        assert!(m.backbone.artifacts.get(&BackendId::Onnx).is_none());
+        assert!(!m.backbone.artifacts.contains_key(&BackendId::Onnx));
     }
 
     #[test]
@@ -413,7 +413,7 @@ mod tests {
         ));
         run(a).unwrap();
 
-        let mf = ModelManifest::load(&out.join("huncho-model.json")).unwrap();
+        let mf = ModelManifest::load(out.join("huncho-model.json")).unwrap();
         mf.validate().unwrap();
         assert_eq!(mf.name, "laya");
         let artifact = out.join("model.onnx");
@@ -528,7 +528,7 @@ mod tests {
             fs::read(out.join("config.json")).unwrap(),
             b"{\"hidden_size\": 8}"
         );
-        let mf = ModelManifest::load(&out.join("huncho-model.json")).unwrap();
+        let mf = ModelManifest::load(out.join("huncho-model.json")).unwrap();
         let candle = mf.backbone.artifacts.get(&BackendId::Candle).unwrap();
         assert_eq!(candle[0].path, "model.safetensors");
     }

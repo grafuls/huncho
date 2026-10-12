@@ -147,10 +147,11 @@ impl HeadKind {
 }
 
 /// Confidence definition (PRD CORE-05).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ConfidenceDef {
     /// Jev's peak-based confidence: `(p_max - 1/n) / (1 - 1/n)`.
     #[serde(rename = "peak")]
+    #[default]
     Peak,
     /// Normalized entropy-based confidence (used by Laya).
     #[serde(rename = "entropy")]
@@ -161,12 +162,6 @@ pub enum ConfidenceDef {
     /// A named, model-specific definition.
     #[serde(rename = "custom")]
     Custom(String),
-}
-
-impl Default for ConfidenceDef {
-    fn default() -> Self {
-        ConfidenceDef::Peak
-    }
 }
 
 impl fmt::Display for ConfidenceDef {
@@ -537,9 +532,7 @@ impl ModelManifest {
                 .artifacts
                 .get(backend)
                 .is_some_and(|artifacts| {
-                    artifacts
-                        .iter()
-                        .any(|a| dtype.map_or(true, |d| a.dtype == d))
+                    artifacts.iter().any(|a| dtype.is_none_or(|d| a.dtype == d))
                 })
         })
         .collect();

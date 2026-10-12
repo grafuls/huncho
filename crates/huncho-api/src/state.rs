@@ -34,6 +34,7 @@ pub struct ModelHandle {
     pub(crate) flights: Arc<RequestFlights>,
     pub(crate) preparation: Option<Arc<Semaphore>>,
     pub(crate) batch: Option<Arc<BatchQueue>>,
+    #[allow(clippy::type_complexity)]
     pub(crate) last_prefill: Arc<Mutex<Option<(Weak<()>, bool)>>>,
 }
 

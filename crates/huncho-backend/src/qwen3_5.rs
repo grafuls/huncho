@@ -1884,9 +1884,9 @@ impl Qwen3_5Backend {
         }
         #[cfg(not(feature = "cpu-blas"))]
         {
-            return Err(Error::Unsupported(
+            Err(Error::Unsupported(
                 "OpenBLAS requires --features cpu-blas".into(),
-            ));
+            ))
         }
         #[cfg(feature = "cpu-blas")]
         {
@@ -3062,7 +3062,7 @@ impl Qwen3_5Backend {
             || prefix
                 .tokens
                 .checked_add(seq)
-                .map_or(true, |n| n > self.max_context)
+                .is_none_or(|n| n > self.max_context)
             || inputs.iter().any(|input| {
                 input.tokens.is_empty()
                     || (!padded && input.tokens.len() != seq)

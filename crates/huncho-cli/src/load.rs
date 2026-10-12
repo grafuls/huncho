@@ -269,6 +269,9 @@ fn engine_from_manifest_observed(
         && huncho_backend::device::device_from_env()?.is_cuda();
     #[cfg(not(feature = "candle"))]
     let kev_gpu = false;
+    // `clef_dtype` is a real Option only under the `clef` feature; without it the
+    // binding is a const `None`, so the (necessary) unwrap_or trips the lint here.
+    #[allow(clippy::unnecessary_literal_unwrap)]
     let dtype = dtype.map(|s| s.to_string()).unwrap_or_else(|| {
         if backend_id == BackendId::Clef {
             clef_dtype.unwrap_or("fp16").to_string()

@@ -87,7 +87,7 @@ pub fn default_formatter(family: Family) -> Box<dyn PromptFormatter> {
 /// * `laya-v1` selects the Laya option-marker formatter (typed `[MASK]` markers).
 /// * `nimble-v1` selects the F3 candidate-logit formatter (single-field schema
 ///   + one-token answer codes via the LM head), using the manifest's `f3`
-///   codebook.
+///     codebook.
 /// * All other templates use the family default.
 pub fn formatter_for(manifest: &ModelManifest) -> Box<dyn PromptFormatter> {
     let pc = &manifest.prompt_contract;
