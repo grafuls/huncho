@@ -14,7 +14,8 @@ jobs:
       # stable makes the gate non-reproducible and break on each release. Pin to a
       # version maintainers run locally; bump deliberately.
       - uses: dtolnay/rust-toolchain@1.97.1
-        with: { components: rustfmt, clippy }
+        with:
+          components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
