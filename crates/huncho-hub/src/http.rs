@@ -64,7 +64,8 @@ pub fn download_file(
     let filename = filename.to_string();
     let opts = opts.clone();
     let what = format!("download of `{filename}` from `{repo}` panicked");
-    let handle = std::thread::spawn(move || blocking_download(&repo, &filename, &rev, &opts, &cache));
+    let handle =
+        std::thread::spawn(move || blocking_download(&repo, &filename, &rev, &opts, &cache));
     handle.join().map_err(|_| HubError::Package(what))?
 }
 
@@ -84,7 +85,10 @@ fn blocking_download(
         .redirect(Policy::none())
         .build()
         .map_err(|e| HubError::Hf(format!("building the HTTP client: {e}")))?;
-    let token = opts.token.clone().or_else(|| std::env::var("HF_TOKEN").ok());
+    let token = opts
+        .token
+        .clone()
+        .or_else(|| std::env::var("HF_TOKEN").ok());
     let url = resolve_url(repo, filename, rev);
     let resp0 = send_get(&client, &url, token.as_deref())?;
     let status = resp0.status();
@@ -103,7 +107,9 @@ fn blocking_download(
 
     let headers = resp0.headers().clone();
     let commit = commit(&headers, Some(rev)).ok_or_else(|| {
-        HubError::Hf(format!("could not resolve a commit for `{filename}` in `{repo}`"))
+        HubError::Hf(format!(
+            "could not resolve a commit for `{filename}` in `{repo}`"
+        ))
     })?;
     let linked_size = headers
         .get(HEADER_X_LINKED_SIZE)
@@ -135,7 +141,9 @@ fn blocking_download(
             .get(LOCATION)
             .and_then(|v| v.to_str().ok())
             .ok_or_else(|| {
-                HubError::Hf(format!("redirect without a Location for `{filename}` in `{repo}`"))
+                HubError::Hf(format!(
+                    "redirect without a Location for `{filename}` in `{repo}`"
+                ))
             })?;
         resolve_redirect(&url, loc)?
     } else {
@@ -331,9 +339,7 @@ mod tests {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
             HEADER_X_REPO_COMMIT,
-            reqwest::header::HeaderValue::from_static(
-                "55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851",
-            ),
+            reqwest::header::HeaderValue::from_static("55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851"),
         );
         assert_eq!(
             commit(&headers, Some("main")).as_deref(),
@@ -365,7 +371,10 @@ mod tests {
 
     #[test]
     fn content_range_total_is_parsed() {
-        assert_eq!(parse_content_range_total("bytes 0-49999999/19306216416"), Some(19306216416));
+        assert_eq!(
+            parse_content_range_total("bytes 0-49999999/19306216416"),
+            Some(19306216416)
+        );
         assert_eq!(parse_content_range_total("bytes 0-9/10"), Some(10));
         assert_eq!(parse_content_range_total("bytes 0-9/*"), None);
         assert_eq!(parse_content_range_total("not-a-range"), None);

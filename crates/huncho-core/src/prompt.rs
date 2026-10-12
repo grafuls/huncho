@@ -159,9 +159,7 @@ struct DefaultFormatter {
 
 impl DefaultFormatter {
     fn option_marker(tokenizer: &dyn Tokenizer, i: usize) -> u32 {
-        tokenizer
-            .id_for(&format!("<option:{i}>"))
-            .unwrap_or(0)
+        tokenizer.id_for(&format!("<option:{i}>")).unwrap_or(0)
     }
 }
 
@@ -203,10 +201,7 @@ impl DefaultFormatter {
         match question {
             Question::Choice { criteria, .. } => {
                 for (i, (label, desc)) in criteria.iter().enumerate() {
-                    text.push_str(&format!(
-                        "<option:{i}> {label}: {}\n",
-                        criteria_text(desc)
-                    ));
+                    text.push_str(&format!("<option:{i}> {label}: {}\n", criteria_text(desc)));
                 }
             }
             Question::Score { criteria, .. } => {
@@ -323,10 +318,7 @@ impl DefaultFormatter {
         match question {
             Question::Choice { criteria, .. } => {
                 for (i, (label, desc)) in criteria.iter().enumerate() {
-                    text.push_str(&format!(
-                        "<option:{i}> {label}: {}\n",
-                        criteria_text(desc)
-                    ));
+                    text.push_str(&format!("<option:{i}> {label}: {}\n", criteria_text(desc)));
                 }
             }
             Question::Score { criteria, .. } => {
@@ -438,10 +430,7 @@ impl DefaultFormatter {
             Question::Choice { criteria, .. } => {
                 for (i, (label, desc)) in criteria.iter().enumerate() {
                     let letter = letters.get(i).copied().unwrap_or("?");
-                    text.push_str(&format!(
-                        "{letter}. {label}: {}\n",
-                        criteria_text(desc)
-                    ));
+                    text.push_str(&format!("{letter}. {label}: {}\n", criteria_text(desc)));
                 }
             }
             Question::Score { criteria, .. } => {
@@ -543,10 +532,7 @@ impl DefaultFormatter {
         match question {
             Question::Choice { criteria, .. } => {
                 for (i, (label, desc)) in criteria.iter().enumerate() {
-                    text.push_str(&format!(
-                        "<slot:{i}> {label}: {}\n",
-                        criteria_text(desc)
-                    ));
+                    text.push_str(&format!("<slot:{i}> {label}: {}\n", criteria_text(desc)));
                 }
             }
             Question::Score { criteria, .. } => {
@@ -688,10 +674,7 @@ fn laya_option_texts(question: &Question) -> Vec<String> {
                 }
                 _ => "yes, the statement holds".into(),
             };
-            vec![
-                format!("false: {no_text}"),
-                format!("true: {yes_text}"),
-            ]
+            vec![format!("false: {no_text}"), format!("true: {yes_text}")]
         }
     }
 }
@@ -766,10 +749,7 @@ impl PromptFormatter for LayaFormatter {
         ids.push(sep_id);
 
         let room = self.max_len.saturating_sub(ids.len()).saturating_sub(1);
-        let state_ids = tokenizer.encode(
-            &state_text(state).replace(LAYA_MASK_STR, " "),
-            false,
-        )?;
+        let state_ids = tokenizer.encode(&state_text(state).replace(LAYA_MASK_STR, " "), false)?;
         ids.extend(state_ids.iter().take(room));
         ids.push(sep_id);
         ids.truncate(self.max_len);
@@ -1028,8 +1008,8 @@ mod tests {
     fn test_state() -> StateValue {
         StateValue::from(serde_json::json!({ "ticket": "customer wants a refund" }))
     }
-    use crate::tokenizer::SimpleTokenizer;
     use crate::manifest::Family;
+    use crate::tokenizer::SimpleTokenizer;
 
     fn q_choice() -> Question {
         let json = serde_json::json!({

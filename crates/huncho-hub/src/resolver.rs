@@ -24,7 +24,10 @@ pub enum ModelRef {
     /// A local package directory or a path to a `huncho-model.json`.
     Local(PathBuf),
     /// A Hugging Face repository id (`owner/repo`), possibly with a revision.
-    HuggingFace { repo: String, revision: Option<String> },
+    HuggingFace {
+        repo: String,
+        revision: Option<String>,
+    },
 }
 
 impl ModelRef {
@@ -164,7 +167,9 @@ fn resolve_local(path: &Path) -> Result<ResolvedPackage> {
     let manifest = local_manifest_path(path)?;
     // Validate now so a malformed package yields a clear error at resolve time.
     ModelManifest::load(&manifest).map_err(|e| HubError::Package(e.to_string()))?;
-    Ok(ResolvedPackage { manifest_path: manifest })
+    Ok(ResolvedPackage {
+        manifest_path: manifest,
+    })
 }
 
 fn local_manifest_path(path: &Path) -> Result<PathBuf> {
@@ -327,13 +332,14 @@ fn required_files(
     let mut files = Vec::new();
 
     if let Some(backend) = backend {
-        let artifact = manifest.find_artifact(backend, dtype).ok_or_else(|| {
-            HubError::MissingArtifact {
-                package: manifest.name.clone(),
-                backend: backend.to_string(),
-                dtype: dtype.to_string(),
-            }
-        })?;
+        let artifact =
+            manifest
+                .find_artifact(backend, dtype)
+                .ok_or_else(|| HubError::MissingArtifact {
+                    package: manifest.name.clone(),
+                    backend: backend.to_string(),
+                    dtype: dtype.to_string(),
+                })?;
         files.push(artifact.path.clone());
     }
 
@@ -510,11 +516,7 @@ fn snapshot_root(path: &Path) -> Option<PathBuf> {
 }
 
 /// Download the first of the candidate config filenames that exists in the repo.
-fn download_config(
-    repo: &str,
-    revision: Option<&str>,
-    opts: &ResolveOptions,
-) -> Result<PathBuf> {
+fn download_config(repo: &str, revision: Option<&str>, opts: &ResolveOptions) -> Result<PathBuf> {
     let mut last_err: Option<HubError> = None;
     for filename in ["encoder/config.json", "config.json"] {
         match http::download_file(repo, filename, revision.map(|s| s.to_string()), opts) {
@@ -547,7 +549,9 @@ fn download_first(
     }
     match last_err {
         Some(e) => Err(e),
-        None => Err(HubError::Package("no matching file found in the repo".into())),
+        None => Err(HubError::Package(
+            "no matching file found in the repo".into(),
+        )),
     }
 }
 
@@ -567,7 +571,12 @@ fn probe_adapter(
     revision: Option<&str>,
     opts: &ResolveOptions,
 ) -> Result<Option<PathBuf>> {
-    match http::download_file(repo, "adapter_config.json", revision.map(|s| s.to_string()), opts) {
+    match http::download_file(
+        repo,
+        "adapter_config.json",
+        revision.map(|s| s.to_string()),
+        opts,
+    ) {
         Ok(path) => Ok(Some(path)),
         Err(e) if matches!(e, HubError::NotFound { .. }) || opts.local_files_only => Ok(None),
         Err(e) => Err(e),
@@ -780,29 +789,30 @@ fn synthesize_kev(
 fn download_base_weights(repo: &str, rev: &str, opts: &ResolveOptions) -> Result<()> {
     let rev_opt = Some(rev.to_string());
 
-    let shards = match http::download_file(repo, "model.safetensors.index.json", rev_opt.clone(), opts)
-    {
-        Ok(index_path) => {
-            let bytes = std::fs::read(&index_path)
-                .map_err(|e| HubError::Package(format!("reading `{}`: {e}", index_path.display())))?;
-            let idx: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| {
-                HubError::Package(format!(
-                    "parsing `model.safetensors.index.json` for `{repo}`: {e}"
-                ))
-            })?;
-            let mut set = std::collections::BTreeSet::new();
-            if let Some(wm) = idx.get("weight_map").and_then(|v| v.as_object()) {
-                for p in wm.values().filter_map(|v| v.as_str()) {
-                    if p.ends_with(".safetensors") {
-                        set.insert(p.to_string());
+    let shards =
+        match http::download_file(repo, "model.safetensors.index.json", rev_opt.clone(), opts) {
+            Ok(index_path) => {
+                let bytes = std::fs::read(&index_path).map_err(|e| {
+                    HubError::Package(format!("reading `{}`: {e}", index_path.display()))
+                })?;
+                let idx: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| {
+                    HubError::Package(format!(
+                        "parsing `model.safetensors.index.json` for `{repo}`: {e}"
+                    ))
+                })?;
+                let mut set = std::collections::BTreeSet::new();
+                if let Some(wm) = idx.get("weight_map").and_then(|v| v.as_object()) {
+                    for p in wm.values().filter_map(|v| v.as_str()) {
+                        if p.ends_with(".safetensors") {
+                            set.insert(p.to_string());
+                        }
                     }
                 }
+                set.into_iter().collect::<Vec<_>>()
             }
-            set.into_iter().collect::<Vec<_>>()
-        }
-        Err(HubError::NotFound { .. }) => Vec::new(),
-        Err(e) => return Err(e),
-    };
+            Err(HubError::NotFound { .. }) => Vec::new(),
+            Err(e) => return Err(e),
+        };
 
     if shards.is_empty() {
         // Single-file model, or no weights at all.
@@ -918,7 +928,11 @@ fn synthesize_f3(
     if download_first(repo, revision, opts, &["golden.json"]).is_ok() {
         manifest.reference = Some(Reference {
             family_impl: "huncho".to_string(),
-            revision: if commit.is_empty() { rev.to_string() } else { commit.clone() },
+            revision: if commit.is_empty() {
+                rev.to_string()
+            } else {
+                commit.clone()
+            },
             golden: "golden.json".to_string(),
         });
     }
@@ -1101,7 +1115,9 @@ fn build_f3_manifest(
         reference: None,
         capabilities: ModelCapabilities::default(),
     };
-    manifest.validate().map_err(|e| HubError::Package(e.to_string()))?;
+    manifest
+        .validate()
+        .map_err(|e| HubError::Package(e.to_string()))?;
     Ok(manifest)
 }
 
@@ -1200,7 +1216,9 @@ fn build_synth_manifest(
         reference: None,
         capabilities: ModelCapabilities::default(),
     };
-    manifest.validate().map_err(|e| HubError::Package(e.to_string()))?;
+    manifest
+        .validate()
+        .map_err(|e| HubError::Package(e.to_string()))?;
     Ok(manifest)
 }
 
@@ -1208,7 +1226,10 @@ fn build_synth_manifest(
 fn laya_budgets(rl_config: Option<&serde_json::Value>) -> (usize, usize) {
     let r = rl_config.unwrap_or(&serde_json::Value::Null);
     let max_len = r.get("max_len").and_then(|v| v.as_u64()).unwrap_or(512) as usize;
-    let head_max_len = r.get("head_max_len").and_then(|v| v.as_u64()).unwrap_or(192) as usize;
+    let head_max_len = r
+        .get("head_max_len")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(192) as usize;
     (max_len, head_max_len)
 }
 
@@ -1258,11 +1279,7 @@ fn laya_calibration(rl_config: Option<&serde_json::Value>) -> CalibrationConfig 
             } else {
                 Some(per_type)
             },
-            temperature_by_options: if tbo.is_empty() {
-                None
-            } else {
-                Some(tbo)
-            },
+            temperature_by_options: if tbo.is_empty() { None } else { Some(tbo) },
             confidence: ConfidenceDef::Entropy,
             status: CalibrationStatus::Fit,
         },
@@ -1343,8 +1360,11 @@ mod tests {
     fn resolves_local_directory() {
         let dir = tempfile::tempdir().unwrap();
         let manifest_path = dir.path().join("huncho-model.json");
-        std::fs::write(&manifest_path, serde_json::to_vec(&minimal_manifest_json("local-test")).unwrap())
-            .unwrap();
+        std::fs::write(
+            &manifest_path,
+            serde_json::to_vec(&minimal_manifest_json("local-test")).unwrap(),
+        )
+        .unwrap();
 
         let opts = ResolveOptions::default();
         let pkg = resolve(dir.path().to_str().unwrap(), None, "fp32", &opts).unwrap();
@@ -1361,8 +1381,7 @@ mod tests {
 
     #[test]
     fn required_files_select_artifact_and_head() {
-        let m: ModelManifest =
-            serde_json::from_value(minimal_manifest_json("m")).unwrap();
+        let m: ModelManifest = serde_json::from_value(minimal_manifest_json("m")).unwrap();
         let files = required_files(&m, Some(BackendId::Onnx), "fp32", true).unwrap();
         assert!(files.contains(&"model.onnx".to_string()));
         assert!(files.contains(&"head.safetensors".to_string()));
@@ -1372,8 +1391,7 @@ mod tests {
 
     #[test]
     fn required_files_omits_backend_artifact_for_mock() {
-        let m: ModelManifest =
-            serde_json::from_value(minimal_manifest_json("m")).unwrap();
+        let m: ModelManifest = serde_json::from_value(minimal_manifest_json("m")).unwrap();
         // For None (mock / no backbone needed), the ONNX artifact must not be required.
         let files = required_files(&m, None, "fp32", false).unwrap();
         assert!(!files.contains(&"model.onnx".to_string()));
@@ -1539,7 +1557,8 @@ mod tests {
             }
         });
 
-        let m = build_synth_manifest(&config, "convaiinnovations/laya", "main", None, None).unwrap();
+        let m =
+            build_synth_manifest(&config, "convaiinnovations/laya", "main", None, None).unwrap();
         assert_eq!(m.name, "laya");
         assert_eq!(m.family, Family::F1);
         assert_eq!(m.backbone.hidden_size, 1024);
@@ -1584,16 +1603,29 @@ mod tests {
         assert_eq!(m.prompt_contract.template, "laya-v1");
         assert_eq!(m.prompt_contract.max_len, 512);
         assert_eq!(m.prompt_contract.head_max_len, 192);
-        assert_eq!(m.backbone.tokenizer.as_deref(), Some("tokenizer/tokenizer.json"));
+        assert_eq!(
+            m.backbone.tokenizer.as_deref(),
+            Some("tokenizer/tokenizer.json")
+        );
         assert_eq!(m.prompt_contract.option_marker_tokens, vec!["[MASK]"]);
         let c = &m.calibration.default;
         assert_eq!(c.confidence, ConfidenceDef::Entropy);
         assert_eq!(
-            c.per_type_temperatures.as_ref().unwrap().get("choice").copied().unwrap(),
+            c.per_type_temperatures
+                .as_ref()
+                .unwrap()
+                .get("choice")
+                .copied()
+                .unwrap(),
             1.6369
         );
         assert_eq!(
-            c.temperature_by_options.as_ref().unwrap().get("choice:11+").copied().unwrap(),
+            c.temperature_by_options
+                .as_ref()
+                .unwrap()
+                .get("choice:11+")
+                .copied()
+                .unwrap(),
             0.5
         );
         // Bundling the tokenizer means the candle package must fetch it too.
@@ -1627,13 +1659,18 @@ mod tests {
         });
         let temp = serde_json::json!({"temperature": 1.0});
         let adapter = serde_json::json!({"peft_type": "LORA", "r": 16, "lora_alpha": 32});
-        let base_config =
-            serde_json::json!({"model_type": "qwen3", "hidden_size": 4096, "max_position_embeddings": 262144});
+        let base_config = serde_json::json!({"model_type": "qwen3", "hidden_size": 4096, "max_position_embeddings": 262144});
 
         let m = build_f3_manifest(
-            &schema, &serving, &temp, &adapter, Some(&base_config),
-            "bespokelabs/Bespoke-Nimble-9B", "c2022",
-            "Qwen/Qwen3.5-9B", "c202236235762e1c871ad0ccb60c8ee5ba337b9a",
+            &schema,
+            &serving,
+            &temp,
+            &adapter,
+            Some(&base_config),
+            "bespokelabs/Bespoke-Nimble-9B",
+            "c2022",
+            "Qwen/Qwen3.5-9B",
+            "c202236235762e1c871ad0ccb60c8ee5ba337b9a",
             Some("tokenizer.json"),
         )
         .unwrap();
@@ -1641,7 +1678,8 @@ mod tests {
         assert_eq!(m.family, Family::F3);
         assert_eq!(m.default_dtype(BackendId::Candle), "fp16");
         assert_eq!(
-            m.select_backend(&[BackendId::Candle], Some("fp16")).unwrap(),
+            m.select_backend(&[BackendId::Candle], Some("fp16"))
+                .unwrap(),
             BackendId::Candle
         );
         assert_eq!(m.name, "Bespoke-Nimble-9B");
@@ -1695,9 +1733,16 @@ mod tests {
         let adapter = serde_json::json!({"r": 16});
 
         let err = build_f3_manifest(
-            &schema, &serving, &temp, &adapter, None,
-            "bespokelabs/Bespoke-Nimble-9B", "c2022",
-            "Qwen/Qwen3.5-9B", "c2022", None,
+            &schema,
+            &serving,
+            &temp,
+            &adapter,
+            None,
+            "bespokelabs/Bespoke-Nimble-9B",
+            "c2022",
+            "Qwen/Qwen3.5-9B",
+            "c2022",
+            None,
         )
         .unwrap_err();
         assert!(matches!(err, HubError::Package(_)));
@@ -1718,9 +1763,16 @@ mod tests {
         let adapter = serde_json::json!({"r": 16});
 
         let m = build_f3_manifest(
-            &schema, &serving, &temp, &adapter, None,
-            "bespokelabs/Bespoke-Nimble-9B", "c2022",
-            "Qwen/Qwen3.5-9B", "c2022", None,
+            &schema,
+            &serving,
+            &temp,
+            &adapter,
+            None,
+            "bespokelabs/Bespoke-Nimble-9B",
+            "c2022",
+            "Qwen/Qwen3.5-9B",
+            "c2022",
+            None,
         )
         .unwrap();
         // No temperature config -> T = 1.0; no prompt hash -> FNV fallback.

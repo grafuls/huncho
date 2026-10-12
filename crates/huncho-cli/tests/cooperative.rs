@@ -326,10 +326,19 @@ fn cached_branch_cli_requires_actual_native_batches_and_fresh_labeled_gates() {
     let mut cooperative = mixed.clone();
     cooperative.push("--cooperative-prefill");
     let output = run_storage_profile(&cooperative, "3", "7", "1", "16");
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["cooperative_prefill"], true);
-    for key in ["prefill_yields", "prefill_interleaves", "fork_batch_calls", "fork_padded_batch_calls"] {
+    for key in [
+        "prefill_yields",
+        "prefill_interleaves",
+        "fork_batch_calls",
+        "fork_padded_batch_calls",
+    ] {
         assert!(report["work"][key].as_u64().unwrap() > 0);
     }
     let mut invalid = serve.to_vec();

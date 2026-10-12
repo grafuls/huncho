@@ -238,7 +238,10 @@ pub fn run(args: ExportArgs) -> anyhow::Result<()> {
         None
     };
     if let Some(expected) = &quantization_source {
-        anyhow::ensure!(*expected == hash_file(&args.output.join(conversion_path))?, "FP32 quantization source changed during export");
+        anyhow::ensure!(
+            *expected == hash_file(&args.output.join(conversion_path))?,
+            "FP32 quantization source changed during export"
+        );
     }
     std::fs::File::open(args.output.join(artifact_path))?.sync_all()?;
     if manifest.family == Family::F2 {

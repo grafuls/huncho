@@ -54,7 +54,9 @@ impl Family {
 }
 
 /// The backends an engine can target.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Serialize, Deserialize,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum BackendId {
     #[default]
@@ -460,7 +462,9 @@ impl ModelManifest {
                 )));
             }
             if f3.candidate_codes.is_empty() {
-                return Err(Error::Package("f3.candidate_codes must be non-empty".into()));
+                return Err(Error::Package(
+                    "f3.candidate_codes must be non-empty".into(),
+                ));
             }
             if f3.candidate_codes.len() != f3.candidate_token_ids.len() {
                 return Err(Error::Package(format!(
@@ -626,7 +630,10 @@ mod tests {
         let m = minimal_manifest();
         assert!(m.validate().is_ok());
         assert_eq!(m.family, Family::F1);
-        assert_eq!(m.find_artifact(BackendId::Onnx, "fp32").unwrap().path, "model.onnx");
+        assert_eq!(
+            m.find_artifact(BackendId::Onnx, "fp32").unwrap().path,
+            "model.onnx"
+        );
     }
 
     #[test]
@@ -711,7 +718,6 @@ mod tests {
             .select_backend(&[BackendId::LlamaCpp], Some("fp16"))
             .is_err());
     }
-
 
     #[test]
     fn automatic_backend_does_not_fall_back_for_missing_or_incompatible_artifacts() {

@@ -2,13 +2,13 @@
 
 use std::path::{Path, PathBuf};
 
-use huncho_backend::MockBackend;
 #[cfg(feature = "candle")]
 use huncho_backend::CandleBackend;
-#[cfg(feature = "candle")]
-use huncho_backend::Qwen3_5Backend;
+use huncho_backend::MockBackend;
 #[cfg(feature = "onnx")]
 use huncho_backend::OnnxBackend;
+#[cfg(feature = "candle")]
+use huncho_backend::Qwen3_5Backend;
 use huncho_core::backend::Backend;
 use huncho_core::engine::Engine;
 use huncho_core::error::{Error, Result};
@@ -91,7 +91,11 @@ fn load_tokenizer(manifest: &ModelManifest, dir: &Path) -> Result<Box<dyn Tokeni
             Error::Package("HUNCHO_TOKEN_CACHE_BYTES must be a nonnegative integer".into())
         })?,
         Err(std::env::VarError::NotPresent) => 0,
-        Err(_) => return Err(Error::Package("invalid HUNCHO_TOKEN_CACHE_BYTES value".into())),
+        Err(_) => {
+            return Err(Error::Package(
+                "invalid HUNCHO_TOKEN_CACHE_BYTES value".into(),
+            ))
+        }
     };
     if cache_bytes == 0 {
         Ok(tokenizer)
@@ -107,7 +111,11 @@ fn configure_prompt_cache(engine: Engine) -> Result<Engine> {
             Error::Package("HUNCHO_PROMPT_CACHE_BYTES must be a nonnegative integer".into())
         })?,
         Err(std::env::VarError::NotPresent) => 0,
-        Err(_) => return Err(Error::Package("invalid HUNCHO_PROMPT_CACHE_BYTES value".into())),
+        Err(_) => {
+            return Err(Error::Package(
+                "invalid HUNCHO_PROMPT_CACHE_BYTES value".into(),
+            ))
+        }
     };
     Ok(engine.with_prompt_cache(bytes))
 }
@@ -127,8 +135,15 @@ pub fn mock_engine(
             .with_dtype(dtype),
     );
     let tokenizer: Box<dyn Tokenizer> = Box::new(SimpleTokenizer::new(32768));
-    Engine::new(manifest, backend, tokenizer, HeadParams::default(), backend_id, dtype)
-        .and_then(configure_prompt_cache)
+    Engine::new(
+        manifest,
+        backend,
+        tokenizer,
+        HeadParams::default(),
+        backend_id,
+        dtype,
+    )
+    .and_then(configure_prompt_cache)
 }
 
 /// Load a manifest and drive it with the mock backend (no weights required).
@@ -144,12 +159,24 @@ pub fn mock_engine_from_manifest(path: impl AsRef<Path>) -> Result<Engine> {
             .with_dtype("fp32"),
     );
     let tokenizer: Box<dyn Tokenizer> = Box::new(SimpleTokenizer::new(32768));
-    Engine::new(manifest, backend, tokenizer, HeadParams::default(), BackendId::Onnx, "fp32")
-        .and_then(configure_prompt_cache)
+    Engine::new(
+        manifest,
+        backend,
+        tokenizer,
+        HeadParams::default(),
+        BackendId::Onnx,
+        "fp32",
+    )
+    .and_then(configure_prompt_cache)
 }
 
 /// Build a mock [`ModelManifest`].
-pub fn mock_manifest(name: &str, family: Family, _dtype: &str, temperature: f32) -> Result<ModelManifest> {
+pub fn mock_manifest(
+    name: &str,
+    family: Family,
+    _dtype: &str,
+    temperature: f32,
+) -> Result<ModelManifest> {
     let head_kind = huncho_core::manifest::family_kind(family);
     let manifest = ModelManifest {
         schema_version: huncho_core::manifest::MANIFEST_SCHEMA_VERSION.into(),
@@ -256,7 +283,8 @@ fn engine_from_manifest_observed(
 
     // Artifacts and the tokenizer are declared relative to the manifest's
     // directory, not the manifest file itself.
-    let dir = path.parent()
+    let dir = path
+        .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
     observer(&manifest, backend_id, &dtype, dir)?;
@@ -267,8 +295,15 @@ fn engine_from_manifest_observed(
         load_tokenizer(&manifest, dir)?
     };
     let backend = load_backend(&manifest, backend_id, &dtype, dir)?;
-    Engine::new(manifest, backend, tokenizer, HeadParams::default(), backend_id, dtype)
-        .and_then(configure_prompt_cache)
+    Engine::new(
+        manifest,
+        backend,
+        tokenizer,
+        HeadParams::default(),
+        backend_id,
+        dtype,
+    )
+    .and_then(configure_prompt_cache)
 }
 
 fn load_backend(
@@ -373,11 +408,15 @@ fn validate_runtime_lora(
         && (!cfg!(feature = "candle")
             || backend_id != BackendId::Candle
             || !(manifest.family == Family::F3
-                || (manifest.family == Family::F2 && manifest.prompt_contract.template == "kev-v1"))
+                || (manifest.family == Family::F2
+                    && manifest.prompt_contract.template == "kev-v1"))
             || std::env::var("HUNCHO_DEVICE").as_deref() != Ok("cpu")
             || dtype.is_some_and(|dtype| dtype != "fp32"))
     {
-        return Err(Error::Unsupported("runtime LoRA requires native Candle Qwen F2/F3, fp32 and explicit HUNCHO_DEVICE=cpu".into()));
+        return Err(Error::Unsupported(
+            "runtime LoRA requires native Candle Qwen F2/F3, fp32 and explicit HUNCHO_DEVICE=cpu"
+                .into(),
+        ));
     }
     Ok(())
 }
@@ -483,7 +522,9 @@ fn load_clef(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<dy
 
 #[cfg(not(feature = "clef"))]
 fn load_clef(_manifest: &ModelManifest, _dtype: &str, _dir: &Path) -> Result<Box<dyn Backend>> {
-    Err(Error::Unsupported("native Clef requires building huncho with --features clef".into()))
+    Err(Error::Unsupported(
+        "native Clef requires building huncho with --features clef".into(),
+    ))
 }
 
 #[cfg(feature = "candle")]
@@ -581,7 +622,10 @@ fn load_candle(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<
         let base_dir = adapter_base_dir(manifest, adapter_dir);
         let backend = if bool_env("HUNCHO_RUNTIME_LORA")? {
             Qwen3_5Backend::load_runtime_lora(
-                &base_dir, adapter_dir, manifest.backbone.max_context, dtype,
+                &base_dir,
+                adapter_dir,
+                manifest.backbone.max_context,
+                dtype,
             )
         } else {
             Qwen3_5Backend::load_on_device(
@@ -663,8 +707,14 @@ fn kv_page_tokens_from_env() -> Result<usize> {
         Ok(value) => value
             .parse::<usize>()
             .ok()
-            .filter(|&tokens| tokens == 0 || ((16..=256).contains(&tokens) && tokens.is_power_of_two()))
-            .ok_or_else(|| Error::Request("HUNCHO_KV_PAGE_TOKENS must be 0 or a power of two in 16..256".into())),
+            .filter(|&tokens| {
+                tokens == 0 || ((16..=256).contains(&tokens) && tokens.is_power_of_two())
+            })
+            .ok_or_else(|| {
+                Error::Request(
+                    "HUNCHO_KV_PAGE_TOKENS must be 0 or a power of two in 16..256".into(),
+                )
+            }),
         Err(std::env::VarError::NotPresent) => Ok(0),
         Err(_) => Err(Error::Request("invalid HUNCHO_KV_PAGE_TOKENS".into())),
     }
@@ -687,9 +737,9 @@ fn bool_env(name: &str) -> Result<bool> {
         Ok(value) if matches!(value.as_str(), "1" | "true") => Ok(true),
         Ok(value) if matches!(value.as_str(), "0" | "false") => Ok(false),
         Err(std::env::VarError::NotPresent) => Ok(false),
-        _ => Err(Error::Request(
-            format!("{name} must be 0, 1, false or true"),
-        )),
+        _ => Err(Error::Request(format!(
+            "{name} must be 0, 1, false or true"
+        ))),
     }
 }
 
@@ -716,7 +766,11 @@ pub(crate) fn adapter_base_dir(manifest: &ModelManifest, adapter_dir: &Path) -> 
     else {
         return adapter_dir.to_path_buf();
     };
-    let revision = if revision.is_empty() { "main" } else { revision };
+    let revision = if revision.is_empty() {
+        "main"
+    } else {
+        revision
+    };
     cache
         .join(format!("models--{}", repo.replace('/', "--")))
         .join("snapshots")
@@ -747,9 +801,7 @@ fn load_onnx(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<dy
     }
     let artifact = manifest
         .find_artifact(BackendId::Onnx, dtype)
-        .ok_or_else(|| {
-            Error::Package(format!("no ONNX artifact for dtype `{dtype}`"))
-        })?;
+        .ok_or_else(|| Error::Package(format!("no ONNX artifact for dtype `{dtype}`")))?;
     let onnx_path = dir.join(&artifact.path);
     let execution_provider = match std::env::var("HUNCHO_ONNX_EP") {
         Ok(value) => huncho_backend::onnx::OnnxExecutionProvider::parse(&value)?,
@@ -757,20 +809,29 @@ fn load_onnx(manifest: &ModelManifest, dtype: &str, dir: &Path) -> Result<Box<dy
         Err(_) => return Err(Error::Request("invalid HUNCHO_ONNX_EP".into())),
     };
     let intra_threads = match std::env::var("HUNCHO_ONNX_THREADS") {
-        Ok(value) => value.parse::<usize>().map_err(|_| Error::Request(
-            "HUNCHO_ONNX_THREADS must be an integer from 0 to 256".into()))?,
+        Ok(value) => value.parse::<usize>().map_err(|_| {
+            Error::Request("HUNCHO_ONNX_THREADS must be an integer from 0 to 256".into())
+        })?,
         Err(std::env::VarError::NotPresent) => 0,
         Err(_) => return Err(Error::Request("invalid HUNCHO_ONNX_THREADS".into())),
     };
     let output_buffer_bytes = match std::env::var("HUNCHO_ONNX_OUTPUT_BUFFER_BYTES") {
-        Ok(value) => value.parse::<usize>().map_err(|_| Error::Request(
-            "HUNCHO_ONNX_OUTPUT_BUFFER_BYTES must be a nonnegative integer".into()))?,
+        Ok(value) => value.parse::<usize>().map_err(|_| {
+            Error::Request("HUNCHO_ONNX_OUTPUT_BUFFER_BYTES must be a nonnegative integer".into())
+        })?,
         Err(std::env::VarError::NotPresent) => 0,
-        Err(_) => return Err(Error::Request("invalid HUNCHO_ONNX_OUTPUT_BUFFER_BYTES".into())),
+        Err(_) => {
+            return Err(Error::Request(
+                "invalid HUNCHO_ONNX_OUTPUT_BUFFER_BYTES".into(),
+            ))
+        }
     };
     let device_io_bytes = match std::env::var("HUNCHO_ONNX_DEVICE_IO_BYTES") {
-        Ok(value) => value.parse::<usize>().map_err(|_| Error::Request(
-            "HUNCHO_ONNX_DEVICE_IO_BYTES must be an integer from 0 to 536870912".into()))?,
+        Ok(value) => value.parse::<usize>().map_err(|_| {
+            Error::Request(
+                "HUNCHO_ONNX_DEVICE_IO_BYTES must be an integer from 0 to 536870912".into(),
+            )
+        })?,
         Err(std::env::VarError::NotPresent) => 0,
         Err(_) => return Err(Error::Request("invalid HUNCHO_ONNX_DEVICE_IO_BYTES".into())),
     };
@@ -835,9 +896,15 @@ pub(crate) fn engine_from_resolved_manifest_observed(
     observer: impl FnOnce(&ModelManifest, BackendId, &str, &Path) -> Result<()>,
 ) -> Result<Engine> {
     let backend_id = match backend {
-        BackendChoice::Mock => return Err(Error::Unsupported("mock execution cannot produce a real-artifact qualification record".into())),
+        BackendChoice::Mock => {
+            return Err(Error::Unsupported(
+                "mock execution cannot produce a real-artifact qualification record".into(),
+            ))
+        }
         BackendChoice::Explicit(id) => id,
-        BackendChoice::Auto => ModelManifest::load(manifest_path)?.select_backend(&available_backends(), dtype)?,
+        BackendChoice::Auto => {
+            ModelManifest::load(manifest_path)?.select_backend(&available_backends(), dtype)?
+        }
     };
     engine_from_manifest_observed(manifest_path, backend_id, dtype, observer)
 }
@@ -894,7 +961,15 @@ pub fn resolve_model(
         ModelManifest::load(&manifest)?;
         return Ok(manifest);
     }
-    resolve_hub_model(model, backend, dtype, revision, token, cache_dir, fetch_golden)
+    resolve_hub_model(
+        model,
+        backend,
+        dtype,
+        revision,
+        token,
+        cache_dir,
+        fetch_golden,
+    )
 }
 
 #[cfg(feature = "hf")]
@@ -907,7 +982,7 @@ fn resolve_hub_model(
     cache_dir: Option<String>,
     fetch_golden: bool,
 ) -> Result<PathBuf> {
-    use huncho_hub::{ResolveOptions, resolve_manifest_path};
+    use huncho_hub::{resolve_manifest_path, ResolveOptions};
 
     let opts = ResolveOptions {
         revision,
@@ -961,7 +1036,7 @@ pub fn engine_from_ref(
 #[cfg(all(test, feature = "candle"))]
 mod candle_tests {
     use super::*;
-    use crate::convert::{ConvertArgs, build_manifest};
+    use crate::convert::{build_manifest, ConvertArgs};
     use huncho_core::backend::ForwardInput;
     use std::fs;
     use tempfile::tempdir;
@@ -986,7 +1061,10 @@ mod candle_tests {
             fs::copy(fixture.join(file), dir.path().join(file)).unwrap();
         }
         let mut manifest = mock_manifest("tiny-kev", Family::F2, "fp32", 2.4060501).unwrap();
-        manifest.backbone.source = BackboneSource::Hf { repo: "fixture/qwen3.5".into(), revision: "1111111111111111111111111111111111111111".into() };
+        manifest.backbone.source = BackboneSource::Hf {
+            repo: "fixture/qwen3.5".into(),
+            revision: "1111111111111111111111111111111111111111".into(),
+        };
         manifest.backbone.hidden_size = 16;
         manifest.backbone.artifacts.insert(
             BackendId::Candle,
@@ -1089,18 +1167,29 @@ mod candle_tests {
             .contains("question row requires"));
         // A package declaring FP16 uses it automatically only on CUDA.
         // Explicit dtype requests remain authoritative on either device.
-        manifest.backbone.artifacts.get_mut(&BackendId::Candle).unwrap().push(
-            huncho_core::manifest::ArtifactRef {
+        manifest
+            .backbone
+            .artifacts
+            .get_mut(&BackendId::Candle)
+            .unwrap()
+            .push(huncho_core::manifest::ArtifactRef {
                 path: "adapter_model.safetensors".into(),
                 dtype: "fp16".into(),
                 quantization: None,
-            },
-        );
+            });
         fs::write(&path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
         let automatic = engine_from_resolved_manifest(&path, BackendChoice::Auto, None).unwrap();
-        assert_eq!(automatic.dtype(), if automatic.device().starts_with("GPU") { "fp16" } else { "fp32" });
+        assert_eq!(
+            automatic.dtype(),
+            if automatic.device().starts_with("GPU") {
+                "fp16"
+            } else {
+                "fp32"
+            }
+        );
         for dtype in ["fp16", "fp32"] {
-            let explicit = engine_from_resolved_manifest(&path, BackendChoice::Auto, Some(dtype)).unwrap();
+            let explicit =
+                engine_from_resolved_manifest(&path, BackendChoice::Auto, Some(dtype)).unwrap();
             assert_eq!(explicit.dtype(), dtype);
             explicit.eval(&req, &Default::default()).unwrap();
         }
@@ -1109,8 +1198,16 @@ mod candle_tests {
     #[test]
     fn load_candle_from_manifest_builds_backend() {
         let dir = tempdir().unwrap();
-        fs::copy(Path::new(FIXTURE).join("config.json"), dir.path().join("config.json")).unwrap();
-        fs::copy(Path::new(FIXTURE).join("model.safetensors"), dir.path().join("model.safetensors")).unwrap();
+        fs::copy(
+            Path::new(FIXTURE).join("config.json"),
+            dir.path().join("config.json"),
+        )
+        .unwrap();
+        fs::copy(
+            Path::new(FIXTURE).join("model.safetensors"),
+            dir.path().join("model.safetensors"),
+        )
+        .unwrap();
 
         let manifest = build_manifest(&ConvertArgs {
             hf_repo: "example/tiny".into(),
@@ -1131,7 +1228,9 @@ mod candle_tests {
         let mut backend = load_candle(&manifest, "fp32", dir.path()).unwrap();
         assert_eq!(backend.id(), BackendId::Candle);
 
-        let out = backend.forward(ForwardInput::new(vec![1, 2, 3, 4], vec![1])).unwrap();
+        let out = backend
+            .forward(ForwardInput::new(vec![1, 2, 3, 4], vec![1]))
+            .unwrap();
         assert_eq!(out.values().shape(), &[1, 8]);
     }
 
@@ -1188,8 +1287,16 @@ mod candle_tests {
     #[test]
     fn engine_eval_end_to_end_via_candle() {
         let dir = tempdir().unwrap();
-        fs::copy(Path::new(FIXTURE).join("config.json"), dir.path().join("config.json")).unwrap();
-        fs::copy(Path::new(FIXTURE).join("model.safetensors"), dir.path().join("model.safetensors")).unwrap();
+        fs::copy(
+            Path::new(FIXTURE).join("config.json"),
+            dir.path().join("config.json"),
+        )
+        .unwrap();
+        fs::copy(
+            Path::new(FIXTURE).join("model.safetensors"),
+            dir.path().join("model.safetensors"),
+        )
+        .unwrap();
 
         let manifest = build_manifest(&ConvertArgs {
             hf_repo: "example/tiny".into(),
@@ -1208,7 +1315,11 @@ mod candle_tests {
         .unwrap();
 
         let manifest_path = dir.path().join("huncho-model.json");
-        fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
+        fs::write(
+            &manifest_path,
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
 
         // Full serving pipeline: manifest -> tokenizer -> candle backend -> F1
         // head -> calibration -> response.
@@ -1224,7 +1335,9 @@ mod candle_tests {
         }))
         .unwrap();
 
-        let resp = engine.eval(&req, &huncho_core::engine::EvalOptions::default()).unwrap();
+        let resp = engine
+            .eval(&req, &huncho_core::engine::EvalOptions::default())
+            .unwrap();
         assert!(resp.usage.input_tokens > 0);
 
         match resp.answers.get("q1").expect("answer for q1") {
@@ -1236,7 +1349,10 @@ mod candle_tests {
                 assert_eq!(probabilities.len(), 2);
                 let sum: f32 = probabilities.values().sum();
                 assert!(sum.is_finite());
-                assert!((sum - 1.0).abs() < 1e-3, "probabilities must sum to 1, got {sum}");
+                assert!(
+                    (sum - 1.0).abs() < 1e-3,
+                    "probabilities must sum to 1, got {sum}"
+                );
                 assert!(probabilities.contains_key(choice));
                 assert!(*confidence >= 0.0 && *confidence <= 1.0);
             }

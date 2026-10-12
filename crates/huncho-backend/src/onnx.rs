@@ -1227,9 +1227,10 @@ impl Backend for OnnxBackend {
             .iter()
             .map(|input| (input.tokens.as_slice(), input.positions.as_slice()))
             .collect::<Vec<_>>();
-        let qtypes = self.options.integrated_head.then(|| {
-            inputs.iter().map(|input| input.qtype).collect::<Vec<_>>()
-        });
+        let qtypes = self
+            .options
+            .integrated_head
+            .then(|| inputs.iter().map(|input| input.qtype).collect::<Vec<_>>());
         let values = self.run_readouts(&requests, qtypes.as_deref(), false)?;
         Ok(inputs
             .into_iter()
@@ -1270,9 +1271,10 @@ impl Backend for OnnxBackend {
             .iter()
             .map(|input| (input.tokens.as_slice(), input.positions.as_slice()))
             .collect::<Vec<_>>();
-        let qtypes = self.options.integrated_head.then(|| {
-            inputs.iter().map(|input| input.qtype).collect::<Vec<_>>()
-        });
+        let qtypes = self
+            .options
+            .integrated_head
+            .then(|| inputs.iter().map(|input| input.qtype).collect::<Vec<_>>());
         let values = self.run_readouts(&requests, qtypes.as_deref(), true)?;
         Ok(inputs
             .into_iter()

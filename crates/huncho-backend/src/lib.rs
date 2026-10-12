@@ -21,22 +21,22 @@ pub mod candle;
 pub mod clef;
 #[cfg(feature = "candle")]
 mod conv_cpu;
-#[cfg(feature = "candle")]
-mod cpu_profile;
 #[cfg(feature = "cpu-blas")]
 mod cpu_blas;
 #[cfg(feature = "candle")]
-mod delta_cpu;
+mod cpu_profile;
 #[cfg(feature = "candle")]
-mod gate_cpu;
+mod delta_cpu;
 #[cfg(feature = "candle")]
 pub mod device;
 #[cfg(feature = "candle")]
+mod gate_cpu;
+#[cfg(feature = "candle")]
 pub mod kev;
+#[cfg(feature = "llamacpp")]
+pub mod llamacpp;
 pub mod mock;
 pub mod null;
-#[cfg(feature = "vllm")]
-pub mod vllm;
 #[cfg(feature = "onnx")]
 pub mod onnx;
 #[cfg(feature = "onnx-shared")]
@@ -45,21 +45,21 @@ mod onnx_shared;
 pub mod qwen3_5;
 #[cfg(feature = "shared-base")]
 pub mod shared_base;
-#[cfg(feature = "llamacpp")]
-pub mod llamacpp;
+#[cfg(feature = "vllm")]
+pub mod vllm;
 
 #[cfg(feature = "candle")]
 pub use candle::CandleBackend;
 #[cfg(feature = "clef")]
 pub use clef::ClefBackend;
+#[cfg(feature = "llamacpp")]
+pub use llamacpp::LlamaCppBackend;
 pub use mock::MockBackend;
 pub use null::NullBackend;
 #[cfg(feature = "onnx")]
 pub use onnx::OnnxBackend;
 #[cfg(feature = "candle")]
 pub use qwen3_5::Qwen3_5Backend;
-#[cfg(feature = "llamacpp")]
-pub use llamacpp::LlamaCppBackend;
 
 /// Process-unique handles prevent an ID from one model accidentally selecting
 /// another model's live prefix. Allocation never wraps and reuses an old ID.
