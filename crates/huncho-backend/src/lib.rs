@@ -63,6 +63,9 @@ pub use qwen3_5::Qwen3_5Backend;
 
 /// Process-unique handles prevent an ID from one model accidentally selecting
 /// another model's live prefix. Allocation never wraps and reuses an old ID.
+// `fetch_update` is deprecated for `try_update` on newer toolchains, but
+// `try_update` is too new for our MSRV — keep `fetch_update` and silence the lint.
+#[allow(deprecated)]
 fn next_cache_handle() -> huncho_core::error::Result<huncho_core::backend::CacheHandle> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(1);
