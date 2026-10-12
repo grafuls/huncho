@@ -1,0 +1,66 @@
+name: CI
+on:
+  push: { branches: [main] }
+  pull_request:
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: rustfmt, clippy }
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo clippy -p huncho-backend -p huncho-cli --all-targets --features onnx,candle,clef -- -D warnings
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: default, cmd: "cargo test --workspace" }
+          - { name: onnx,    cmd: "cargo test -p huncho-backend -p huncho-cli --features onnx" }
+          - { name: candle,  cmd: "cargo test -p huncho-backend -p huncho-cli --features candle" }
+          - { name: clef,    cmd: "cargo test -p huncho-backend -p huncho-cli --features clef" }
+    name: test (${{ matrix.name }})
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.name }}
+      - run: ${{ matrix.cmd }}
+
+  conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build -p huncho-cli --features onnx,hf,tokenizers
+      - name: Golden conformance (mock F1 / ONNX)
+        run: |
+          ./target/debug/huncho conform \
+            --manifest examples/mock-model/huncho-model.json \
+            --golden   examples/mock-model/golden.json
+
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.80.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
