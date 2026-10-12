@@ -10,7 +10,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      # Pinned, not @stable: clippy lints change between toolchains, so a floating
+      # stable makes the gate non-reproducible and break on each release. Pin to a
+      # version maintainers run locally; bump deliberately.
+      - uses: dtolnay/rust-toolchain@1.97.1
         with: { components: rustfmt, clippy }
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
@@ -49,13 +52,9 @@ jobs:
             --manifest examples/mock-model/huncho-model.json \
             --golden   examples/mock-model/golden.json
 
-  msrv:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.89.0
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo check --workspace
+  # No MSRV job: bleeding-edge deps (icu edition2024, konst/redb 1.89,
+  # xet-core round_char_boundary) force an ever-rising Rust floor, so a pinned
+  # MSRV is meaningless for this application. Re-add if deps are constrained.
 
   audit:
     runs-on: ubuntu-latest

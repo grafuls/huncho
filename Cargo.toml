@@ -16,7 +16,9 @@ candle-kernels = { path = "vendor/candle-kernels" }
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.89"
+# No rust-version pin: transitive deps (icu edition2024, konst/redb >=1.89,
+# xet-core round_char_boundary) force an ever-rising floor, so any fixed MSRV
+# would be false. This is an application, not a published library.
 license = "Apache-2.0"
 repository = "https://github.com/grafuls/huncho"
 
