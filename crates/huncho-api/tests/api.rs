@@ -767,7 +767,7 @@ async fn noul_and_score_questions_serve() {
     let sev = &body["answers"]["severity"];
     assert_eq!(sev["type"], "score");
     let score = sev["score"].as_f64().unwrap();
-    assert!(score >= 0.0 && score <= 2.0);
+    assert!((0.0..=2.0).contains(&score));
     assert!(sev["legend"].is_object());
 }
 
@@ -1096,6 +1096,7 @@ fn slow_state_with_config(
     )
 }
 
+#[allow(clippy::type_complexity)]
 fn batch_state(
     config: ServerConfig,
     slow: bool,

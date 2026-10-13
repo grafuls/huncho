@@ -496,7 +496,7 @@ impl OnnxBackend {
             output_name,
             hidden_size,
             max_context,
-            dtype: dtype.into(),
+            dtype,
             id: BackendId::Onnx,
             families: vec![Family::F1],
             options,
@@ -932,124 +932,6 @@ impl ReadoutLayout {
     }
 }
 
-#[cfg(test)]
-mod output_binding_tests {
-    #[test]
-    fn integrated_runtime_output_rank_cannot_bypass_the_flat_score_abi() {
-        let layout = super::ReadoutLayout {
-            batch: 1,
-            seq: 3,
-            rows: 2,
-            compact: true,
-            integrated: true,
-            empty_width: 1,
-        };
-        let requests = [(&[1u32, 2, 3][..], &[0usize, 1][..])];
-        assert!(layout.copy(&requests, &[1, 2, 1], &[0.1, 0.2]).is_err());
-        assert!(layout.copy(&requests, &[2, 1], &[0.1, 0.2]).is_ok());
-    }
-
-    use super::*;
-
-    #[test]
-    fn actual_native_output_uses_the_retained_allocation_and_preserves_owned_answers() {
-        let fixture = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/tiny_encoder.onnx"
-        );
-        let mut backend = OnnxBackend::load_with_options(
-            fixture,
-            8,
-            512,
-            "fp32",
-            OnnxOptions {
-                output_buffer_bytes: 1024,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let first = backend
-            .forward(ForwardInput::new(vec![3, 10, 5], vec![2, 0, 2]))
-            .unwrap();
-        let frozen: Vec<_> = first.values().data().iter().map(|v| v.to_bits()).collect();
-        assert_eq!(
-            backend.last_native_output_address, backend.expected_bound_output_address,
-            "the bound output must use the original preallocated storage"
-        );
-        let address = backend.last_native_output_address.unwrap();
-        for tokens in [vec![5, 3, 10], vec![10, 5, 3], vec![3, 10, 5]] {
-            backend
-                .forward(ForwardInput::new(tokens, vec![0, 2, 1]))
-                .unwrap();
-            assert_eq!(backend.last_native_output_address, Some(address));
-            assert_eq!(
-                backend.last_native_output_address,
-                backend.expected_bound_output_address
-            );
-            assert_eq!(
-                first
-                    .values()
-                    .data()
-                    .iter()
-                    .map(|v| v.to_bits())
-                    .collect::<Vec<_>>(),
-                frozen
-            );
-        }
-        assert_eq!(backend.output_buffer_reuses(), 3);
-        assert_eq!(backend.retained_output_bytes(), 96);
-    }
-
-    #[test]
-    fn retained_binding_clears_request_inputs_after_success_and_output_validation_failure() {
-        for (graph, integrated_head, hidden_size) in [
-            ("tiny_encoder.onnx", false, 8),
-            ("integrated_f1/nonfinite.onnx", true, 4),
-        ] {
-            let root = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures"));
-            let mut backend = OnnxBackend::load_with_options(
-                root.join(graph),
-                hidden_size,
-                512,
-                "fp32",
-                OnnxOptions {
-                    integrated_head,
-                    output_buffer_bytes: 1024,
-                    intra_threads: 1,
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-            let input = if integrated_head {
-                let reference: serde_json::Value = serde_json::from_slice(
-                    &std::fs::read(root.join("integrated_f1/reference.json")).unwrap(),
-                )
-                .unwrap();
-                let row = &reference["readouts"][0][0];
-                ForwardInput::new(
-                    serde_json::from_value(row["tokens"].clone()).unwrap(),
-                    serde_json::from_value(row["positions"].clone()).unwrap(),
-                )
-                .with_qtype(row["qtype"].as_u64().unwrap() as u32)
-            } else {
-                ForwardInput::new(vec![3, 10, 5], vec![2, 0])
-            };
-            let result = backend.forward(input.clone());
-            assert_eq!(result.is_err(), integrated_head);
-            if integrated_head {
-                assert!(result.err().unwrap().to_string().contains("nonfinite"));
-            }
-            assert!(backend.retained_output_bytes() > 0);
-            // The output allocation remains bound, but the native runtime must
-            // refuse a run without new inputs instead of retaining token data.
-            let binding = backend.output_buffer.as_mut().unwrap().1.get_mut().unwrap();
-            assert!(backend.session.run_binding(binding).is_err());
-            let retry = backend.forward(input);
-            assert_eq!(retry.is_err(), integrated_head);
-        }
-    }
-}
-
 impl Backend for OnnxBackend {
     fn replica(&self) -> Result<Box<dyn Backend>> {
         #[cfg(feature = "onnx-shared")]
@@ -1227,9 +1109,10 @@ impl Backend for OnnxBackend {
             .iter()
             .map(|input| (input.tokens.as_slice(), input.positions.as_slice()))
             .collect::<Vec<_>>();
-        let qtypes = self.options.integrated_head.then(|| {
-            inputs.iter().map(|input| input.qtype).collect::<Vec<_>>()
-        });
+        let qtypes = self
+            .options
+            .integrated_head
+            .then(|| inputs.iter().map(|input| input.qtype).collect::<Vec<_>>());
         let values = self.run_readouts(&requests, qtypes.as_deref(), false)?;
         Ok(inputs
             .into_iter()
@@ -1270,9 +1153,10 @@ impl Backend for OnnxBackend {
             .iter()
             .map(|input| (input.tokens.as_slice(), input.positions.as_slice()))
             .collect::<Vec<_>>();
-        let qtypes = self.options.integrated_head.then(|| {
-            inputs.iter().map(|input| input.qtype).collect::<Vec<_>>()
-        });
+        let qtypes = self
+            .options
+            .integrated_head
+            .then(|| inputs.iter().map(|input| input.qtype).collect::<Vec<_>>());
         let values = self.run_readouts(&requests, qtypes.as_deref(), true)?;
         Ok(inputs
             .into_iter()
@@ -1297,5 +1181,123 @@ impl Backend for OnnxBackend {
         Err(Error::Unsupported(
             "ONNX backend v1 does not support KV forking".into(),
         ))
+    }
+}
+
+#[cfg(test)]
+mod output_binding_tests {
+    #[test]
+    fn integrated_runtime_output_rank_cannot_bypass_the_flat_score_abi() {
+        let layout = super::ReadoutLayout {
+            batch: 1,
+            seq: 3,
+            rows: 2,
+            compact: true,
+            integrated: true,
+            empty_width: 1,
+        };
+        let requests = [(&[1u32, 2, 3][..], &[0usize, 1][..])];
+        assert!(layout.copy(&requests, &[1, 2, 1], &[0.1, 0.2]).is_err());
+        assert!(layout.copy(&requests, &[2, 1], &[0.1, 0.2]).is_ok());
+    }
+
+    use super::*;
+
+    #[test]
+    fn actual_native_output_uses_the_retained_allocation_and_preserves_owned_answers() {
+        let fixture = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/tiny_encoder.onnx"
+        );
+        let mut backend = OnnxBackend::load_with_options(
+            fixture,
+            8,
+            512,
+            "fp32",
+            OnnxOptions {
+                output_buffer_bytes: 1024,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let first = backend
+            .forward(ForwardInput::new(vec![3, 10, 5], vec![2, 0, 2]))
+            .unwrap();
+        let frozen: Vec<_> = first.values().data().iter().map(|v| v.to_bits()).collect();
+        assert_eq!(
+            backend.last_native_output_address, backend.expected_bound_output_address,
+            "the bound output must use the original preallocated storage"
+        );
+        let address = backend.last_native_output_address.unwrap();
+        for tokens in [vec![5, 3, 10], vec![10, 5, 3], vec![3, 10, 5]] {
+            backend
+                .forward(ForwardInput::new(tokens, vec![0, 2, 1]))
+                .unwrap();
+            assert_eq!(backend.last_native_output_address, Some(address));
+            assert_eq!(
+                backend.last_native_output_address,
+                backend.expected_bound_output_address
+            );
+            assert_eq!(
+                first
+                    .values()
+                    .data()
+                    .iter()
+                    .map(|v| v.to_bits())
+                    .collect::<Vec<_>>(),
+                frozen
+            );
+        }
+        assert_eq!(backend.output_buffer_reuses(), 3);
+        assert_eq!(backend.retained_output_bytes(), 96);
+    }
+
+    #[test]
+    fn retained_binding_clears_request_inputs_after_success_and_output_validation_failure() {
+        for (graph, integrated_head, hidden_size) in [
+            ("tiny_encoder.onnx", false, 8),
+            ("integrated_f1/nonfinite.onnx", true, 4),
+        ] {
+            let root = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures"));
+            let mut backend = OnnxBackend::load_with_options(
+                root.join(graph),
+                hidden_size,
+                512,
+                "fp32",
+                OnnxOptions {
+                    integrated_head,
+                    output_buffer_bytes: 1024,
+                    intra_threads: 1,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let input = if integrated_head {
+                let reference: serde_json::Value = serde_json::from_slice(
+                    &std::fs::read(root.join("integrated_f1/reference.json")).unwrap(),
+                )
+                .unwrap();
+                let row = &reference["readouts"][0][0];
+                ForwardInput::new(
+                    serde_json::from_value(row["tokens"].clone()).unwrap(),
+                    serde_json::from_value(row["positions"].clone()).unwrap(),
+                )
+                .with_qtype(row["qtype"].as_u64().unwrap() as u32)
+            } else {
+                ForwardInput::new(vec![3, 10, 5], vec![2, 0])
+            };
+            let result = backend.forward(input.clone());
+            assert_eq!(result.is_err(), integrated_head);
+            if integrated_head {
+                assert!(result.err().unwrap().to_string().contains("nonfinite"));
+            }
+            assert!(backend.retained_output_bytes() > 0);
+            // The output allocation remains bound, but the native runtime must
+            // refuse a run without new inputs instead of retaining token data.
+            let binding = backend.output_buffer.as_mut().unwrap().1.get_mut().unwrap();
+            assert!(backend.session.run_binding(binding).is_err());
+            let retry = backend.forward(input);
+            assert_eq!(retry.is_err(), integrated_head);
+        }
     }
 }

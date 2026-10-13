@@ -86,10 +86,13 @@ pub fn build_manifest(args: &ConvertArgs) -> anyhow::Result<ModelManifest> {
     }
     let artifact_name = artifact_name_for(backend);
 
-    let name = args
-        .name
-        .clone()
-        .unwrap_or_else(|| args.hf_repo.rsplit('/').next().unwrap_or("model").to_string());
+    let name = args.name.clone().unwrap_or_else(|| {
+        args.hf_repo
+            .rsplit('/')
+            .next()
+            .unwrap_or("model")
+            .to_string()
+    });
 
     let head_kind = manifest::family_kind(family);
     let template = format!("{}-v1", family.to_string().to_lowercase());
@@ -162,7 +165,13 @@ pub fn build_manifest(args: &ConvertArgs) -> anyhow::Result<ModelManifest> {
 /// Run the artifact converter via the configured `--runner`, if any. Sets the
 /// `HUNCHO_ARTIFACT`, `HUNCHO_REPO`, `HUNCHO_REVISION`, and `HUNCHO_OUT` env
 /// vars for the subprocess (CONV-01).
-pub fn run_runner(runner: &str, backend: BackendId, hf_repo: &str, revision: &str, out: &str) -> anyhow::Result<()> {
+pub fn run_runner(
+    runner: &str,
+    backend: BackendId,
+    hf_repo: &str,
+    revision: &str,
+    out: &str,
+) -> anyhow::Result<()> {
     let artifact_name = artifact_name_for(backend);
     tracing::info!("running artifact converter: {runner}");
     let status = std::process::Command::new("sh")
@@ -226,8 +235,11 @@ pub fn assemble_candle_package(
             .get("weight_map")
             .and_then(|v| v.as_object())
             .map(|m| {
-                let mut s: Vec<String> =
-                    m.values().filter_map(|v| v.as_str()).map(String::from).collect();
+                let mut s: Vec<String> = m
+                    .values()
+                    .filter_map(|v| v.as_str())
+                    .map(String::from)
+                    .collect();
                 s.sort();
                 s.dedup();
                 s
@@ -259,9 +271,7 @@ pub fn bundle_tokenizer(source: &Path, out: &Path, tokenizer: &str) -> anyhow::R
         source.join(tokenizer),
         source.join("tokenizer").join(tokenizer),
     ])
-    .ok_or_else(|| {
-        anyhow::anyhow!("tokenizer `{tokenizer}` not found in {}", source.display())
-    })?;
+    .ok_or_else(|| anyhow::anyhow!("tokenizer `{tokenizer}` not found in {}", source.display()))?;
     std::fs::copy(&src, out.join(tokenizer))?;
     Ok(())
 }
@@ -385,7 +395,7 @@ mod tests {
         let gguf = m.backbone.artifacts.get(&BackendId::LlamaCpp).unwrap();
         assert_eq!(gguf[0].path, "model.gguf");
         assert_eq!(gguf[0].quantization.as_deref(), Some("q4"));
-        assert!(m.backbone.artifacts.get(&BackendId::Onnx).is_none());
+        assert!(!m.backbone.artifacts.contains_key(&BackendId::Onnx));
     }
 
     #[test]
@@ -403,7 +413,7 @@ mod tests {
         ));
         run(a).unwrap();
 
-        let mf = ModelManifest::load(&out.join("huncho-model.json")).unwrap();
+        let mf = ModelManifest::load(out.join("huncho-model.json")).unwrap();
         mf.validate().unwrap();
         assert_eq!(mf.name, "laya");
         let artifact = out.join("model.onnx");
@@ -433,7 +443,10 @@ mod tests {
         fs::write(src.join("model.safetensors"), b"weights").unwrap();
 
         assemble_candle_package(&src, &out, None).unwrap();
-        assert_eq!(fs::read(out.join("config.json")).unwrap(), b"{\"hidden_size\": 8}");
+        assert_eq!(
+            fs::read(out.join("config.json")).unwrap(),
+            b"{\"hidden_size\": 8}"
+        );
         assert_eq!(fs::read(out.join("model.safetensors")).unwrap(), b"weights");
     }
 
@@ -444,7 +457,11 @@ mod tests {
         let out = tmp.path().join("out");
         fs::create_dir_all(src.join("encoder")).unwrap();
         fs::create_dir_all(src.join("tokenizer")).unwrap();
-        fs::write(src.join("encoder/config.json"), b"{\"model_type\":\"modernbert\"}").unwrap();
+        fs::write(
+            src.join("encoder/config.json"),
+            b"{\"model_type\":\"modernbert\"}",
+        )
+        .unwrap();
         fs::write(src.join("model.safetensors"), b"weights").unwrap();
         fs::write(src.join("tokenizer/tokenizer.json"), b"{} ").unwrap();
 
@@ -470,8 +487,14 @@ mod tests {
         fs::write(src.join("model-00002-of-00002.safetensors"), b"shard2").unwrap();
 
         assemble_candle_package(&src, &out, None).unwrap();
-        assert_eq!(fs::read(out.join("model-00001-of-00002.safetensors")).unwrap(), b"shard1");
-        assert_eq!(fs::read(out.join("model-00002-of-00002.safetensors")).unwrap(), b"shard2");
+        assert_eq!(
+            fs::read(out.join("model-00001-of-00002.safetensors")).unwrap(),
+            b"shard1"
+        );
+        assert_eq!(
+            fs::read(out.join("model-00002-of-00002.safetensors")).unwrap(),
+            b"shard2"
+        );
         assert!(out.join("model.safetensors.index.json").exists());
     }
 
@@ -501,8 +524,11 @@ mod tests {
 
         assert!(out.join("huncho-model.json").exists());
         assert_eq!(fs::read(out.join("model.safetensors")).unwrap(), b"weights");
-        assert_eq!(fs::read(out.join("config.json")).unwrap(), b"{\"hidden_size\": 8}");
-        let mf = ModelManifest::load(&out.join("huncho-model.json")).unwrap();
+        assert_eq!(
+            fs::read(out.join("config.json")).unwrap(),
+            b"{\"hidden_size\": 8}"
+        );
+        let mf = ModelManifest::load(out.join("huncho-model.json")).unwrap();
         let candle = mf.backbone.artifacts.get(&BackendId::Candle).unwrap();
         assert_eq!(candle[0].path, "model.safetensors");
     }

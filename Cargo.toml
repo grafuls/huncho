@@ -16,7 +16,9 @@ candle-kernels = { path = "vendor/candle-kernels" }
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.80"
+# No rust-version pin: transitive deps (icu edition2024, konst/redb >=1.89,
+# xet-core round_char_boundary) force an ever-rising floor, so any fixed MSRV
+# would be false. This is an application, not a published library.
 license = "Apache-2.0"
 repository = "https://github.com/grafuls/huncho"
 
@@ -33,7 +35,9 @@ axum = "0.8"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["trace", "cors", "request-id"] }
 http = "1"
-prometheus = "0.13"
+# default-features disabled drops the `protobuf` feature (and the vulnerable
+# protobuf 2.x crate, RUSTSEC-2024-0437); /metrics serves the text format only.
+prometheus = { version = "0.13", default-features = false }
 clap = { version = "4", features = ["derive", "env"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }

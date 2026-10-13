@@ -569,6 +569,17 @@ fn qualify_optimizations(
         ]
         .iter()
         .any(|key| engine.execution_metadata().contains_key(*key));
+        // An active optimization or replicated context changes execution and
+        // must be re-qualified against a pinned golden in EVERY mode. Trial's
+        // serve-unqualified leniency applies only to plain native serving; it
+        // must never wave through an optimized path whose probability
+        // equivalence to the reference was never verified.
+        let optimized = opts.prefix_cache
+            || opts.max_batch_tokens.is_some()
+            || opts.prepare_all
+            || args.cooperative_prefill
+            || (args.candidate_readout && engine.family() == Family::F3)
+            || replicated;
         if !opts.prefix_cache
             && opts.max_batch_tokens.is_none()
             && !(args.candidate_readout && engine.family() == Family::F3)
@@ -582,7 +593,7 @@ fn qualify_optimizations(
             continue;
         }
         if !paths.contains_key(name.as_str()) {
-            if !args.require_qualified {
+            if !args.require_qualified && !optimized {
                 tracing::warn!(
                     model = name.as_str(),
                     "no pinned golden supplied: `{}` serves UNQUALIFIED in trial mode; \
@@ -604,7 +615,7 @@ fn qualify_optimizations(
         let needs_outcomes = refit || outcome_profile || replicated;
         let labeled = suite.cases.iter().any(|case| !case.targets.is_empty());
         anyhow::ensure!(
-            !needs_outcomes || labeled || !args.require_qualified,
+            !needs_outcomes || labeled || (!args.require_qualified && !optimized),
             "native, refitted or changed-profile serving for `{name}` requires held-out golden vectors with observed target labels"
         );
         let evaluate = |engine: &huncho_core::engine::Engine| -> huncho_core::Result<_> {

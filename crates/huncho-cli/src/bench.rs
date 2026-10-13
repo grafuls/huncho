@@ -251,10 +251,10 @@ pub fn run(args: BenchArgs) -> anyhow::Result<()> {
                             work.accumulate(&stats);
                             // Every request completes with its group. Do not
                             // divide latency by batch size or hide preparation.
-                            latencies.extend(
-                                std::iter::repeat(start.elapsed().as_secs_f64() * 1000.0)
-                                    .take(group.len()),
-                            );
+                            latencies.extend(std::iter::repeat_n(
+                                start.elapsed().as_secs_f64() * 1000.0,
+                                group.len(),
+                            ));
                         }
                         Ok((replica, latencies, work))
                     },

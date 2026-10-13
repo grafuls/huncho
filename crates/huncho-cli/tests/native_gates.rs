@@ -82,6 +82,10 @@ fn unoptimized_fitted_cpu_kev_and_clef_require_complete_labeled_startup_suites()
             serde_json::to_vec(&manifest).unwrap(),
         )
         .unwrap();
+        // Trial mode (the default since the trial-serving work) intentionally
+        // serves native runtimes UNQUALIFIED with an honest status, so this
+        // "native execution requires fresh labeled gates" invariant is a
+        // strict-mode contract: assert it under --require-qualified.
         let args = [
             "serve",
             "--model",
@@ -92,6 +96,7 @@ fn unoptimized_fitted_cpu_kev_and_clef_require_complete_labeled_startup_suites()
             "fp32",
             "--bind",
             "127.0.0.1:0",
+            "--require-qualified",
         ];
         let output = run(&args);
         assert!(!output.status.success());

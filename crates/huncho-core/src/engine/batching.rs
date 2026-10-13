@@ -55,8 +55,7 @@ pub(super) fn padded_groups_with_prefix<T: BatchShape>(
             .zip(new_logical)
             .is_some_and(|(physical, logical)| {
                 workspace.is_some_and(|n| n <= budget)
-                    && new_readouts
-                        .is_some_and(|n| limits.max_readouts.map_or(true, |max| n <= max))
+                    && new_readouts.is_some_and(|n| limits.max_readouts.is_none_or(|max| n <= max))
                     && (physical - logical) as u128 * 100 <= physical as u128 * percent as u128
             });
         if !group.is_empty() && (group.len() == limits.max_rows || !fits) {

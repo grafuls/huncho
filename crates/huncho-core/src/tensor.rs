@@ -105,9 +105,9 @@ impl Tensor {
         let cols = self.shape[1];
         let start = i * cols;
         let end = start + cols;
-        self.data
-            .get(start..end)
-            .ok_or_else(|| Error::Package(format!("row {i} out of range for shape {:?}", self.shape)))
+        self.data.get(start..end).ok_or_else(|| {
+            Error::Package(format!("row {i} out of range for shape {:?}", self.shape))
+        })
     }
 
     /// Reshape to target shape, validating element count.
@@ -116,7 +116,9 @@ impl Tensor {
         if expected != self.numel() {
             return Err(Error::Package(format!(
                 "cannot reshape {:?} ({} elements) to {:?}",
-                self.shape, self.numel(), shape
+                self.shape,
+                self.numel(),
+                shape
             )));
         }
         Ok(Tensor {

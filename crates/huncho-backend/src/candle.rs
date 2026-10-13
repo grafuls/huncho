@@ -541,7 +541,10 @@ impl LayaLayer {
         // Keep the full projection (and all K/V rows) identical to the reference.
         // Only final-layer queries and their pointwise residual/FFN are omitted.
         let (q, residual) = match positions {
-            Some(pos) => (q.contiguous()?.index_select(pos, 1)?, x.index_select(pos, 1)?),
+            Some(pos) => (
+                q.contiguous()?.index_select(pos, 1)?,
+                x.index_select(pos, 1)?,
+            ),
             None => (q, x.clone()),
         };
         let query_len = q.dim(1)?;

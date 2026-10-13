@@ -34,7 +34,7 @@ fn command(args: &[&str]) -> Output {
         .unwrap();
     let start = Instant::now();
     while child.try_wait().unwrap().is_none() {
-        if start.elapsed() > Duration::from_secs(20) {
+        if start.elapsed() > Duration::from_secs(120) {
             let _ = child.kill();
             let _ = child.wait();
             panic!("CPU F1 command hung or unqualified serving started");

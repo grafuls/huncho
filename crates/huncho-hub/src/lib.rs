@@ -10,8 +10,8 @@
 //! This is a thin, feature-gated dependency: it is only compiled by the CLI
 //! when the `hf` feature is enabled so the default build stays lightweight.
 
-pub mod error;
 mod clef;
+pub mod error;
 pub mod http;
 pub mod progress;
 pub mod resolver;

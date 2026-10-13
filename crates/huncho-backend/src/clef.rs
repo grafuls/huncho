@@ -93,9 +93,9 @@ impl ClefBackend {
         }
         #[cfg(not(feature = "cpu-blas"))]
         {
-            return Err(Error::Unsupported(
+            Err(Error::Unsupported(
                 "OpenBLAS requires --features cpu-blas".into(),
-            ));
+            ))
         }
         #[cfg(feature = "cpu-blas")]
         {

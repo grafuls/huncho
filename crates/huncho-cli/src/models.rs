@@ -142,22 +142,16 @@ mod tests {
     #[test]
     fn curated_table_lists_quick_start_and_documented_repos() {
         assert!(CURATED.iter().any(|model| model.reference == "mock"));
-        assert!(
-            CURATED
-                .iter()
-                .any(|model| model.reference == "jaredpalmer/kev-0.8b" && model.package == "trial")
-        );
-        assert!(
-            CURATED
-                .iter()
-                .any(|model| model.reference == "Cloudflare/clef" && model.family == "F5")
-        );
-        assert!(
-            CURATED
-                .iter()
-                .any(|model| model.reference == "bespokelabs/Bespoke-Nimble-9B"
-                    && model.package == "trial")
-        );
+        assert!(CURATED
+            .iter()
+            .any(|model| model.reference == "jaredpalmer/kev-0.8b" && model.package == "trial"));
+        assert!(CURATED
+            .iter()
+            .any(|model| model.reference == "Cloudflare/clef" && model.family == "F5"));
+        assert!(CURATED
+            .iter()
+            .any(|model| model.reference == "bespokelabs/Bespoke-Nimble-9B"
+                && model.package == "trial"));
         // The rendered listing and the JSON form both succeed.
         run(ModelsArgs { json: false }).unwrap();
         run(ModelsArgs { json: true }).unwrap();

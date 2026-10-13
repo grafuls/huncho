@@ -10,10 +10,7 @@ use crate::config::ServerConfig;
 /// Returns `Ok(())` when authentication passes (or when no token is
 /// configured). Returns `Err(StatusCode::UNAUTHORIZED)` when the header is
 /// malformed or the token is wrong.
-pub fn check_auth(
-    headers: &HeaderMap,
-    config: &ServerConfig,
-) -> Result<(), StatusCode> {
+pub fn check_auth(headers: &HeaderMap, config: &ServerConfig) -> Result<(), StatusCode> {
     let expected = match &config.auth_token {
         Some(t) => t,
         None => return Ok(()),
@@ -57,7 +54,10 @@ mod tests {
 
     fn headers(v: &str) -> HeaderMap {
         let mut h = HeaderMap::new();
-        h.insert(http::header::AUTHORIZATION, HeaderValue::from_str(v).unwrap());
+        h.insert(
+            http::header::AUTHORIZATION,
+            HeaderValue::from_str(v).unwrap(),
+        );
         h
     }
 
@@ -83,9 +83,18 @@ mod tests {
     #[test]
     fn wrong_token_fails() {
         let c = config(Some("secret"));
-        assert_eq!(check_auth(&headers("Bearer nope"), &c), Err(StatusCode::UNAUTHORIZED));
-        assert_eq!(check_auth(&HeaderMap::new(), &c), Err(StatusCode::UNAUTHORIZED));
-        assert_eq!(check_auth(&headers("Basic abc"), &c), Err(StatusCode::UNAUTHORIZED));
+        assert_eq!(
+            check_auth(&headers("Bearer nope"), &c),
+            Err(StatusCode::UNAUTHORIZED)
+        );
+        assert_eq!(
+            check_auth(&HeaderMap::new(), &c),
+            Err(StatusCode::UNAUTHORIZED)
+        );
+        assert_eq!(
+            check_auth(&headers("Basic abc"), &c),
+            Err(StatusCode::UNAUTHORIZED)
+        );
     }
 
     #[test]

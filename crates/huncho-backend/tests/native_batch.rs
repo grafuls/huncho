@@ -91,7 +91,13 @@ fn qwen_pointer_batches_preserve_probabilities_and_reject_cache_branches() {
 
 #[test]
 fn buffered_cpu_kernels_preserve_kev_reference_batches_and_prefixes() {
-    for (delta, conv, gate) in [(true, false, false), (false, true, false), (true, true, false), (false, false, true), (true, true, true)] {
+    for (delta, conv, gate) in [
+        (true, false, false),
+        (false, true, false),
+        (true, true, false),
+        (false, false, true),
+        (true, true, true),
+    ] {
         assert_buffered_kev_profile(delta, conv, gate);
     }
 }

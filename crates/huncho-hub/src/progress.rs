@@ -161,7 +161,11 @@ fn progress_line(filename: &str, bytes: u64, total: u64, rate_bps: Option<f64>) 
             BLOCK.to_string().repeat(filled),
             EMPTY.to_string().repeat(BAR_WIDTH - filled),
         );
-        line.push_str(&format!(" {bar} {:>5.1}% {}", pct * 100.0, human_pair(bytes, total)));
+        line.push_str(&format!(
+            " {bar} {:>5.1}% {}",
+            pct * 100.0,
+            human_pair(bytes, total)
+        ));
     } else {
         line.push_str(&format!(" {}", human_bytes(bytes)));
     }
@@ -304,7 +308,12 @@ mod tests {
 
     #[test]
     fn progress_line_includes_bar_rate_and_eta() {
-        let line = progress_line("model.safetensors", 363_434_000, 803_600_000, Some(6_100_000.0));
+        let line = progress_line(
+            "model.safetensors",
+            363_434_000,
+            803_600_000,
+            Some(6_100_000.0),
+        );
         assert!(line.starts_with("  model.safetensors ["));
         assert!(line.contains('%'));
         assert!(line.contains("346.6/766.4 MB"));
