@@ -14,10 +14,10 @@
 
 Name:           huncho
 Version:        0.1.0
-Release:        11%{?dist}
+Release:        12%{?dist}
 Summary:        Portable serving engine for System One decision models
 
-License:        Apache-2.0
+License:        Apache-2.0 AND MIT
 URL:            https://github.com/grafuls/huncho
 Source0:        huncho-%{version}.tar.gz
 Source1:        huncho.env
@@ -180,6 +180,8 @@ install -Dm0644 %{SOURCE4} %{buildroot}%{_sysusersdir}/huncho.conf
 install -Dm0644 %{SOURCE3} %{buildroot}%{_mandir}/man1/huncho.1
 install -Dm0644 docs/operations.md %{buildroot}%{_docdir}/%{name}/operations.md
 install -Dm0644 docs/model-package.md %{buildroot}%{_docdir}/%{name}/model-package.md
+install -Dm0644 LICENSE %{buildroot}%{_docdir}/%{name}/LICENSE
+install -Dm0644 THIRD-PARTY-NOTICES.md %{buildroot}%{_docdir}/%{name}/THIRD-PARTY-NOTICES.md
 
 # Bundle the built-in mock model package for offline smoke tests.
 install -Dm0644 examples/mock-model/huncho-model.json \
@@ -219,6 +221,8 @@ mkdir -p %{buildroot}%{_localstatedir}/lib/huncho
 
 %files
 %doc README.md
+%license %{_docdir}/%{name}/LICENSE
+%license %{_docdir}/%{name}/THIRD-PARTY-NOTICES.md
 %{_bindir}/huncho
 %dir %{_libexecdir}/huncho
 %{_libexecdir}/huncho/huncho-cpu
@@ -247,6 +251,10 @@ mkdir -p %{buildroot}%{_localstatedir}/lib/huncho
 %endif
 
 %changelog
+* Thu Oct 15 2026 grauals <grauals@users.noreply.github.com> - 0.1.0-12
+- Ship a root LICENSE (Apache-2.0) and THIRD-PARTY-NOTICES.md, bundled as
+  %license. Correct the License field to "Apache-2.0 AND MIT" for the
+  bundled MIT-licensed runtime components.
 * Tue Oct 06 2026 grafuls <grafuls@users.noreply.github.com> - 0.1.0-11
 - Run Kev backbone and pointer projections on CUDA, with FP16 GPU defaults.
 - Share device selection through HUNCHO_DEVICE (legacy alias supported).

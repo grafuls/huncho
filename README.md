@@ -380,4 +380,7 @@ authentication, health checks, and Prometheus metrics.
 
 ## License
 
-Apache-2.0.
+Huncho's own code is licensed under Apache-2.0 (see `LICENSE`). The distribution
+bundles components that keep their own licenses — MIT-licensed runtimes and a
+patched, dual-licensed Candle kernel — so binary packages carry the expression
+`Apache-2.0 AND MIT`. See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
