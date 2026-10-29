@@ -32,12 +32,12 @@ Optional backends are enabled via Cargo feature flags. The table below lists fea
 | `huncho-backend` | `onnx-shared` | Enables shared ONNX runtime support. |
 | `huncho-backend` | `onnx-cuda` | Enables ONNX runtime support with CUDA. |
 | `huncho-backend` | `candle` | Enables Candle framework support for loading HF safetensors. |
-| `huncho-backend` | `quantization` | Enables quantization support. |
-| `huncho-backend` | `shared-base` | Enables shared base support. |
-| `huncho-backend` | `cpu-blas` | Enables CPU BLAS support. |
-| `huncho-backend` | `llamacpp` | Enables llama.cpp support. |
-| `huncho-backend` | `clef` | Enables Cloudflare Clef support. |
-| `huncho-backend` | `cuda` | Enables CUDA support. |
+| `huncho-backend` | `quantization` | Enables quantization support (requires `candle`). |
+| `huncho-backend` | `shared-base` | Enables shared base support (requires `candle`). |
+| `huncho-backend` | `cpu-blas` | Enables CPU BLAS support (requires `candle`). |
+| `huncho-backend` | `llamacpp` | Enables llama.cpp support (requires `candle`). |
+| `huncho-backend` | `clef` | Enables Cloudflare Clef support (requires `candle`). |
+| `huncho-backend` | `cuda` | Enables CUDA support for Clef and Candle (implies `clef`). |
 | `huncho-cli` | `vllm` | Enables vLLM support in CLI. |
 | `huncho-cli` | `onnx` | Enables ONNX support in CLI. |
 | `huncho-cli` | `onnx-shared` | Enables shared ONNX support in CLI. |
