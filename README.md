@@ -330,6 +330,8 @@ off the page thread. It has its own packaging and qualification requirements.
 
 ## Development
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, testing, and contribution guidelines.
+
 Run these checks from the root of a source checkout. The default build can run
 without model weights:
 
