@@ -4,6 +4,8 @@
 
 From a tracer-bullet slice (Laya/F1 on ONNX Runtime CPU) to a portable serving engine that runs all four decision-model families behind the Jev `/v1/systemone` contract — on datacenter GPUs, Apple Silicon, x86/ARM CPU, and browser — while enforcing calibrated-probability fidelity across every backend and quantization.
 
+*Roadmap refreshed on 2026-10-29 from git history.*
+
 ## Phases
 
 **Phase Numbering:**
@@ -12,7 +14,7 @@ From a tracer-bullet slice (Laya/F1 on ONNX Runtime CPU) to a portable serving e
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Tracer Bullet (M0)** - Laya (F1) on ONNX Runtime CPU behind `/v1/systemone`, one conformance test passing
+- [ ] **Phase 1: Tracer Bullet (M0)** - Laya (F1) on ONNX Runtime CPU behind `/v1/systemone`, one conformance test passing (implemented, not formally closed)
 - [ ] **Phase 2: Pointer Family + Fork (M1)** - Kev-8B (F2) on llama.cpp with KV-fork fan-out
 - [ ] **Phase 3: Breadth (M2)** - All four families; MLX and vLLM backends; quantization with refit calibration
 - [ ] **Phase 4: Production (M3)** - Multi-LoRA, routing, packaging, and edge
@@ -91,8 +93,8 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Tracer Bullet (M0) | 0/1 | In progress | Tracer bullet committed (CPU `/v1/systemone`, conformance PASS); API/convert/calibrate/bench tests; tokenizer wiring; candle backend (real-Laya path) |
-| 2. Pointer Family + Fork (M1) | 0/1 | Not started | - |
-| 3. Breadth (M2) | 0/1 | Not started | - |
-| 4. Production (M3) | 0/1 | Not started | - |
-| 4.1 Packaging (OPS-01/02/03) | 0/1 | Partial | Dockerfile, systemd unit, env-file added |
+| 1. Tracer Bullet (M0) | 0/1 | Implemented (not formally closed) | Tracer bullet committed (CPU `/v1/systemone`, conformance PASS); API/convert/calibrate/bench tests; tokenizer wiring; candle backend (real-Laya path) |
+| 2. Pointer Family + Fork (M1) | 0/1 | In progress | 8a0cb8a native Candle pointer-head; 205efc5 pinned CPU llama.cpp decision readouts; d549e2c native Kev prefix fan-out; c005373 collate Kev question forks from one immutable prefix; 571f93c Kev CUDA inference on T4 |
+| 3. Breadth (M2) | 0/1 | In progress | e965457 Clef native joint-schema; f2f65d4 F3 Qwen3.5+LoRA; 69394cd vLLM CPU Kev raw pooling; 8f09121 Kev Q8/Q4 artifacts with strict calibration gates; 1db5305 `huncho models`/`huncho qualify`; 8b0c656 CI workflow (PR #16). MLX: no evidence. |
+| 4. Production (M3) | 0/1 | In progress | 1edd7b8 CPU FP32 LoRA over shared Qwen bases; c9d27a8 browser CPU WASM inference; 7c2ca99 RPM package; 8aa0702 COPR; a7b6f1c CPU+CUDA in one package. Script/language routing: no evidence. |
+| 4.1 Packaging (OPS-01/02/03) | 0/1 | Partial | Dockerfile, systemd unit, env-file added; RPM/COPR packaging (7c2ca99, 8aa0702) |
