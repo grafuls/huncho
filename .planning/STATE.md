@@ -1,12 +1,12 @@
 ---
 gsd_state_version: '1.0'
-status: planning
+status: active
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 4
   completed_plans: 0
-  percent: 25
+  percent: 50
 ---
 
 # Project State
@@ -16,16 +16,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-09-26)
 
 **Core value:** Guarantee that calibrated probabilities stay calibrated across every backend and quantization, served behind one API for all open decision-model families.
-**Current focus:** Phase 1 (Tracer Bullet / M0) — tracer bullet complete; API/CLI test coverage + tokenizer wiring + candle backend done. Serving real `convaiinnovations/laya` from the Hub works end-to-end (`serve --model convaiinnovations/laya --backend candle`), verified to pick `blue` at ~0.98 confidence.
+**Current focus:** Phase 1 implemented (not formally closed); active work spans Phases 2-4 — Qualification/calibration gates, CPU batching/caching/paged attention, browser WASM, vLLM/llama.cpp backends, trial-mode serving, `huncho models` / `huncho qualify` commands, CI workflow, and packaging fixes.
 
 ## Current Position
 
-Phase: 1 of 4 (Tracer Bullet / M0)
+Phase: 1 implemented (not formally closed); active work spans Phases 2-4
 Plan: 0 of 1 in current phase
 Status: In progress
-Last activity: 2026-09-26 — Verified serving real `convaiinnovations/laya` from the Hub end-to-end; the earlier near-uniform answers were caused by a missing `tokenizers` feature (silent `SimpleTokenizer` fallback feeding the model garbage ids), not corrupt weights. `load_tokenizer` now errors (instead of silently degrading) when a manifest declares a tokenizer path while the `tokenizers` feature is off.
+Last activity: 2026-10-15 — Merged PR #19 (license fixes). Recent work includes qualification gates, CPU optimizations, browser WASM, vLLM/llama.cpp backends, and trial-mode serving.
 
-Progress: [██░░░░░░░░] ~25%
+Progress: [█████░░░░░] ~50% (rough estimate: Phase 1 implemented, Phases 2-4 partially implemented, no phase formally closed)
 
 ## Performance Metrics
 
@@ -58,8 +58,20 @@ None yet.
 - GSD subagents not installed (`npx @opengsd/gsd-core@latest --global`); roadmap generated inline, research phase skipped for now.
 - Apple Silicon hardware for Metal/MLX CI still to be decided (PRD open question #3). Blocks BE-03 (MLX) / BE-02 (Metal) verification.
 - No real Laya/ONNX artifact is available upstream (no `huncho-model.json`, no ONNX). Serving real Laya now uses the **candle** backend (safetensors direct load), so the external `onnx` runner is no longer required for it. Fetching the ~842 MB weights is still a one-time manual step (kept out of the automated suite).
-- Real-Laya head accuracy: huncho's F1 head is a scalar linear projection / mean-fallback over encoder hidden states; Laya's 2-layer `act_head` MLP is not directly representable in `HeadParams`. Orthogonal to the candle backend.
-- Phase 2 F2 depends on a Kev-8B model + llama.cpp backend (BE-02) and exact pointer-head/fork semantics, which are not yet validated.
+- Kev-8B on llama.cpp and Metal fp16 conformance (Phase 2 criteria) are still unvalidated.
+- **Open issues** (as of 2026-10-29):
+  - #2: Validate HF Hub artifact filenames before writing to snapshot cache.
+  - #3: Secure `/etc/huncho/huncho.env` bearer token (0600 / systemd credentials).
+  - #4: Stop defaulting runtime listener to unauthenticated `0.0.0.0`.
+  - #5: Refactor per-question scoring pipeline (duplicated 6x).
+  - #6: Refactor single `EvalOptions` builder; serve/bench/conform/API diverge.
+  - #7: Refactor split the 2711-line engine god module and drop `supports_*` shadow fields.
+  - #8: Refactor unify four duplicated byte-bounded caches and twin `PromptCache`/`ResponseCache`.
+  - #9: Refactor fold backend batch-capability reporting into `Capabilities`; drop dead `retain_cache`.
+  - #10: Fix EL9 `%check` must resolve `libonnxruntime` from the build tree, not the empty buildroot.
+  - #12: Add CI running the cargo test matrix + coverage and run Rust tests in RPM `%check` (workflow added in PR #16, coverage gating/RPM tests open).
+  - #13: Align Dockerfile `--features` with the spec and `COPY vendor/`.
+  - #14: Exclude `docs/verification` and `*.log` from the RPM source tarball.
 
 ### Quick Tasks Completed
 
@@ -68,16 +80,16 @@ None yet.
 | 260926-sdr | Rename app to Huncho | 2026-09-26 | Working tree | [260926-sdr-rename-app-to-huncho](./quick/260926-sdr-rename-app-to-huncho/) |
 | 260926-hf | Hugging Face Hub resolution (serve/calibrate/conform/bench by repo id) | 2026-09-26 | Working tree | — |
 | 260926-progress | Download progress feedback when resolving HF model packages by repo id | 2026-09-26 | 8d93c40 | — |
-| 260926-xet | Plain-HTTP download fallback for xet-backed Hub artifacts (fixes silent stall on large weights) | 2026-09-26 | Working tree | — |
-| 260926-redirect | Follow relative 307 resolve-cache redirects in HTTP downloader (fixes fresh-cache config resolution) | 2026-09-26 | Working tree | — |
-| 260926-progress | Single-line in-place progress bar (compact, block bar + % + rate + ETA) for both TTY/non-TTY | 2026-09-26 | Working tree | — |
-| 260926-tokenizers | Diagnose & fix uniform answers on real Laya: root cause was a silent `SimpleTokenizer` fallback (missing `tokenizers` feature), not corrupt weights; `load_tokenizer` now errors without the feature | 2026-09-26 | Working tree | — |
+| 260926-xet | Plain-HTTP download fallback for xet-backed Hub artifacts (fixes silent stall on large weights) | 2026-09-26 | 90f4071 | — |
+| 260926-redirect | Follow relative 307 resolve-cache redirects in HTTP downloader (fixes fresh-cache config resolution) | 2026-09-26 | 67fe336 | — |
+| 260926-progress | Single-line in-place progress bar (compact, block bar + % + rate + ETA) for both TTY/non-TTY | 2026-09-26 | 24dbca2 | — |
+| 260926-tokenizers | Diagnose & fix uniform answers on real Laya: root cause was a silent `SimpleTokenizer` fallback (missing `tokenizers` feature), not corrupt weights; `load_tokenizer` now errors without the feature | 2026-09-26 | a900a81 | — |
 | 260926-m0 | Phase 1 tracer bullet: F1 on ONNX Runtime behind `/v1/systemone`, conformance PASS | 2026-09-26 | 2ae8189 | — |
 | 260926-tests | API integration tests, convert/calibrate/bench tests, F2/F4 prompt tests | 2026-09-26 | 2756c4a, 4b4be24, 3dcccbc, cf002f0, 04a8405 | — |
 | 260926-core02 | Load manifest-declared HF tokenizer for byte-identical prompts | 2026-09-26 | 3d8e64a | — |
 | 260926-ops | Dockerfile, systemd unit, env-file packaging | 2026-09-26 | f22a70a | — |
-| 260926-candle | CandleBackend (safetensors→hidden states, Laya layout) + CLI wiring + `convert --source` assembly + tests | 2026-09-26 | Working tree | — |
-| 261009-aut | Enforce bearer auth on every route (`/health`, `/v1/models`, `/metrics`), before routing and body parsing (GitHub #1) | 2026-10-09 | Working tree | [261009-aut-enforce-bearer-auth-on-all-routes](./quick/261009-aut-enforce-bearer-auth-on-all-routes/) |
+| 260926-candle | CandleBackend (safetensors→hidden states, Laya layout) + CLI wiring + `convert --source` assembly + tests | 2026-09-26 | ac052c5 | — |
+| 261009-aut | Enforce bearer auth on every route (`/health`, `/v1/models`, `/metrics`), before routing and body parsing (GitHub #1) | 2026-10-09 | 38cc466 | [261009-aut-enforce-bearer-auth-on-all-routes](./quick/261009-aut-enforce-bearer-auth-on-all-routes/) |
 
 ## Deferred Items
 
@@ -92,6 +104,6 @@ Items acknowledged and deferred at milestone close, most recent first:
 
 ## Session Continuity
 
-Last session: 2026-09-26
-Stopped at: candle backend implemented + wired (no external runner for real Laya), plus `convert --source` local-checkpoint package assembly.
-Next step: fetch Laya's checkpoint into a package dir (`hf download` + `huncho convert --backend candle --source <checkout>`), `huncho serve --backend candle`, and generate a real-Laya conformance golden (CONF-01).
+Last session: 2026-10-15
+Stopped at: Merged PR #19 (license fixes). Recent work includes qualification gates, CPU optimizations, browser WASM, vLLM/llama.cpp backends, and trial-mode serving.
+Next step: Address open issues #2-#14, specifically focusing on security fixes (#3, #4), refactoring tasks (#5-#9), and CI/packaging improvements (#10, #12-#14).
