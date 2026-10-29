@@ -1,3 +1,0 @@
-error: no test target named `native_batches` in `huncho-backend` package
-
-help: a target with a similar name exists: `native_batch`

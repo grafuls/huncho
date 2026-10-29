@@ -21,3 +21,7 @@ epel-*-i686/
 !.env.sample
 
 .DS_Store
+
+# Run/test logs. Verification evidence that a docs page links to is
+# committed deliberately with `git add -f`; everything else stays local.
+*.log
